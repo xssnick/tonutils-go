@@ -19,6 +19,8 @@ type Slice struct {
 	bitEnd   uint16
 	refStart uint8
 	refEnd   uint8
+
+	forceCopyOnToCell bool
 }
 
 func newSliceFromCell(c *Cell, trace *Trace) *Slice {
@@ -110,18 +112,31 @@ func (c *Slice) MustLoadRef() *Slice {
 
 func (c *Slice) LoadRef() (*Slice, error) {
 	ref := new(Slice)
-	if err := c.loadRefInto(ref, true); err != nil {
+	if err := c.LoadRefInto(ref); err != nil {
 		return nil, err
 	}
 	return ref, nil
 }
 
+// LoadRefInto loads and advances past the next reference, parsing it into dst
+// without allocating a Slice. The child trace is carried by dst instead of
+// being materialized in a copied Cell. dst must not alias c.
+func (c *Slice) LoadRefInto(dst *Slice) error {
+	return c.loadRefInto(dst, true)
+}
+
 func (c *Slice) PreloadRef() (*Slice, error) {
 	ref := new(Slice)
-	if err := c.loadRefInto(ref, false); err != nil {
+	if err := c.PreloadRefInto(ref); err != nil {
 		return nil, err
 	}
 	return ref, nil
+}
+
+// PreloadRefInto parses the next reference into dst without advancing c or
+// allocating a Slice. dst must not alias c.
+func (c *Slice) PreloadRefInto(dst *Slice) error {
+	return c.loadRefInto(dst, false)
 }
 
 func (c *Slice) LoadRefCell() (*Cell, error) {
@@ -149,16 +164,35 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	if !has {
 		return nil, nil
 	}
 
 	ref := new(Slice)
-	if err := c.loadRefInto(ref, true); err != nil {
+	if err = c.LoadRefInto(ref); err != nil {
 		return nil, err
 	}
 	return ref, nil
+}
+
+// LoadMaybeRefInto loads a maybe-reference into dst. It reports whether the
+// reference was present and does not allocate. When absent, dst is reset.
+// dst must not alias c.
+func (c *Slice) LoadMaybeRefInto(dst *Slice) (bool, error) {
+	has, err := c.LoadBoolBit()
+	if err != nil {
+		return false, err
+	}
+
+	if !has {
+		*dst = Slice{}
+		return false, nil
+	}
+
+	if err := c.LoadRefInto(dst); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (c *Slice) RefsNum() int {
@@ -203,32 +237,53 @@ func (c *Slice) SkipBitsAndRefs(bits uint, refs int) error {
 }
 
 func (c *Slice) FetchSubslice(bits uint, refs int) (*Slice, error) {
-	out, err := c.PreloadSubslice(bits, refs)
-	if err != nil {
+	out := new(Slice)
+	if err := c.FetchSubsliceInto(out, bits, refs); err != nil {
 		return nil, err
 	}
-	c.bitStart = out.bitEnd
-	c.refStart = out.refEnd
 	return out, nil
 }
 
+// FetchSubsliceInto copies the requested leading view into dst and advances c
+// without allocating a Slice. dst must not alias c.
+func (c *Slice) FetchSubsliceInto(dst *Slice, bits uint, refs int) error {
+	if err := c.PreloadSubsliceInto(dst, bits, refs); err != nil {
+		return err
+	}
+	c.bitStart = dst.bitEnd
+	c.refStart = dst.refEnd
+	return nil
+}
+
 func (c *Slice) PreloadSubslice(bits uint, refs int) (*Slice, error) {
+	out := new(Slice)
+	if err := c.PreloadSubsliceInto(out, bits, refs); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PreloadSubsliceInto copies the requested leading view into dst without
+// advancing c or allocating a Slice. dst must not alias c.
+func (c *Slice) PreloadSubsliceInto(dst *Slice, bits uint, refs int) error {
 	if refs < 0 || c.RefsNum() < refs {
-		return nil, ErrNoMoreRefs
+		return ErrNoMoreRefs
 	}
 
 	left := c.BitsLeft()
 	if left < bits {
-		return nil, ErrNotEnoughData(int(left), int(bits))
+		return ErrNotEnoughData(int(left), int(bits))
 	}
-	return &Slice{
-		cell:     c.cell,
-		trace:    c.trace,
-		bitStart: c.bitStart,
-		bitEnd:   c.bitStart + uint16(bits),
-		refStart: c.refStart,
-		refEnd:   c.refStart + uint8(refs),
-	}, nil
+	*dst = Slice{
+		cell:              c.cell,
+		trace:             c.trace,
+		bitStart:          c.bitStart,
+		bitEnd:            c.bitStart + uint16(bits),
+		refStart:          c.refStart,
+		refEnd:            c.refStart + uint8(refs),
+		forceCopyOnToCell: c.forceCopyOnToCell,
+	}
+	return nil
 }
 
 func (c *Slice) MustLoadCoins() uint64 {
@@ -945,11 +1000,38 @@ func (c *Slice) MustToCell() *Cell {
 }
 
 func (c *Slice) Copy() *Slice {
-	cp := *c
-	return &cp
+	cp := new(Slice)
+	return c.CopyInto(cp)
+}
+
+// CopyInto copies the slice cursor and trace context into dst without
+// allocating.
+func (c *Slice) CopyInto(dst *Slice) *Slice {
+	*dst = *c
+	return dst
+}
+
+// RawCell returns the parsed immutable cell without materializing the Slice's
+// trace as Cell metadata. Use Trace together with RawCell when the traversal
+// context must be preserved.
+func (c *Slice) RawCell() *Cell {
+	return c.cell
 }
 
 func (c *Slice) BaseCell() *Cell {
+	if c.forceCopyOnToCell {
+		full := Slice{
+			cell:              c.cell,
+			bitEnd:            c.cell.bitsSz,
+			refEnd:            uint8(c.cell.refsCount()),
+			forceCopyOnToCell: true,
+		}
+		base := full.MustToCell()
+		if c.trace != nil {
+			return base.WithTrace(c.trace)
+		}
+		return base
+	}
 	if c.trace != nil {
 		return c.cell.WithTrace(c.trace)
 	}
@@ -965,22 +1047,29 @@ func (c *Slice) RefRange() (start, end int) {
 }
 
 func (c *Slice) ToBuilder() *Builder {
-	left := c.BitsLeft()
-	var b Builder
-	b.bitsSz = left
-	b.trace = c.trace
+	b := new(Builder)
+	return c.ToBuilderInto(b)
+}
 
-	if err := c.loadSliceInto(b.data[:], left, true); err != nil {
+// ToBuilderInto copies the remaining slice into dst without allocating a
+// Builder. References keep the same trace behavior as ToBuilder.
+func (c *Slice) ToBuilderInto(dst *Builder) *Builder {
+	left := c.BitsLeft()
+	*dst = Builder{}
+	dst.bitsSz = left
+	dst.trace = c.trace
+
+	if err := c.loadSliceInto(dst.data[:], left, true); err != nil {
 		panic(err)
 	}
 
-	b.refsNum = uint8(c.RefsNum())
-	for i := uint8(0); i < b.refsNum; i++ {
+	dst.refsNum = uint8(c.RefsNum())
+	for i := uint8(0); i < dst.refsNum; i++ {
 		refIdx := int(c.refStart) + int(i)
-		b.refs[i] = c.withChildTrace(c.boundaryRefCellAt(int(i)), refIdx)
+		dst.refs[i] = c.withChildTrace(c.boundaryRefCellAt(int(i)), refIdx)
 	}
 
-	return &b
+	return dst
 }
 
 func (c *Slice) ToCell() (*Cell, error) {
@@ -989,7 +1078,7 @@ func (c *Slice) ToCell() (*Cell, error) {
 		c.bitEnd == c.cell.bitsSz &&
 		c.refStart == 0 &&
 		int(c.refEnd) == c.cell.refsCount()
-	if fullCell && c.trace == nil {
+	if fullCell && c.trace == nil && !c.forceCopyOnToCell {
 		if c.cell.Trace() == nil {
 			return c.cell, nil
 		}

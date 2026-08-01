@@ -72,6 +72,13 @@ func (s *storageStat) addCell(cl *cell.Cell) (bool, error) {
 	if cl == nil {
 		return true, nil
 	}
+	return s.addCellWithTrace(cl, cl.Trace())
+}
+
+func (s *storageStat) addCellWithTrace(cl *cell.Cell, trace *cell.Trace) (bool, error) {
+	if cl == nil {
+		return true, nil
+	}
 	key := cl.HashKey()
 	if _, ok := s.seen[key]; ok {
 		return true, nil
@@ -96,28 +103,24 @@ func (s *storageStat) addCell(cl *cell.Cell) (bool, error) {
 	s.seen[key] = struct{}{}
 	s.cells++
 
-	var sl *cell.Slice
+	var sl cell.Slice
 	if s.state != nil {
-		var err error
-		sl, err = s.state.Cells.BeginParseAlreadyLoadedNoCreate(cl)
-		if err != nil {
+		if err := s.state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(cl, trace, &sl); err != nil {
 			return false, err
 		}
 	} else {
-		var err error
-		sl, err = cl.BeginParse()
-		if err != nil {
+		if err := cl.BeginParseIntoWithTrace(&sl, trace); err != nil {
 			return false, err
 		}
 	}
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {
-		ref, err := sl.PeekRefCellAt(i)
+		ref, refTrace, err := sl.PeekRefCellAtWithTrace(i)
 		if err != nil {
 			return false, err
 		}
-		ok, err := s.addCell(ref)
+		ok, err := s.addCellWithTrace(ref, refTrace)
 		if err != nil || !ok {
 			return ok, err
 		}
@@ -132,11 +135,11 @@ func (s *storageStat) addSlice(sl *cell.Slice) (bool, error) {
 	s.bits += uint64(sl.BitsLeft())
 	s.refs += uint64(sl.RefsNum())
 	for i := 0; i < sl.RefsNum(); i++ {
-		ref, err := sl.PeekRefCellAt(i)
+		ref, refTrace, err := sl.PeekRefCellAtWithTrace(i)
 		if err != nil {
 			return false, err
 		}
-		ok, err := s.addCell(ref)
+		ok, err := s.addCellWithTrace(ref, refTrace)
 		if err != nil || !ok {
 			return ok, err
 		}
@@ -1187,20 +1190,16 @@ func getSendMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwar
 }
 
 func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) (bool, error) {
-	var root *cell.Slice
+	var root cell.Slice
 	if stat.state != nil {
 		if err := stat.state.Cells.RegisterCellLoad(msgCell); err != nil {
 			return false, err
 		}
-		var err error
-		root, err = stat.state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
-		if err != nil {
+		if err := stat.state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(msgCell, msgCell.Trace(), &root); err != nil {
 			return false, err
 		}
 	} else {
-		var err error
-		root, err = msgCell.BeginParse()
-		if err != nil {
+		if err := msgCell.BeginParseInto(&root); err != nil {
 			return false, err
 		}
 	}
@@ -1212,7 +1211,7 @@ func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs 
 			return false, err
 		}
 	}
-	return stat.addSlice(root)
+	return stat.addSlice(&root)
 }
 
 type sendMsgLayout struct {
@@ -1227,15 +1226,15 @@ type sendMsgLayout struct {
 }
 
 func loadSendMsgLayout(state *vm.State, msgCell *cell.Cell) (sendMsgLayout, error) {
-	var root *cell.Slice
-	var err error
+	var root cell.Slice
 	if state != nil {
-		root, err = state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
+		if err := state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(msgCell, msgCell.Trace(), &root); err != nil {
+			return sendMsgLayout{}, err
+		}
 	} else {
-		root, err = msgCell.BeginParse()
-	}
-	if err != nil {
-		return sendMsgLayout{}, err
+		if err := msgCell.BeginParseInto(&root); err != nil {
+			return sendMsgLayout{}, err
+		}
 	}
 
 	isExternal, err := root.LoadBoolBit()
@@ -1298,10 +1297,10 @@ func loadSendMsgLayout(state *vm.State, msgCell *cell.Cell) (sendMsgLayout, erro
 		if _, err = root.LoadUInt(32); err != nil {
 			return sendMsgLayout{}, err
 		}
-		return loadSendMsgInitBodyLayout(root, layout)
+		return loadSendMsgInitBodyLayout(&root, layout)
 	}
 
-	return loadSendMsgInitBodyLayout(root, sendMsgLayout{})
+	return loadSendMsgInitBodyLayout(&root, sendMsgLayout{})
 }
 
 func loadSendMsgInitBodyLayout(root *cell.Slice, layout sendMsgLayout) (sendMsgLayout, error) {
@@ -1432,12 +1431,12 @@ func SENDMSG() *helpers.SimpleOP {
 			if err = state.Cells.RegisterCellLoad(msgCell); err != nil {
 				return err
 			}
-			msgSlice, err := state.Cells.BeginParseAlreadyLoadedNoCreate(msgCell)
-			if err != nil {
+			var msgSlice cell.Slice
+			if err = state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(msgCell, msgCell.Trace(), &msgSlice); err != nil {
 				return err
 			}
 			var msg tlb.MessageRelaxed
-			if err = tlb.LoadFromCell(&msg, msgSlice); err != nil {
+			if err = tlb.LoadFromCell(&msg, &msgSlice); err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
 			layout, err := loadSendMsgLayout(state, msgCell)

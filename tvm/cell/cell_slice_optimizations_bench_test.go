@@ -6,6 +6,7 @@ var (
 	benchmarkSliceResult  *Slice
 	benchmarkBytesResult  []byte
 	benchmarkStringResult string
+	benchmarkIntResult    int
 )
 
 func BenchmarkCellSliceLoadRefTraced(b *testing.B) {
@@ -23,6 +24,24 @@ func BenchmarkCellSliceLoadRefTraced(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkSliceResult = loaded
+	}
+}
+
+func BenchmarkCellSliceLoadRefTracedInto(b *testing.B) {
+	childTrace := NewTrace(TraceHooks{OnLoad: func(*Cell) {}})
+	trace := NewTrace(TraceHooks{OnChild: func(int) *Trace { return childTrace }})
+	leaf := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	root := BeginCell().MustStoreRef(leaf).EndCell().WithTrace(trace)
+	base := *root.MustBeginParse()
+	var loaded Slice
+
+	b.ReportAllocs()
+	for b.Loop() {
+		s := base
+		if err := s.LoadRefInto(&loaded); err != nil {
+			b.Fatal(err)
+		}
+		benchmarkIntResult = loaded.RefsNum()
 	}
 }
 

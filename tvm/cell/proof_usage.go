@@ -68,10 +68,11 @@ func (c *Cell) CreateUsageProof(usageTree *CellUsageTree) (*Cell, error) {
 		return nil, fmt.Errorf("failed to build usage proof: usage tree is nil")
 	}
 
-	state := newUsageProofBuildState(usageTree.NodeCount())
+	state := newUsageProofBuildState(usageTree)
 	if err := collectUsageProofHashes(c, usageTree, usageTree.RootNode(), state); err != nil {
 		return nil, err
 	}
+	state.prepareBuiltCache()
 
 	body, err := buildUsageProofBody(c, state, c.Level())
 	if err != nil {
@@ -134,19 +135,22 @@ type usageProofBuildKey struct {
 // of a hash in cells marks it visited; a non-nil value also caches its loaded
 // form for the build path.
 type usageProofBuildState struct {
-	cells map[Hash]*Cell
-	built map[usageProofBuildKey]*Cell
+	cells     map[Hash]*Cell
+	built     map[usageProofBuildKey]*Cell
+	cellIndex usageTreeCellIndex
 }
 
-func newUsageProofBuildState(sizeHint int) *usageProofBuildState {
+func newUsageProofBuildState(usageTree *CellUsageTree) *usageProofBuildState {
 	return &usageProofBuildState{
-		cells: make(map[Hash]*Cell, sizeHint),
-		built: make(map[usageProofBuildKey]*Cell, sizeHint),
+		cellIndex: newUsageTreeCellIndex(usageTree),
 	}
 }
 
 func (s *usageProofBuildState) markVisited(c *Cell) {
 	hash := c.HashKey()
+	if s.cells == nil {
+		s.cells = map[Hash]*Cell{}
+	}
 	if !c.IsLazy() {
 		s.cells[hash] = c
 		return
@@ -167,16 +171,16 @@ func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, n
 	if loaded, ok := usageTree.loadedCell(node); ok {
 		loaded = loadedForBoundary(c, loaded)
 		if loaded.HashKey() == hash {
-			s.cells[hash] = loaded
+			s.cacheLoaded(hash, loaded)
 			return loaded, nil
 		}
 	}
-	if loaded, ok := usageTree.loadedCellByHash(hash); ok {
-		s.cells[hash] = loaded
+	if loaded, ok := s.cellIndex.loadedCellByHash(hash); ok {
+		s.cacheLoaded(hash, loaded)
 		return loaded, nil
 	}
 	if !c.IsLazy() {
-		s.cells[hash] = c
+		s.cacheLoaded(hash, c)
 		return c, nil
 	}
 
@@ -184,8 +188,31 @@ func (s *usageProofBuildState) loadForUsage(c *Cell, usageTree *CellUsageTree, n
 	if err != nil {
 		return nil, err
 	}
-	s.cells[hash] = loaded
+	s.cacheLoaded(hash, loaded)
 	return loaded, nil
+}
+
+func (s *usageProofBuildState) cacheLoaded(hash Hash, c *Cell) {
+	if s.cells == nil {
+		s.cells = map[Hash]*Cell{}
+	}
+	s.cells[hash] = c
+}
+
+func (s *usageProofBuildState) cacheBuilt(key usageProofBuildKey, c *Cell) {
+	if s.built == nil {
+		s.built = map[usageProofBuildKey]*Cell{}
+	}
+	s.built[key] = c
+}
+
+func (s *usageProofBuildState) prepareBuiltCache() {
+	if s.built == nil && len(s.cells) > 0 {
+		// Hint from cells actually reached during tracking, never from arena
+		// NodeCount: sparse usage trees stay small while dense proofs avoid the
+		// repeated growth of their second build map.
+		s.built = make(map[usageProofBuildKey]*Cell, len(s.cells))
+	}
 }
 
 func loadedForBoundary(boundary, loaded *Cell) *Cell {
@@ -257,7 +284,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 		if err != nil {
 			return nil, err
 		}
-		state.built[key] = pruned
+		state.cacheBuilt(key, pruned)
 		return pruned, nil
 	}
 
@@ -269,7 +296,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {
 		built := loaded.WithoutTrace()
-		state.built[key] = built
+		state.cacheBuilt(key, built)
 		return built, nil
 	}
 
@@ -291,7 +318,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 				if err != nil {
 					return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
 				}
-				state.cells[refHash] = loadedRef
+				state.cacheLoaded(refHash, loadedRef)
 			}
 			next, err = buildUsageProofBody(loadedRef, state, childDepth)
 			if err != nil {
@@ -310,7 +337,7 @@ func buildUsageProofBody(c *Cell, state *usageProofBuildState, merkleDepth int) 
 	if err != nil {
 		return nil, err
 	}
-	state.built[key] = rebuilt
+	state.cacheBuilt(key, rebuilt)
 	return rebuilt, nil
 }
 

@@ -83,6 +83,9 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if t.HasBindingID(trace) {
 		return t
 	}
+	if !t.NeedsValueSnapshot() {
+		return t
+	}
 
 	var vals []any
 	for i := 0; i < t.Len(); i++ {
@@ -104,6 +107,78 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		return t.WithBindingID(trace)
 	}
 	return tuple.NewTupleOwnedBound(vals, trace)
+}
+
+func snapshotTupleValue(t tuple.Tuple) tuple.Tuple {
+	if t.IsNull() || !t.NeedsValueSnapshot() {
+		return t
+	}
+
+	vals := make([]any, t.Len())
+	for i := range vals {
+		val, err := t.RawIndex(i)
+		if err != nil {
+			panic(err)
+		}
+		vals[i] = snapshotStackValue(val)
+	}
+	return tuple.NewTupleOwned(vals)
+}
+
+func snapshotStackValue(val any) any {
+	switch x := val.(type) {
+	case *big.Int:
+		if x == nil {
+			return nil
+		}
+		return x
+	case *cell.Cell:
+		if x == nil {
+			return nil
+		}
+		return x
+	case *cell.Slice:
+		if x == nil {
+			return x
+		}
+		return x.Copy()
+	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
+		return x.Copy()
+	case tuple.Tuple:
+		return snapshotTupleValue(x)
+	default:
+		return val
+	}
+}
+
+// bindClonedValueTrace binds a value returned by tuple.Index. Direct mutable
+// leaves have already been copied by Index and can be updated in place; nested
+// tuples still go through the defensive recursive binder.
+func bindClonedValueTrace(val any, trace *cell.Trace) any {
+	if trace == nil {
+		return val
+	}
+
+	switch x := val.(type) {
+	case *cell.Slice:
+		if x != nil {
+			x.SetTrace(cell.CombineTraces(x.Trace(), trace))
+		}
+		return x
+	case *cell.Builder:
+		if x == nil {
+			return nil
+		}
+		x.SetTrace(cell.CombineTraces(x.Trace(), trace))
+		return x
+	case tuple.Tuple:
+		return bindTupleTrace(x, trace)
+	default:
+		return val
+	}
 }
 
 func sameStackValue(a, b any) bool {
@@ -285,6 +360,9 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		}
 		return cp, nil
 	case tuple.Tuple:
+		if trace == nil {
+			return snapshotTupleValue(t), nil
+		}
 		return bindTupleTrace(t, trace), nil
 	case nil:
 		return nil, nil
@@ -406,6 +484,12 @@ func (s *Stack) PushContinuation(val Continuation) error {
 	return s.PushAny(val)
 }
 
+// PushOwnedContinuation pushes a continuation the caller no longer shares,
+// avoiding the defensive continuation copy made by PushContinuation.
+func (s *Stack) PushOwnedContinuation(val Continuation) error {
+	return s.pushOwnedValueChecked(val)
+}
+
 func fitsTVMInt(val *big.Int) bool {
 	return val.Cmp(minTVMInt) >= 0 && val.Cmp(maxTVMInt) <= 0
 }
@@ -515,6 +599,7 @@ func (s *Stack) SplitTop(top, drop int) (*Stack, error) {
 	}
 
 	newStack := newStackWithCap(top)
+	newStack.trace = s.trace
 	if top != 0 {
 		if err := newStack.MoveFrom(s, top); err != nil {
 			return nil, err

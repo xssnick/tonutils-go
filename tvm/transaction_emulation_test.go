@@ -805,6 +805,54 @@ func TestTransactionMasterchainStateCellLimitStartsAtV12(t *testing.T) {
 	}
 }
 
+func TestTransactionAnycastIdentityForgottenForUninitAndNonexistentAccounts(t *testing.T) {
+	data := append([]byte(nil), tonopsTestAddr.Data()...)
+	data[0] &^= 0x80
+	raw := address.NewAddress(0, byte(tonopsTestAddr.Workchain()), data).
+		WithAnycast(address.NewAnycast(1, []byte{0x80}))
+	exact, err := transactionAccountIDAddr(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name  string
+		shard *tlb.ShardAccount
+	}{
+		{
+			name: "uninit",
+			shard: buildTransactionTestUninitShardAccount(t, raw, 1_000_000_000, tlb.StorageInfo{
+				StorageUsed: tlb.StorageUsed{
+					CellsUsed: big.NewInt(1),
+					BitsUsed:  big.NewInt(0),
+				},
+				StorageExtra: tlb.StorageExtraNone{},
+			}),
+		},
+		{
+			name:  "nonexistent",
+			shard: buildTransactionTestNoneShardAccount(t),
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			prepared, err := PrepareAccount(tt.shard, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			acc := &prepared.runtime
+			if acc.rawAddress().Anycast() != nil || !bytes.Equal(acc.rawAddress().Data(), exact.Data()) {
+				t.Fatalf("runtime raw address = %v, want exact %s", acc.rawAddress(), exact)
+			}
+			if acc.rewriteDepth() != 0 {
+				t.Fatalf("runtime rewrite depth = %d, want 0", acc.rewriteDepth())
+			}
+			if !bytes.Equal(acc.stateHash, exact.Data()) {
+				t.Fatalf("runtime state hash = %x, want effective address %x", acc.stateHash, exact.Data())
+			}
+		})
+	}
+}
+
 func TestTransactionAccountAddressAnycastSerializationDisabledFromV10(t *testing.T) {
 	anycastAddr := tonopsTestAddr.WithAnycast(address.NewAnycast(1, []byte{0x80}))
 	rawData := append([]byte(nil), tonopsTestAddr.Data()...)
@@ -812,14 +860,16 @@ func TestTransactionAccountAddressAnycastSerializationDisabledFromV10(t *testing
 	rewrittenData[0] |= 0x80
 	v9Depth := uint64(1)
 	for _, tc := range []struct {
-		name        string
-		version     uint32
-		wantAnycast bool
-		wantData    []byte
-		wantDepth   *uint64
+		name          string
+		version       uint32
+		removeAnycast bool
+		wantAnycast   bool
+		wantData      []byte
+		wantDepth     *uint64
 	}{
 		{name: "v9", version: 9, wantAnycast: true, wantData: rawData, wantDepth: &v9Depth},
-		{name: "v10", version: 10, wantData: rewrittenData},
+		{name: "v10_after_compute", version: 10, removeAnycast: true, wantData: rewrittenData},
+		{name: "v10_compute_skipped", version: 10, wantAnycast: true, wantData: rawData},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			acc := &transactionRuntimeAccount{
@@ -827,7 +877,7 @@ func TestTransactionAccountAddressAnycastSerializationDisabledFromV10(t *testing
 				status:  tlb.AccountStatusActive,
 				balance: big.NewInt(1000),
 			}
-			built, err := buildTransactionAccountCell(acc, tlb.AccountStatusActive, big.NewInt(1000), nil, 1, uint32(tonopsTestTime.Unix()), nil, cell.BeginCell().EndCell(), nil, nil, nil, transactionTestConfigWithGlobalVersion(t, tc.version), nil)
+			built, err := buildTransactionAccountCell(acc, tlb.AccountStatusActive, big.NewInt(1000), nil, 1, uint32(tonopsTestTime.Unix()), nil, cell.BeginCell().EndCell(), nil, nil, nil, tc.removeAnycast, transactionTestConfigWithGlobalVersion(t, tc.version), nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2476,6 +2526,49 @@ func TestTransactionFrozenHashEqualsAddressEndStatusStartsAtV13(t *testing.T) {
 			}
 			if nextHash != nil {
 				t.Fatalf("state hash = %x, want nil", nextHash)
+			}
+		})
+	}
+}
+
+func TestTransactionFrozenAnycastHashUsesOriginalAddress(t *testing.T) {
+	addrData := append([]byte(nil), tonopsTestAddr.Data()...)
+	rewritePrefix := byte(0)
+	if addrData[0]&0x80 == 0 {
+		rewritePrefix = 0x80
+	}
+	rawAddr := address.NewAddress(0, byte(tonopsTestAddr.Workchain()), addrData).
+		WithAnycast(address.NewAnycast(1, []byte{rewritePrefix}))
+	acc := &transactionRuntimeAccount{}
+	if err := acc.setAddressIdentity(rawAddr); err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(acc.addr.Data(), rawAddr.Data()) {
+		t.Fatal("anycast address was not rewritten")
+	}
+
+	for _, tc := range []struct {
+		version      uint32
+		wantTxStatus tlb.AccountStatus
+	}{
+		{version: 12, wantTxStatus: tlb.AccountStatusFrozen},
+		{version: 13, wantTxStatus: tlb.AccountStatusUninit},
+	} {
+		t.Run(new(big.Int).SetUint64(uint64(tc.version)).String(), func(t *testing.T) {
+			txStatus, accountStatus, nextHash, err := transactionNormalizeFrozenFinalState(
+				acc,
+				tlb.AccountStatusFrozen,
+				nil,
+				nil,
+				nil,
+				append([]byte(nil), rawAddr.Data()...),
+				transactionTestConfigWithGlobalVersion(t, tc.version),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if txStatus != tc.wantTxStatus || accountStatus != tlb.AccountStatusUninit || nextHash != nil {
+				t.Fatalf("normalized frozen state = tx:%s account:%s hash:%x, want tx:%s account:uninit hash:nil", txStatus, accountStatus, nextHash, tc.wantTxStatus)
 			}
 		})
 	}

@@ -2,6 +2,7 @@ package stack
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -10,7 +11,8 @@ import (
 
 type OpPUSHCONT struct {
 	helpers.Prefixed
-	cont *cell.Cell
+	cont      *cell.Cell
+	contTrace *cell.Trace
 	// window is the decoded SMALL/BIG continuation body as a sub-slice of the
 	// original code cell; no cell is materialized on the hot decode path.
 	window cell.Slice
@@ -31,18 +33,26 @@ var (
 )
 
 func PUSHCONT(cont *cell.Cell) *OpPUSHCONT {
-	return &OpPUSHCONT{
+	op := &OpPUSHCONT{
 		Prefixed: pushContPrefixed,
 		cont:     cont,
 	}
+	if cont != nil {
+		op.contTrace = cont.Trace()
+	}
+	return op
 }
 
 func PUSHREFCONT(cont *cell.Cell) *OpPUSHCONT {
-	return &OpPUSHCONT{
+	op := &OpPUSHCONT{
 		Prefixed: pushRefContPrefixed,
 		cont:     cont,
 		typ:      "REF",
 	}
+	if cont != nil {
+		op.contTrace = cont.Trace()
+	}
+	return op
 }
 
 func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
@@ -84,15 +94,14 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		body, err := code.FetchSubslice(uint(szBytes*8), 0)
-		if err != nil {
+		if err = code.FetchSubsliceInto(&op.window, uint(szBytes*8), 0); err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
 		// the trace is stripped so the continuation code behaves exactly like
 		// the previously materialized cell did: nil trace here, the gas trace
 		// is re-attached on every jump
-		op.window = *body.SetTrace(nil)
+		op.window.SetTrace(nil)
 		return nil
 	case "BIG":
 		refsNum, err := code.LoadUInt(2)
@@ -105,15 +114,14 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		body, err := code.FetchSubslice(uint(szBytes*8), int(refsNum))
-		if err != nil {
+		if err = code.FetchSubsliceInto(&op.window, uint(szBytes*8), int(refsNum)); err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
-		op.window = *body.SetTrace(nil)
+		op.window.SetTrace(nil)
 		return nil
 	case "REF":
-		ref, err := code.PeekRefCell()
+		ref, trace, err := code.PeekRefCellAtWithTrace(0)
 		if err != nil {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
@@ -122,6 +130,7 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		}
 
 		op.cont = ref
+		op.contTrace = trace
 		return nil
 	}
 
@@ -133,25 +142,25 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 // execution path works on the window directly.
 func (op *OpPUSHCONT) contCell() *cell.Cell {
 	if op.cont == nil && op.window.BaseCell() != nil {
-		op.cont = op.window.MustToCell()
+		return op.window.MustToCell()
 	}
 	return op.cont
 }
 
 func (op *OpPUSHCONT) Serialize() *cell.Builder {
-	op.contCell()
+	cont := op.contCell()
 
 	var b *cell.Builder
 	switch {
-	case op.typ == "REF" || op.cont.BitsSize()%8 != 0 || op.cont.BitsSize() > 127*8 || op.cont.RefsNum() > 3:
+	case op.typ == "REF" || cont.BitsSize()%8 != 0 || cont.BitsSize() > 127*8 || cont.RefsNum() > 3:
 		op.typ = "REF"
 		b = cell.BeginCell().
-			MustStoreUInt(0x8A, 8).MustStoreRef(op.cont)
-	case op.cont.RefsNum() == 0 && op.cont.BitsSize() <= 15*8:
+			MustStoreUInt(0x8A, 8).MustStoreRef(cont)
+	case cont.RefsNum() == 0 && cont.BitsSize() <= 15*8:
 		op.typ = "SMALL"
 
-		sz := uint64(op.cont.BitsSize() / 8)
-		codeSlice, err := op.cont.BeginParse()
+		sz := uint64(cont.BitsSize() / 8)
+		codeSlice, err := cont.BeginParse()
 		if err != nil {
 			panic(err)
 		}
@@ -159,22 +168,22 @@ func (op *OpPUSHCONT) Serialize() *cell.Builder {
 		b = cell.BeginCell().
 			MustStoreUInt(9, 4).
 			MustStoreUInt(sz, 4).
-			MustStoreSlice(codeSlice.MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
-	case op.cont.RefsNum() <= 3:
+			MustStoreSlice(codeSlice.MustLoadSlice(cont.BitsSize()), uint(sz*8))
+	case cont.RefsNum() <= 3:
 		op.typ = "BIG"
 
-		sz := uint64(op.cont.BitsSize() / 8)
+		sz := uint64(cont.BitsSize() / 8)
 
-		codeSlice, err := op.cont.BeginParse()
+		codeSlice, err := cont.BeginParse()
 		if err != nil {
 			panic(err)
 		}
 
 		b = cell.BeginCell().
 			MustStoreUInt(0x47, 7). // 0x8E >> 1 = 0x47
-			MustStoreUInt(uint64(op.cont.RefsNum()), 2).
+			MustStoreUInt(uint64(cont.RefsNum()), 2).
 			MustStoreUInt(sz, 7).
-			MustStoreSlice(codeSlice.MustLoadSlice(op.cont.BitsSize()), uint(sz*8))
+			MustStoreSlice(codeSlice.MustLoadSlice(cont.BitsSize()), uint(sz*8))
 
 		for codeSlice.RefsNum() > 0 {
 			b.MustStoreRef(codeSlice.MustLoadRef().MustToCell())
@@ -214,7 +223,7 @@ func (op *OpPUSHCONT) Interpret(state *vm.State) error {
 	var code *cell.Slice
 	if op.typ == "REF" {
 		var err error
-		code, err = beginPushRefCell(state, op.cont)
+		code, err = beginPushRefCell(state, op.cont, op.contTrace)
 		if err != nil {
 			return err
 		}
@@ -229,7 +238,8 @@ func (op *OpPUSHCONT) Interpret(state *vm.State) error {
 			return err
 		}
 	}
-	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{Code: code, Data: vm.ControlData{
+
+	return state.Stack.PushOwnedContinuation(&vm.OrdinaryContinuation{Code: code, Data: vm.ControlData{
 		NumArgs: vm.ControlDataAllArgs,
 		CP:      state.CP,
 	}})

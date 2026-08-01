@@ -9,8 +9,9 @@ import (
 )
 
 type tupleData struct {
-	val       []any
-	bindingID any
+	val                []any
+	bindingID          any
+	needsValueSnapshot bool
 }
 
 type Tuple struct {
@@ -26,20 +27,20 @@ func (t *Tuple) IsNull() bool {
 // pointer semantics.
 func NewTupleValue(val ...any) Tuple {
 	cp := append([]any(nil), val...)
-	return Tuple{data: &tupleData{val: cp}}
+	return Tuple{data: newTupleData(cp, nil)}
 }
 
 // NewTupleOwned builds a tuple from values owned by the caller. The values slice
 // must not be mutated after the call.
 func NewTupleOwned(val []any) Tuple {
-	return Tuple{data: &tupleData{val: val}}
+	return Tuple{data: newTupleData(val, nil)}
 }
 
 // NewTupleOwnedBound builds a tuple from caller-owned values with the binding
 // ID already set, skipping the intermediate tuple that NewTupleOwned followed
 // by WithBindingID would allocate.
 func NewTupleOwnedBound(val []any, bindingID any) Tuple {
-	return Tuple{data: &tupleData{val: val, bindingID: bindingID}}
+	return Tuple{data: newTupleData(val, bindingID)}
 }
 
 // NewTuple keeps the legacy pointer-returning constructor for compatibility.
@@ -56,6 +57,32 @@ func NewTupleSized(size int) Tuple {
 	return Tuple{data: &tupleData{val: make([]any, size)}}
 }
 
+func newTupleData(val []any, bindingID any) *tupleData {
+	data := &tupleData{val: val, bindingID: bindingID}
+	for _, item := range val {
+		if stackValueNeedsSnapshot(item) {
+			data.needsValueSnapshot = true
+			break
+		}
+	}
+	return data
+}
+
+func stackValueNeedsSnapshot(val any) bool {
+	switch v := val.(type) {
+	case *big.Int:
+		return v == nil
+	case *cell.Cell:
+		return v == nil
+	case *cell.Slice, *cell.Builder:
+		return true
+	case Tuple:
+		return v.NeedsValueSnapshot()
+	default:
+		return false
+	}
+}
+
 func (t *Tuple) Len() int {
 	if t.IsNull() {
 		return 0
@@ -68,6 +95,14 @@ func (t *Tuple) Copy() Tuple {
 		return Tuple{}
 	}
 	return Tuple{data: t.data}
+}
+
+// NeedsValueSnapshot reports whether the tuple contains mutable cursor values
+// or typed nils that must be isolated when the tuple crosses a VM ownership
+// boundary. The summary is maintained when persistent tuple data is created,
+// so scalar/cell-only tuple trees can be rejected in O(1).
+func (t *Tuple) NeedsValueSnapshot() bool {
+	return !t.IsNull() && t.data.needsValueSnapshot
 }
 
 func (t *Tuple) BindingID() any {
@@ -102,7 +137,11 @@ func (t *Tuple) WithBindingID(bindingID any) Tuple {
 	if bindingIDsEqual(t.data.bindingID, bindingID) {
 		return Tuple{data: t.data}
 	}
-	return Tuple{data: &tupleData{val: t.data.val, bindingID: bindingID}}
+	return Tuple{data: &tupleData{
+		val:                t.data.val,
+		bindingID:          bindingID,
+		needsValueSnapshot: t.data.needsValueSnapshot,
+	}}
 }
 
 func cloneTupleLeaf(val any) any {
@@ -148,7 +187,7 @@ func (t *Tuple) Set(i int, val any) error {
 
 	next := append([]any(nil), t.data.val...)
 	next[i] = val
-	t.data = &tupleData{val: next}
+	t.data = newTupleData(next, nil)
 	return nil
 }
 
@@ -166,7 +205,7 @@ func (t *Tuple) Resize(size int) {
 	if t != nil && t.data != nil {
 		copy(next, t.data.val)
 	}
-	t.data = &tupleData{val: next}
+	t.data = newTupleData(next, nil)
 }
 
 func (t *Tuple) PopLast() (any, error) {
@@ -177,15 +216,17 @@ func (t *Tuple) PopLast() (any, error) {
 	idx := len(t.data.val) - 1
 	val := cloneTupleLeaf(t.data.val[idx])
 	next := append([]any(nil), t.data.val[:idx]...)
-	t.data = &tupleData{val: next}
+	t.data = newTupleData(next, nil)
 	return val, nil
 }
 
 func (t *Tuple) Append(val any) {
 	next := make([]any, t.Len()+1)
+	needsValueSnapshot := stackValueNeedsSnapshot(val)
 	if t != nil && t.data != nil {
 		copy(next, t.data.val)
+		needsValueSnapshot = needsValueSnapshot || t.data.needsValueSnapshot
 	}
 	next[len(next)-1] = val
-	t.data = &tupleData{val: next}
+	t.data = &tupleData{val: next, needsValueSnapshot: needsValueSnapshot}
 }

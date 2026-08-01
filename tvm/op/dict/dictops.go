@@ -37,6 +37,72 @@ type dictNearVariant struct {
 	allowEq   bool
 }
 
+type directDictKey struct {
+	kind    dictKeyKind
+	slice   *cell.Slice
+	integer *big.Int
+}
+
+type directSubdictPrefix struct {
+	kind    dictKeyKind
+	bits    uint
+	slice   *cell.Slice
+	integer *big.Int
+}
+
+func (k directDictKey) loadValueInto(dict *cell.Dictionary, value *cell.Slice) error {
+	if k.kind == dictKeySlice {
+		return dict.LoadValueBySliceKeyInto(k.slice, value)
+	}
+	return dict.LoadValueByIntKeyInto(k.integer, value)
+}
+
+func (k directDictKey) setBuilderWithMode(dict *cell.Dictionary, value *cell.Builder, mode cell.DictSetMode) (bool, error) {
+	if k.kind == dictKeySlice {
+		return dict.SetBuilderBySliceKeyWithMode(k.slice, value, mode)
+	}
+	return dict.SetBuilderByIntKeyWithMode(k.integer, value, mode)
+}
+
+func (k directDictKey) loadValueAndSetBuilderWithMode(dict *cell.Dictionary, value *cell.Builder, mode cell.DictSetMode) (*cell.Slice, bool, error) {
+	if k.kind == dictKeySlice {
+		return dict.LoadValueAndSetBuilderBySliceKeyWithMode(k.slice, value, mode)
+	}
+	return dict.LoadValueAndSetBuilderByIntKeyWithMode(k.integer, value, mode)
+}
+
+func (k directDictKey) loadValueAndDelete(dict *cell.Dictionary) (*cell.Slice, error) {
+	if k.kind == dictKeySlice {
+		return dict.LoadValueAndDeleteBySliceKey(k.slice)
+	}
+	return dict.LoadValueAndDeleteByIntKey(k.integer)
+}
+
+func (k directDictKey) delete(dict *cell.Dictionary) (bool, error) {
+	if k.kind == dictKeySlice {
+		return dict.DeleteBySliceKey(k.slice)
+	}
+	return dict.DeleteByIntKey(k.integer)
+}
+
+func (k directDictKey) lookupNearest(dict *cell.Dictionary, fetchNext, allowEq, invertFirst bool) (*cell.Cell, *cell.Slice, error) {
+	if k.kind == dictKeySlice {
+		return dict.LookupNearestKeyBySlice(k.slice, fetchNext, allowEq, invertFirst)
+	}
+	return dict.LookupNearestKeyByInt(k.integer, fetchNext, allowEq, invertFirst)
+}
+
+func (p directSubdictPrefix) cut(dict *cell.Dictionary, removePrefix bool) (bool, error) {
+	if p.kind == dictKeySlice {
+		var prefix cell.Slice
+		if err := p.slice.PreloadSubsliceInto(&prefix, p.bits, 0); err != nil {
+			return false, cellUnderflowError(err)
+		}
+		return dict.CutPrefixSubdictBySlice(&prefix, removePrefix)
+	}
+	return dict.CutPrefixSubdictByInt(p.integer, p.bits, removePrefix)
+}
+
 func checkDictStackDepth(state *vm.State, depth int) error {
 	if state.Stack.Len() < depth {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
@@ -73,8 +139,6 @@ var dictNearVariants = []dictNearVariant{
 	{offset: 10, kind: dictKeyUnsignedInt, fetchNext: false, allowEq: false},
 	{offset: 11, kind: dictKeyUnsignedInt, fetchNext: false, allowEq: true},
 }
-
-var dictBigIntOne = big.NewInt(1)
 
 func init() {
 	registerSimpleExact(0xF400, "STDICT", execStoreDict)
@@ -216,21 +280,18 @@ func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
 	if err != nil {
 		return err
 	}
-	keyCell, err := input.WithoutTrace().ToCell()
-	if err != nil {
-		return cellUnderflowError(err)
-	}
 
-	dict := newPrefixDictWithTrace(op.root, uint(op.bits), state.Cells.Trace())
-	value, matched, err := dict.LookupPrefix(keyCell)
+	dict := newReadOnlyPrefixDictWithTrace(op.root, uint(op.bits), state.Cells.Trace())
+	var value cell.Slice
+	matched, err := dict.LookupPrefixBySliceInto(input, &value)
 	if gasErr := state.Cells.PendingError(); gasErr != nil {
 		return gasErr
 	}
+	if errors.Is(err, cell.ErrNoSuchKeyInDict) {
+		return state.Stack.PushOwnedSlice(input)
+	}
 	if err != nil {
 		return mapDictError(err)
-	}
-	if value == nil {
-		return state.Stack.PushOwnedSlice(input)
 	}
 
 	prefixSlice, err := input.FetchSubslice(matched, 0)
@@ -243,7 +304,7 @@ func (op *OpPFXDICTSWITCH) Interpret(state *vm.State) error {
 	if err = state.Stack.PushOwnedSlice(input); err != nil {
 		return err
 	}
-	return state.Jump(newOrdContinuation(value, state.CP))
+	return state.Jump(newOrdContinuation(&value, state.CP))
 }
 
 func registerDictValueFamily(base uint16, suffix string, factory func(dictValueVariant) func(*vm.State) error) {
@@ -445,7 +506,7 @@ func execDictGet(variant dictValueVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, ok, err := popDictKey(state, keyBits, variant.kind, false)
+		key, ok, err := popDirectDictKey(state, keyBits, variant.kind, false)
 		if err != nil {
 			return err
 		}
@@ -453,27 +514,24 @@ func execDictGet(variant dictValueVariant) func(*vm.State) error {
 			return state.Stack.PushBool(false)
 		}
 
-		dict := newTracedDict(root, keyBits, state)
+		dict := newReadOnlyTracedDict(root, keyBits, state)
+		var value cell.Slice
+		if err = key.loadValueInto(dict, &value); err != nil {
+			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
+				return state.Stack.PushBool(false)
+			}
+			return mapDictError(err)
+		}
 		if variant.byRef {
-			value, err := loadDictRefValue(dict, key)
+			ref, err := loadSingleRefDictValue(&value)
 			if err != nil {
-				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-					return state.Stack.PushBool(false)
-				}
 				return mapDictError(err)
 			}
-			if err = state.Stack.PushCell(value); err != nil {
+			if err = state.Stack.PushCell(ref); err != nil {
 				return err
 			}
 		} else {
-			value, err := dict.LoadValue(key)
-			if err != nil {
-				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-					return state.Stack.PushBool(false)
-				}
-				return mapDictError(err)
-			}
-			if err = state.Stack.PushOwnedSlice(value); err != nil {
+			if err = state.Stack.PushOwnedSlice(&value); err != nil {
 				return err
 			}
 		}
@@ -491,7 +549,7 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, ok, err := popDictKey(state, keyBits, variant.kind, false)
+		key, ok, err := popDirectDictKey(state, keyBits, variant.kind, false)
 		if err != nil {
 			return err
 		}
@@ -499,15 +557,19 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 			return pushMaybeCell(state.Stack, nil)
 		}
 
-		dict := newTracedDict(root, keyBits, state)
-		value, err := loadDictRefValue(dict, key)
-		if err != nil {
+		dict := newReadOnlyTracedDict(root, keyBits, state)
+		var value cell.Slice
+		if err = key.loadValueInto(dict, &value); err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return pushMaybeCell(state.Stack, nil)
 			}
 			return mapDictError(err)
 		}
-		return pushMaybeCell(state.Stack, value)
+		ref, err := loadSingleRefDictValue(&value)
+		if err != nil {
+			return mapDictError(err)
+		}
+		return pushMaybeCell(state.Stack, ref)
 	}
 }
 
@@ -522,7 +584,7 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 			if err != nil {
 				return err
 			}
-			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
+			key, keyErr, err := popDirectDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -537,7 +599,11 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				if keyErr != nil {
 					return keyErr
 				}
-				changed, err = setDictRefValueWithMode(dict, key, value, mode)
+				var valueBuilder cell.Builder
+				if err = valueBuilder.StoreRefUncheckedDepth(value); err != nil {
+					return err
+				}
+				changed, err = key.setBuilderWithMode(dict, &valueBuilder, mode)
 				if err != nil {
 					return mapDictError(err)
 				}
@@ -549,7 +615,9 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				if keyErr != nil {
 					return keyErr
 				}
-				changed, err = dict.SetBuilderWithMode(key, value.ToBuilder(), mode)
+				var valueBuilder cell.Builder
+				value.ToBuilderInto(&valueBuilder)
+				changed, err = key.setBuilderWithMode(dict, &valueBuilder, mode)
 				if err != nil {
 					return mapDictError(err)
 				}
@@ -580,7 +648,7 @@ func execDictSetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*vm.
 			if err != nil {
 				return err
 			}
-			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
+			key, keyErr, err := popDirectDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -593,7 +661,7 @@ func execDictSetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*vm.
 			}
 
 			dict := newTracedDict(root, keyBits, state)
-			changed, err := dict.SetBuilderWithMode(key, value, mode)
+			changed, err := key.setBuilderWithMode(dict, value, mode)
 			if err != nil {
 				return mapDictError(err)
 			}
@@ -622,7 +690,7 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			if err != nil {
 				return err
 			}
-			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
+			key, keyErr, err := popDirectDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -637,11 +705,11 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				if keyErr != nil {
 					return keyErr
 				}
-				valueBuilder := cell.BeginCell()
+				var valueBuilder cell.Builder
 				if err = valueBuilder.StoreRefUncheckedDepth(value); err != nil {
 					return err
 				}
-				oldSlice, _, err := dict.LoadValueAndSetBuilderWithMode(key, valueBuilder, mode)
+				oldSlice, _, err := key.loadValueAndSetBuilderWithMode(dict, &valueBuilder, mode)
 				if err != nil {
 					return mapDictError(err)
 				}
@@ -662,7 +730,9 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			if keyErr != nil {
 				return keyErr
 			}
-			oldValue, _, err := dict.LoadValueAndSetBuilderWithMode(key, value.ToBuilder(), mode)
+			var valueBuilder cell.Builder
+			value.ToBuilderInto(&valueBuilder)
+			oldValue, _, err := key.loadValueAndSetBuilderWithMode(dict, &valueBuilder, mode)
 			if err != nil {
 				return mapDictError(err)
 			}
@@ -685,7 +755,7 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 			if err != nil {
 				return err
 			}
-			key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
+			key, keyErr, err := popDirectDictSetKey(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
@@ -698,7 +768,7 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 			}
 
 			dict := newTracedDict(root, keyBits, state)
-			oldValue, _, err := dict.LoadValueAndSetBuilderWithMode(key, value, mode)
+			oldValue, _, err := key.loadValueAndSetBuilderWithMode(dict, value, mode)
 			if err != nil {
 				return mapDictError(err)
 			}
@@ -728,33 +798,6 @@ func loadSingleRefDictValue(value *cell.Slice) (*cell.Cell, error) {
 		return nil, errors.New("value is not a single ref")
 	}
 	return value.PeekRefCell()
-}
-
-func loadDictRefValue(dict *cell.Dictionary, key *cell.Cell) (*cell.Cell, error) {
-	value, err := dict.LoadValue(key)
-	if err != nil {
-		return nil, err
-	}
-	return loadSingleRefDictValue(value)
-}
-
-func loadDictRefValueAndDelete(dict *cell.Dictionary, key *cell.Cell) (*cell.Cell, error) {
-	value, err := dict.LoadValueAndDelete(key)
-	if err != nil {
-		return nil, err
-	}
-	return loadSingleRefDictValue(value)
-}
-
-func setDictRefValueWithMode(dict *cell.Dictionary, key, value *cell.Cell, mode cell.DictSetMode) (bool, error) {
-	if value == nil {
-		return false, errors.New("value ref is nil")
-	}
-	builder := cell.BeginCell()
-	if err := builder.StoreRefUncheckedDepth(value); err != nil {
-		return false, err
-	}
-	return dict.SetBuilderWithMode(key, builder, mode)
 }
 
 func loadDictMinMaxRefValue(dict *cell.Dictionary, fetchMax, invertFirst, remove bool) (*cell.Cell, *cell.Cell, error) {
@@ -800,7 +843,7 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, ok, err := popDictKey(state, keyBits, variant.kind, true)
+		key, ok, err := popDirectDictKey(state, keyBits, variant.kind, true)
 		if err != nil {
 			return err
 		}
@@ -811,16 +854,14 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 			}
 			return state.Stack.PushBool(false)
 		}
-		oldRoot := dict.AsCell()
-		_, err = dict.LoadValueAndDelete(key)
-		if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
+		changed, err := key.delete(dict)
+		if err != nil {
 			return mapDictError(err)
 		}
-		newRoot := dict.AsCell()
-		if err = pushMaybeCell(state.Stack, newRoot); err != nil {
+		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 			return err
 		}
-		return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, newRoot))
+		return state.Stack.PushBool(changed)
 	}
 }
 
@@ -834,7 +875,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, ok, err := popDictKey(state, keyBits, variant.kind, true)
+		key, ok, err := popDirectDictKey(state, keyBits, variant.kind, true)
 		if err != nil {
 			return err
 		}
@@ -847,7 +888,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		}
 
 		if variant.byRef {
-			value, err := loadDictRefValueAndDelete(dict, key)
+			valueSlice, err := key.loadValueAndDelete(dict)
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -855,6 +896,10 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 					}
 					return state.Stack.PushBool(false)
 				}
+				return mapDictError(err)
+			}
+			value, err := loadSingleRefDictValue(valueSlice)
+			if err != nil {
 				return mapDictError(err)
 			}
 			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -866,7 +911,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 			return state.Stack.PushBool(true)
 		}
 
-		value, err := dict.LoadValueAndDelete(key)
+		value, err := key.loadValueAndDelete(dict)
 		if err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
@@ -896,7 +941,7 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return err
 		}
-		key, keyErr, err := popDictSetKey(state, keyBits, variant.kind)
+		key, keyErr, err := popDirectDictSetKey(state, keyBits, variant.kind)
 		if err != nil {
 			return err
 		}
@@ -911,11 +956,11 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		dict := newTracedDict(root, keyBits, state)
 		var oldValue *cell.Cell
 		if newValue != nil {
-			valueBuilder := cell.BeginCell()
+			var valueBuilder cell.Builder
 			if err = valueBuilder.StoreRefUncheckedDepth(newValue); err != nil {
 				return err
 			}
-			oldSlice, _, err := dict.LoadValueAndSetBuilderWithMode(key, valueBuilder, cell.DictSetModeSet)
+			oldSlice, _, err := key.loadValueAndSetBuilderWithMode(dict, &valueBuilder, cell.DictSetModeSet)
 			if err != nil {
 				return mapDictError(err)
 			}
@@ -924,12 +969,18 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 				return mapDictError(err)
 			}
 		} else {
-			oldValue, err = loadDictRefValueAndDelete(dict, key)
+			oldSlice, deleteErr := key.loadValueAndDelete(dict)
+			err = deleteErr
 			if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				return mapDictError(err)
 			}
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 				oldValue = nil
+			} else {
+				oldValue, err = loadSingleRefDictValue(oldSlice)
+				if err != nil {
+					return mapDictError(err)
+				}
 			}
 		}
 
@@ -951,7 +1002,12 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 			if err != nil {
 				return err
 			}
-			dict := newTracedDict(root, keyBits, state)
+			var dict *cell.Dictionary
+			if remove {
+				dict = newTracedDict(root, keyBits, state)
+			} else {
+				dict = newReadOnlyTracedDict(root, keyBits, state)
+			}
 
 			invertFirst := variant.kind == dictKeySignedInt
 			var (
@@ -1048,12 +1104,10 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 			return state.Stack.PushBool(false)
 		}
 
-		keyCell, err := keySlice.WithoutTrace().ToCell()
-		if err != nil {
-			return cellUnderflowError(err)
-		}
 		dict := newTracedPrefixDict(root, keyBits, state)
-		changed, err := dict.SetBuilderWithMode(keyCell, value.ToBuilder(), mode)
+		var valueBuilder cell.Builder
+		value.ToBuilderInto(&valueBuilder)
+		changed, err := dict.SetBuilderBySliceKeyWithMode(keySlice, &valueBuilder, mode)
 		if err != nil {
 			return mapDictError(err)
 		}
@@ -1093,22 +1147,16 @@ func execPfxDictDelete(state *vm.State) error {
 		return state.Stack.PushBool(false)
 	}
 
-	keyCell, err := keySlice.WithoutTrace().ToCell()
-	if err != nil {
-		return cellUnderflowError(err)
-	}
-
 	dict := newTracedPrefixDict(root, keyBits, state)
-	oldRoot := dict.AsCell()
-	_, err = dict.LoadValueAndDelete(keyCell)
+	_, err = dict.LoadValueAndDeleteBySliceKey(keySlice)
+	changed := err == nil
 	if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 		return mapDictError(err)
 	}
-	newRoot := dict.AsCell()
-	if err = pushMaybeCell(state.Stack, newRoot); err != nil {
+	if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
 		return err
 	}
-	return state.Stack.PushBool(err == nil && !sameMaybeCell(oldRoot, newRoot))
+	return state.Stack.PushBool(changed)
 }
 
 func execPfxDictGet(op int) func(*vm.State) error {
@@ -1131,16 +1179,10 @@ func execPfxDictGet(op int) func(*vm.State) error {
 		}
 
 		keyBits := uint(n)
-		keyCell, err := prefixDictLookupKeyCell(input, keyBits)
-		if err != nil {
-			return cellUnderflowError(err)
-		}
-		dict := newTracedPrefixDict(root, keyBits, state)
-		value, matched, err := dict.LookupPrefix(keyCell)
-		if err != nil {
-			return mapDictError(err)
-		}
-		if value == nil {
+		dict := newReadOnlyPrefixDictWithTrace(root, keyBits, state.Cells.Trace())
+		var value cell.Slice
+		matched, err := dict.LookupPrefixBySliceInto(input, &value)
+		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			if op&1 != 0 {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot parse a prefix belonging to a given prefix code dictionary")
 			}
@@ -1152,6 +1194,9 @@ func execPfxDictGet(op int) func(*vm.State) error {
 			}
 			return nil
 		}
+		if err != nil {
+			return mapDictError(err)
+		}
 
 		prefixSlice, err := input.FetchSubslice(matched, 0)
 		if err != nil {
@@ -1161,7 +1206,7 @@ func execPfxDictGet(op int) func(*vm.State) error {
 			return err
 		}
 		if op&2 == 0 {
-			if err = state.Stack.PushOwnedSlice(value); err != nil {
+			if err = state.Stack.PushOwnedSlice(&value); err != nil {
 				return err
 			}
 		}
@@ -1175,9 +1220,9 @@ func execPfxDictGet(op int) func(*vm.State) error {
 		case 1:
 			return nil
 		case 2:
-			return state.Jump(newOrdContinuation(value, state.CP))
+			return state.Jump(newOrdContinuation(&value, state.CP))
 		default:
-			return state.Call(newOrdContinuation(value, state.CP))
+			return state.Call(newOrdContinuation(&value, state.CP))
 		}
 	}
 }
@@ -1203,7 +1248,7 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			return err
 		}
 
-		dict := newTracedDict(root, keyBits, state)
+		dict := newReadOnlyTracedDict(root, keyBits, state)
 		invertFirst := variant.kind == dictKeySignedInt
 
 		var (
@@ -1217,12 +1262,12 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			if err != nil {
 				return err
 			}
-			keyCell, err := sliceKeyCell(keyHint, keyBits)
-			if err != nil {
-				return err
+			if keyHint.BitsLeft() < keyBits {
+				return vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key")
 			}
 
-			nearestKey, value, err = dict.LookupNearestKey(keyCell, variant.fetchNext, variant.allowEq, false)
+			key := directDictKey{kind: variant.kind, slice: keyHint}
+			nearestKey, value, err = key.lookupNearest(dict, variant.fetchNext, variant.allowEq, false)
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return state.Stack.PushBool(false)
@@ -1236,9 +1281,9 @@ func execDictGetNear(variant dictNearVariant) func(*vm.State) error {
 			}
 
 			signed := variant.kind == dictKeySignedInt
-			keyCell, ok := encodeDictIntKey(idx, keyBits, signed)
-			if ok {
-				nearestKey, value, err = dict.LookupNearestKey(keyCell, variant.fetchNext, variant.allowEq, signed)
+			if dictIntKeyFits(idx, keyBits, signed) {
+				key := directDictKey{kind: variant.kind, integer: idx}
+				nearestKey, value, err = key.lookupNearest(dict, variant.fetchNext, variant.allowEq, signed)
 				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return mapDictError(err)
 				}
@@ -1284,12 +1329,17 @@ func execDictGetExec(unsigned bool, call bool, keepOnMiss bool) func(*vm.State) 
 			return err
 		}
 
-		key, ok := encodeDictIntKey(idx, keyBits, !unsigned)
-		if ok {
-			dict := newTracedDict(root, keyBits, state)
-			value, lookupErr := dict.LoadValue(key)
+		kind := dictKeySignedInt
+		if unsigned {
+			kind = dictKeyUnsignedInt
+		}
+		if dictIntKeyFits(idx, keyBits, !unsigned) {
+			dict := newReadOnlyTracedDict(root, keyBits, state)
+			var value cell.Slice
+			key := directDictKey{kind: kind, integer: idx}
+			lookupErr := key.loadValueInto(dict, &value)
 			if lookupErr == nil {
-				cont := newOrdContinuation(value, state.CP)
+				cont := newOrdContinuation(&value, state.CP)
 				if call {
 					return state.Call(cont)
 				}
@@ -1324,13 +1374,13 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 			}
 
 			keyBits := uint(n)
-			_, prefix, err := popSubdictPrefix(state, keyBits, variant.kind)
+			prefix, err := popSubdictPrefix(state, keyBits, variant.kind)
 			if err != nil {
 				return err
 			}
 
 			dict := newTracedDict(root, keyBits, state)
-			if ok, err := dict.CutPrefixSubdict(prefix, removePrefix); err != nil {
+			if ok, err := prefix.cut(dict, removePrefix); err != nil {
 				return mapDictError(err)
 			} else if !ok {
 				return vmerr.Error(vmerr.CodeDict, "cannot construct subdictionary by key prefix")
@@ -1341,50 +1391,54 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 	}
 }
 
-func popSubdictPrefix(state *vm.State, keyBits uint, kind dictKeyKind) (uint, *cell.Cell, error) {
+func popSubdictPrefix(state *vm.State, keyBits uint, kind dictKeyKind) (directSubdictPrefix, error) {
+	prefix := directSubdictPrefix{kind: kind}
 	switch kind {
 	case dictKeySlice:
 		k, err := state.Stack.PopIntRangeInt64(0, int64(keyBits))
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefixBits := uint(k)
+		prefix.bits = uint(k)
 		sl, err := state.Stack.PopSlice()
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefix, err := sliceKeyCell(sl, prefixBits)
-		return prefixBits, prefix, err
+		if sl.BitsLeft() < prefix.bits {
+			return directSubdictPrefix{}, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key")
+		}
+		prefix.slice = sl
+		return prefix, nil
 	case dictKeySignedInt:
 		k, err := state.Stack.PopIntRangeInt64(0, int64(minUint(keyBits, 257)))
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefixBits := uint(k)
+		prefix.bits = uint(k)
 		val, err := state.Stack.PopIntFinite()
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefix, ok := encodeDictIntKey(val, prefixBits, true)
-		if !ok {
-			return 0, nil, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key prefix")
+		if !dictIntKeyFits(val, prefix.bits, true) {
+			return directSubdictPrefix{}, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key prefix")
 		}
-		return prefixBits, prefix, nil
+		prefix.integer = val
+		return prefix, nil
 	default:
 		k, err := state.Stack.PopIntRangeInt64(0, int64(minUint(keyBits, 256)))
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefixBits := uint(k)
+		prefix.bits = uint(k)
 		val, err := state.Stack.PopIntFinite()
 		if err != nil {
-			return 0, nil, err
+			return directSubdictPrefix{}, err
 		}
-		prefix, ok := encodeDictIntKey(val, prefixBits, false)
-		if !ok {
-			return 0, nil, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key prefix")
+		if !dictIntKeyFits(val, prefix.bits, false) {
+			return directSubdictPrefix{}, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key prefix")
 		}
-		return prefixBits, prefix, nil
+		prefix.integer = val
+		return prefix, nil
 	}
 }
 
@@ -1396,18 +1450,6 @@ func newOrdContinuation(code *cell.Slice, cp int) *vm.OrdinaryContinuation {
 		},
 		Code: code,
 	}
-}
-
-func prefixDictLookupKeyCell(input *cell.Slice, keyBits uint) (*cell.Cell, error) {
-	keyLen := input.BitsLeft()
-	if keyLen > keyBits {
-		keyLen = keyBits
-	}
-	key, err := input.WithoutTrace().PreloadSubslice(keyLen, 0)
-	if err != nil {
-		return nil, err
-	}
-	return key.ToCell()
 }
 
 func pushDictKeyValue(state *vm.State, key *cell.Cell, kind dictKeyKind) error {
@@ -1480,85 +1522,81 @@ func popDictMinMaxRootAndLen(state *vm.State, kind dictKeyKind) (uint, *cell.Cel
 	return uint(n), root, nil
 }
 
-func popDictKey(state *vm.State, bits uint, kind dictKeyKind, strict bool) (*cell.Cell, bool, error) {
+func popDirectDictKey(state *vm.State, bits uint, kind dictKeyKind, strict bool) (directDictKey, bool, error) {
+	key := directDictKey{kind: kind}
 	switch kind {
 	case dictKeySlice:
-		key, err := state.Stack.PopSlice()
+		sl, err := state.Stack.PopSlice()
 		if err != nil {
-			return nil, false, err
+			return directDictKey{}, false, err
 		}
-		cellKey, err := sliceKeyCell(key, bits)
-		return cellKey, err == nil, err
-	case dictKeySignedInt:
-		val, err := state.Stack.PopIntFinite()
+		if sl.BitsLeft() < bits {
+			return directDictKey{}, false, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key")
+		}
+		key.slice = sl
+		return key, true, nil
+	case dictKeySignedInt, dictKeyUnsignedInt:
+		value, err := state.Stack.PopIntFinite()
 		if err != nil {
-			return nil, false, err
+			return directDictKey{}, false, err
 		}
-		key, ok := encodeDictIntKey(val, bits, true)
-		if !ok {
+		if !dictIntKeyFits(value, bits, kind == dictKeySignedInt) {
 			if strict {
-				return nil, false, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
+				return directDictKey{}, false, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
 			}
-			return nil, false, nil
+			return directDictKey{}, false, nil
 		}
+		key.integer = value
 		return key, true, nil
 	default:
-		val, err := state.Stack.PopIntFinite()
-		if err != nil {
-			return nil, false, err
-		}
-		key, ok := encodeDictIntKey(val, bits, false)
-		if !ok {
-			if strict {
-				return nil, false, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
-			}
-			return nil, false, nil
-		}
-		return key, true, nil
+		panic("unsupported dictionary key kind")
 	}
 }
 
-func popDictSetKey(state *vm.State, bits uint, kind dictKeyKind) (*cell.Cell, error, error) {
+func popDirectDictSetKey(state *vm.State, bits uint, kind dictKeyKind) (directDictKey, error, error) {
+	key := directDictKey{kind: kind}
 	switch kind {
 	case dictKeySlice:
-		key, err := state.Stack.PopSlice()
+		sl, err := state.Stack.PopSlice()
 		if err != nil {
-			return nil, nil, err
+			return directDictKey{}, nil, err
 		}
-		cellKey, err := sliceKeyCell(key, bits)
-		return cellKey, err, nil
-	case dictKeySignedInt:
-		val, err := state.Stack.PopInt()
+		key.slice = sl
+		if sl.BitsLeft() < bits {
+			return key, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key"), nil
+		}
+		return key, nil, nil
+	case dictKeySignedInt, dictKeyUnsignedInt:
+		value, err := state.Stack.PopInt()
 		if err != nil {
-			return nil, nil, err
+			return directDictKey{}, nil, err
 		}
-		key, ok := encodeDictIntKey(val, bits, true)
-		if !ok {
-			return nil, nil, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
+		key.integer = value
+		if !dictIntKeyFits(value, bits, kind == dictKeySignedInt) {
+			return key, nil, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
 		}
 		return key, nil, nil
 	default:
-		val, err := state.Stack.PopInt()
-		if err != nil {
-			return nil, nil, err
-		}
-		key, ok := encodeDictIntKey(val, bits, false)
-		if !ok {
-			return nil, nil, vmerr.Error(vmerr.CodeRangeCheck, "not enough bits for a dictionary key")
-		}
-		return key, nil, nil
+		panic("unsupported dictionary key kind")
 	}
 }
 
-func sliceKeyCell(sl *cell.Slice, bits uint) (*cell.Cell, error) {
-	if sl.BitsLeft() < bits {
-		return nil, vmerr.Error(vmerr.CodeCellUnderflow, "not enough bits for a dictionary key")
+func dictIntKeyFits(value *big.Int, bits uint, signed bool) bool {
+	if value == nil {
+		return false
 	}
-	data, err := sl.PreloadSlice(bits)
-	if err != nil {
-		return nil, cellUnderflowError(err)
+	if bits == 0 {
+		return value.Sign() == 0
 	}
-	return cell.BeginCell().MustStoreSlice(data, bits).EndCell(), nil
+	if !signed {
+		return value.Sign() >= 0 && uint(value.BitLen()) <= bits
+	}
+	if value.Sign() >= 0 {
+		return uint(value.BitLen()) < bits
+	}
+
+	bitLen := uint(value.BitLen())
+	return bitLen < bits || bitLen == bits && value.TrailingZeroBits() == bits-1
 }
 
 func newTracedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary {
@@ -1566,6 +1604,13 @@ func newTracedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary
 		return cell.NewDict(bits).SetTrace(state.Cells.Trace())
 	}
 	return root.AsDict(bits).SetTrace(state.Cells.Trace())
+}
+
+func newReadOnlyTracedDict(root *cell.Cell, bits uint, state *vm.State) *cell.Dictionary {
+	if root == nil {
+		return cell.NewDict(bits).SetTrace(state.Cells.Trace())
+	}
+	return root.AsDictWithTrace(bits, state.Cells.Trace())
 }
 
 func newTracedPrefixDict(root *cell.Cell, bits uint, state *vm.State) *cell.PrefixDictionary {
@@ -1579,18 +1624,18 @@ func newPrefixDictWithTrace(root *cell.Cell, bits uint, trace *cell.Trace) *cell
 	return root.AsPrefixDict(bits).SetTrace(trace)
 }
 
+func newReadOnlyPrefixDictWithTrace(root *cell.Cell, bits uint, trace *cell.Trace) *cell.PrefixDictionary {
+	if root == nil {
+		return cell.NewPrefixDict(bits).SetTrace(trace)
+	}
+	return root.AsPrefixDictWithTrace(bits, trace)
+}
+
 func pushMaybeCell(stack *vm.Stack, value *cell.Cell) error {
 	if value == nil {
 		return stack.PushAny(nil)
 	}
 	return stack.PushCell(value)
-}
-
-func sameMaybeCell(a, b *cell.Cell) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.HashKey() == b.HashKey()
 }
 
 func dictNonEmpty(sl *cell.Slice) int {
@@ -1605,61 +1650,6 @@ func dictNonEmpty(sl *cell.Slice) int {
 		return -1
 	}
 	return int(res)
-}
-
-func encodeDictIntKey(value *big.Int, bits uint, signed bool) (*cell.Cell, bool) {
-	data, ok := encodeDictIntBits(value, bits, signed)
-	if !ok {
-		return nil, false
-	}
-	return cell.BeginCell().MustStoreSlice(data, bits).EndCell(), true
-}
-
-func encodeDictIntBits(value *big.Int, bits uint, signed bool) ([]byte, bool) {
-	if value == nil {
-		return nil, false
-	}
-	if bits == 0 {
-		return []byte{}, value.Sign() == 0
-	}
-
-	unsignedValue := value
-	if signed {
-		if value.Sign() < 0 {
-			absMinusOne := new(big.Int).Neg(value)
-			absMinusOne.Sub(absMinusOne, dictBigIntOne)
-			if absMinusOne.BitLen() >= int(bits) {
-				return nil, false
-			}
-
-			unsignedValue = new(big.Int).Lsh(dictBigIntOne, bits)
-			unsignedValue.Add(unsignedValue, value)
-		} else if value.BitLen() >= int(bits) {
-			return nil, false
-		}
-	} else if value.Sign() < 0 || value.BitLen() > int(bits) {
-		return nil, false
-	}
-
-	outLen := int((bits + 7) / 8)
-	out := make([]byte, outLen)
-	unsignedValue.FillBytes(out)
-	if rem := bits % 8; rem != 0 {
-		shiftSliceLeft(out, 8-rem)
-	}
-	return out, true
-}
-
-func shiftSliceLeft(data []byte, shift uint) {
-	if shift == 0 || len(data) == 0 {
-		return
-	}
-	var carry byte
-	for i := len(data) - 1; i >= 0; i-- {
-		nextCarry := data[i] >> (8 - shift)
-		data[i] = (data[i] << shift) | carry
-		carry = nextCarry
-	}
 }
 
 func minUint(a uint, b int) uint {

@@ -204,6 +204,191 @@ func TestTVMCrossEmulatorTransactionAnycastExplicitSourceV7V8V9V10(t *testing.T)
 	}
 }
 
+func TestTVMCrossEmulatorTransactionAnycastFrozenHashUsesOriginalAddress(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	baseConfigRoot := mustReferenceTransactionConfigRoot(t)
+	now := uint32(tonopsTestTime.Unix())
+	depth := uint64(1)
+	origData := cell.BeginCell().MustStoreUInt(0xAAAA, 16).EndCell()
+	newData := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
+	code := makeTransactionInternalSuccessCode(t, newData)
+	stateInit := &tlb.StateInit{
+		Depth: &depth,
+		Code:  code,
+		Data:  origData,
+	}
+	stateInitCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatalf("failed to serialize state init: %v", err)
+	}
+
+	rewritePrefix := byte(0)
+	if stateInitCell.Hash()[0]&0x80 == 0 {
+		rewritePrefix = 0x80
+	}
+	rawAddr := address.NewAddress(0, 0, stateInitCell.Hash()).
+		WithAnycast(address.NewAnycast(1, []byte{rewritePrefix}))
+	exactAddr, err := transactionAccountIDAddr(rawAddr)
+	if err != nil {
+		t.Fatalf("failed to rewrite anycast account address: %v", err)
+	}
+	if bytes.Equal(rawAddr.Data(), exactAddr.Data()) {
+		t.Fatal("anycast test address did not rewrite the account id")
+	}
+
+	msg := mustTransactionMsgCell(t, &tlb.InternalMessage{
+		IHRDisabled: true,
+		Bounce:      false,
+		SrcAddr:     internalEmulationSrcAddr,
+		DstAddr:     rawAddr,
+		Amount:      tlb.FromNanoTONU(0),
+		Body:        cell.BeginCell().MustStoreUInt(0xCAFE, 16).EndCell(),
+	})
+	storageInfo := tlb.StorageInfo{
+		StorageUsed: tlb.StorageUsed{
+			CellsUsed: big.NewInt(1),
+			BitsUsed:  big.NewInt(0),
+		},
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now - 1,
+	}
+	shard := buildTransactionTestStoredShardAccount(t, rawAddr, tlb.AccountStatusActive, 50, storageInfo, stateInit, nil)
+	storagePrices := transactionVersionStoragePricesCell(t, 100)
+	gasLimits := buildTransactionGasLimitsCell(t, 10, 1_000_000)
+
+	for _, version := range []uint32{9, 10, 12, 13, 15} {
+		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
+			wantTxStatus := tlb.AccountStatus(tlb.AccountStatusFrozen)
+			if version >= 13 {
+				wantTxStatus = tlb.AccountStatusUninit
+			}
+
+			configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
+			configRoot = referenceTransactionConfigRootWithOverrides(t, configRoot, map[int32]*cell.Cell{
+				int32(tlb.ConfigParamStoragePrices):        storagePrices,
+				int32(tlb.ConfigParamGasPricesBasechain):   gasLimits,
+				int32(tlb.ConfigParamGasPricesMasterchain): gasLimits,
+			})
+			goRes, err := testEmulateTransaction(NewTVM(), shard, msg, testTxParams{
+				Address:     rawAddr,
+				Now:         now,
+				BlockLT:     transactionTestLogicalTime,
+				LogicalTime: transactionTestLogicalTime,
+				RandSeed:    append([]byte(nil), tonopsTestSeed...),
+				ConfigRoot:  configRoot,
+			})
+			if err != nil {
+				t.Fatalf("go transaction emulation failed: %v", err)
+			}
+			refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(
+				shard,
+				msg,
+				now,
+				uint64(transactionTestLogicalTime),
+				tonopsTestSeed,
+				configRoot,
+			)
+			if err != nil {
+				t.Fatalf("reference transaction emulation failed: %v", err)
+			}
+
+			goTxStatus := transactionCrossEndStatus(t, goRes.TransactionCell)
+			refTxStatus := transactionCrossEndStatus(t, refRes.txCell)
+			if goTxStatus != wantTxStatus || refTxStatus != wantTxStatus {
+				t.Fatalf("tx status mismatch: go=%s reference=%s want=%s", goTxStatus, refTxStatus, wantTxStatus)
+			}
+			goAccountStatus := transactionCrossShardStatus(t, goRes.NextAccount.ShardAccountCell())
+			refAccountStatus := transactionCrossShardStatus(t, refRes.shardCell)
+			if goAccountStatus != tlb.AccountStatusUninit || refAccountStatus != tlb.AccountStatusUninit {
+				t.Fatalf("account status mismatch: go=%s reference=%s want=%s", goAccountStatus, refAccountStatus, tlb.AccountStatusUninit)
+			}
+			if !bytes.Equal(goRes.TransactionCell.Hash(), refRes.txCell.Hash()) {
+				t.Logf("go account=%s\nreference account=%s", transactionCrossShardAccountSummary(t, goRes.NextAccount.ShardAccountCell()), transactionCrossShardAccountSummary(t, refRes.shardCell))
+				t.Fatalf("transaction hash mismatch:\ngo=%s\nreference=%s", goRes.TransactionCell.Dump(), refRes.txCell.Dump())
+			}
+			if !bytes.Equal(goRes.NextAccount.ShardAccountCell().Hash(), refRes.shardCell.Hash()) {
+				t.Fatalf("shard account hash mismatch:\ngo=%s\nreference=%s", goRes.NextAccount.ShardAccountCell().Dump(), refRes.shardCell.Dump())
+			}
+
+			// C++ forgets the anycast rewrite metadata whenever this uninitialized
+			// account is loaded again. Keep the second transaction in the same test
+			// so both the serialized state and the prepared-account lane are covered.
+			secondMsg := mustTransactionMsgCell(t, &tlb.InternalMessage{
+				IHRDisabled: true,
+				Bounce:      false,
+				SrcAddr:     internalEmulationSrcAddr,
+				DstAddr:     exactAddr,
+				Amount:      tlb.FromNanoTONU(1_000_000_000),
+				Body:        cell.BeginCell().MustStoreUInt(0xFACE, 16).EndCell(),
+			})
+			secondLT := transactionTestLogicalTime + 10
+			secondParams := testTxParams{
+				Address:            exactAddr,
+				Now:                now,
+				BlockLT:            secondLT,
+				LogicalTime:        secondLT,
+				RandSeed:           append([]byte(nil), tonopsTestSeed...),
+				ConfigRoot:         configRoot,
+				AccountStorageStat: goRes.AccountStorageStat,
+			}
+			block, err := secondParams.blockContext()
+			if err != nil {
+				t.Fatalf("failed to prepare second Go block context: %v", err)
+			}
+			preparedMsg, err := PrepareMessage(secondMsg)
+			if err != nil {
+				t.Fatalf("failed to prepare second Go message: %v", err)
+			}
+			goSecond, err := NewTVM().EmulateTransaction(block, goRes.NextAccount, preparedMsg, secondParams.txOptions())
+			if err != nil {
+				t.Fatalf("second Go transaction emulation failed: %v", err)
+			}
+
+			var refNext tlb.ShardAccount
+			if err = tlb.Parse(&refNext, refRes.shardCell); err != nil {
+				t.Fatalf("failed to parse first reference shard account: %v", err)
+			}
+			refSecond, err := runReferenceOrdinaryTransactionWithConfigRoot(
+				&refNext,
+				secondMsg,
+				now,
+				uint64(secondLT),
+				tonopsTestSeed,
+				configRoot,
+			)
+			if err != nil {
+				t.Fatalf("second reference transaction emulation failed: %v", err)
+			}
+
+			for side, shardCell := range map[string]*cell.Cell{
+				"go":        goSecond.NextAccount.ShardAccountCell(),
+				"reference": refSecond.shardCell,
+			} {
+				var nextShard tlb.ShardAccount
+				if err = tlb.Parse(&nextShard, shardCell); err != nil {
+					t.Fatalf("failed to parse second %s shard account: %v", side, err)
+				}
+				var nextAccount tlb.AccountState
+				if err = tlb.Parse(&nextAccount, nextShard.Account); err != nil {
+					t.Fatalf("failed to parse second %s account: %v", side, err)
+				}
+				if nextAccount.Address.Anycast() != nil || !bytes.Equal(nextAccount.Address.Data(), exactAddr.Data()) {
+					t.Fatalf("second %s account address = %v, want exact %s", side, nextAccount.Address, exactAddr)
+				}
+			}
+			if !bytes.Equal(goSecond.TransactionCell.Hash(), refSecond.txCell.Hash()) {
+				t.Fatalf("second transaction hash mismatch:\ngo=%s\nreference=%s", goSecond.TransactionCell.Dump(), refSecond.txCell.Dump())
+			}
+			if !bytes.Equal(goSecond.NextAccount.ShardAccountCell().Hash(), refSecond.shardCell.Hash()) {
+				t.Fatalf("second shard account hash mismatch:\ngo=%s\nreference=%s", goSecond.NextAccount.ShardAccountCell().Dump(), refSecond.shardCell.Dump())
+			}
+		})
+	}
+}
+
 func transactionAnycastIdentityAddresses(t *testing.T) (*address.Address, *address.Address) {
 	t.Helper()
 

@@ -874,11 +874,11 @@ func TestPopSubdictPrefixUnsignedAndErrorPaths(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push unsigned prefix bits: %v", err)
 	}
-	bits, prefix, err := popSubdictPrefix(state, 8, dictKeyUnsignedInt)
+	prefix, err := popSubdictPrefix(state, 8, dictKeyUnsignedInt)
 	if err != nil {
 		t.Fatalf("popSubdictPrefix unsigned failed: %v", err)
 	}
-	if bits != 2 || prefix.MustBeginParse().MustLoadUInt(2) != 0b11 {
+	if prefix.bits != 2 || prefix.integer == nil || prefix.integer.Uint64() != 0b11 {
 		t.Fatalf("unexpected unsigned prefix result")
 	}
 
@@ -889,7 +889,7 @@ func TestPopSubdictPrefixUnsignedAndErrorPaths(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push bad unsigned prefix bits: %v", err)
 	}
-	_, _, err = popSubdictPrefix(state, 8, dictKeyUnsignedInt)
+	_, err = popSubdictPrefix(state, 8, dictKeyUnsignedInt)
 	if err == nil {
 		t.Fatal("expected unsigned prefix overflow")
 	}
@@ -1804,18 +1804,18 @@ func TestDictSetIntegerKeyErrorPopOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("signed pop set key encodes negative", func(t *testing.T) {
+	t.Run("signed pop set key keeps negative", func(t *testing.T) {
 		state := newDictTestState()
 		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
 			t.Fatalf("push signed key: %v", err)
 		}
 
-		key, keyErr, err := popDictSetKey(state, 8, dictKeySignedInt)
+		key, keyErr, err := popDirectDictSetKey(state, 8, dictKeySignedInt)
 		if err != nil || keyErr != nil {
 			t.Fatalf("pop signed set key failed: keyErr=%v err=%v", keyErr, err)
 		}
-		if got := key.MustBeginParse().MustLoadUInt(8); got != 0xFF {
-			t.Fatalf("encoded signed key = %#x, want 0xff", got)
+		if key.integer.Cmp(big.NewInt(-1)) != 0 {
+			t.Fatalf("signed key = %v, want -1", key.integer)
 		}
 	})
 }
@@ -1872,7 +1872,7 @@ func TestDictGetIntegerKeyRangeSemantics(t *testing.T) {
 			t.Fatalf("push invalid key: %v", err)
 		}
 
-		_, _, err := popDictKey(state, 8, dictKeySignedInt, false)
+		_, _, err := popDirectDictKey(state, 8, dictKeySignedInt, false)
 		assertDictVMErrorCode(t, err, vmerr.CodeTypeCheck)
 		if state.Stack.Len() != 0 {
 			t.Fatalf("signed pop key type error should consume key, stack len=%d", state.Stack.Len())

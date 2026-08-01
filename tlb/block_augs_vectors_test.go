@@ -259,7 +259,7 @@ func TestAugInMsgDescrLeafVectors(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got, err := AugInMsgDescr{}.LeafExtra(tc.value.MustBeginParse())
+		got, err := buildAugmentationLeafExtra(AugInMsgDescr{}, tc.value.MustBeginParse())
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -277,7 +277,7 @@ func TestAugInMsgDescrLeafVectors(t *testing.T) {
 		MustStoreRef(env).MustStoreRef(dummyTx).
 		MustStoreBigCoins(big.NewInt(12)). // != fwd_fee_remaining 11
 		EndCell()
-	if _, err := (AugInMsgDescr{}).LeafExtra(badFin.MustBeginParse()); err == nil {
+	if _, err := buildAugmentationLeafExtra(AugInMsgDescr{}, badFin.MustBeginParse()); err == nil {
 		t.Fatal("import_fin with mismatched fwd fee must be rejected")
 	}
 
@@ -285,7 +285,7 @@ func TestAugInMsgDescrLeafVectors(t *testing.T) {
 		MustStoreRef(msg).MustStoreRef(dummyTx).
 		MustStoreBigCoins(big.NewInt(30)).
 		MustStoreRef(dummyProof).EndCell()
-	if _, err := (AugInMsgDescr{}).LeafExtra(ihr.MustBeginParse()); err == nil {
+	if _, err := buildAugmentationLeafExtra(AugInMsgDescr{}, ihr.MustBeginParse()); err == nil {
 		t.Fatal("import_ihr must be rejected")
 	}
 
@@ -293,7 +293,7 @@ func TestAugInMsgDescrLeafVectors(t *testing.T) {
 		MustStoreRef(env).MustStoreRef(env).
 		MustStoreBigCoins(big.NewInt(12)). // transit fee > fwd_fee_remaining 11
 		EndCell()
-	if _, err := (AugInMsgDescr{}).LeafExtra(badTr.MustBeginParse()); err == nil {
+	if _, err := buildAugmentationLeafExtra(AugInMsgDescr{}, badTr.MustBeginParse()); err == nil {
 		t.Fatal("import_tr with transit fee above remaining fee must be rejected")
 	}
 }
@@ -349,7 +349,7 @@ func TestMsgDescrAugmentationVersionedExtraFlags(t *testing.T) {
 			}
 			mustCellHashEqual(t, "versioned InMsgDescr extra", gotInCell, wantIn)
 
-			gotDeferred, err := (AugInMsgDescr{GlobalVersion: tc.globalVersion}).LeafExtra(deferred.MustBeginParse())
+			gotDeferred, err := buildAugmentationLeafExtra(AugInMsgDescr{GlobalVersion: tc.globalVersion}, deferred.MustBeginParse())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -472,7 +472,7 @@ func TestAugOutMsgDescrLeafVectors(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		got, err := AugOutMsgDescr{}.LeafExtra(tc.value.MustBeginParse())
+		got, err := buildAugmentationLeafExtra(AugOutMsgDescr{}, tc.value.MustBeginParse())
 		if err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
@@ -481,7 +481,7 @@ func TestAugOutMsgDescrLeafVectors(t *testing.T) {
 
 	// truncated variants must be rejected
 	truncated := cell.BeginCell().MustStoreUInt(0b1100, 4).MustStoreUInt(1, 10).EndCell()
-	if _, err := (AugOutMsgDescr{}).LeafExtra(truncated.MustBeginParse()); err == nil {
+	if _, err := buildAugmentationLeafExtra(AugOutMsgDescr{}, truncated.MustBeginParse()); err == nil {
 		t.Fatal("truncated msg_export_deq must be rejected")
 	}
 }
@@ -494,7 +494,7 @@ func TestAugForkVectors(t *testing.T) {
 	// CurrencyCollection: canonical grams sum and per-key extra-currency merge.
 	extraL := mustExtraDict(t, map[uint32]int64{1: 5, 2: 6})
 	extraR := mustExtraDict(t, map[uint32]int64{2: 4, 3: 1})
-	got, err := AugShardAccountBlocks{}.CombineExtra(
+	got, err := buildAugmentationCombinedExtra(AugShardAccountBlocks{},
 		slice(ccCell(t, 100, extraL)), slice(ccCell(t, 23, extraR)))
 	if err != nil {
 		t.Fatal(err)
@@ -502,10 +502,17 @@ func TestAugForkVectors(t *testing.T) {
 	want := ccCell(t, 123, mustExtraDict(t, map[uint32]int64{1: 5, 2: 10, 3: 1})).EndCell()
 	mustCellHashEqual(t, "CC fork", got, want)
 
+	got, err = buildAugmentationCombinedExtra(AugAccountTransactions{},
+		slice(ccCell(t, 7, nil)), slice(ccCell(t, 9, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCellHashEqual(t, "AccountTransactions fork", got, ccCell(t, 16, nil).EndCell())
+
 	// DepthBalanceInfo: maximum split depth and summed balance.
 	dbiL := cell.BeginCell().MustStoreUInt(3, 5).MustStoreBuilder(ccCell(t, 10, nil))
 	dbiR := cell.BeginCell().MustStoreUInt(7, 5).MustStoreBuilder(ccCell(t, 15, nil))
-	got, err = AugShardAccounts{}.CombineExtra(slice(dbiL), slice(dbiR))
+	got, err = buildAugmentationCombinedExtra(AugShardAccounts{}, slice(dbiL), slice(dbiR))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +522,7 @@ func TestAugForkVectors(t *testing.T) {
 	// ImportFees: add fee grams and imported CurrencyCollection.
 	ifL := cell.BeginCell().MustStoreBigCoins(big.NewInt(3)).MustStoreBuilder(ccCell(t, 30, nil))
 	ifR := cell.BeginCell().MustStoreBigCoins(big.NewInt(4)).MustStoreBuilder(ccCell(t, 40, nil))
-	got, err = AugInMsgDescr{}.CombineExtra(slice(ifL), slice(ifR))
+	got, err = buildAugmentationCombinedExtra(AugInMsgDescr{}, slice(ifL), slice(ifR))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,7 +530,7 @@ func TestAugForkVectors(t *testing.T) {
 	mustCellHashEqual(t, "ImportFees fork", got, want)
 
 	// OutMsgQueue: minimum child logical time.
-	got, err = AugOutMsgQueue{}.CombineExtra(
+	got, err = buildAugmentationCombinedExtra(AugOutMsgQueue{},
 		slice(cell.BeginCell().MustStoreUInt(700, 64)),
 		slice(cell.BeginCell().MustStoreUInt(300, 64)))
 	if err != nil {
@@ -531,10 +538,18 @@ func TestAugForkVectors(t *testing.T) {
 	}
 	mustCellHashEqual(t, "OutMsgQueue fork", got, cell.BeginCell().MustStoreUInt(300, 64).EndCell())
 
+	got, err = buildAugmentationCombinedExtra(AugDispatchQueue{},
+		slice(cell.BeginCell().MustStoreUInt(900, 64)),
+		slice(cell.BeginCell().MustStoreUInt(400, 64)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCellHashEqual(t, "DispatchQueue fork", got, cell.BeginCell().MustStoreUInt(400, 64).EndCell())
+
 	// ShardFeeCreated: component-wise CurrencyCollection addition.
 	sfL := cell.BeginCell().MustStoreBuilder(ccCell(t, 1, nil)).MustStoreBuilder(ccCell(t, 2, nil))
 	sfR := cell.BeginCell().MustStoreBuilder(ccCell(t, 10, nil)).MustStoreBuilder(ccCell(t, 20, nil))
-	got, err = AugShardFees{}.CombineExtra(slice(sfL), slice(sfR))
+	got, err = buildAugmentationCombinedExtra(AugShardFees{}, slice(sfL), slice(sfR))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -543,7 +558,7 @@ func TestAugForkVectors(t *testing.T) {
 
 	// empty extras (eval_empty = extra_type null_value)
 	checkEmpty := func(name string, aug cell.Augmentation, wantBits uint) {
-		c, err := aug.EmptyExtra()
+		c, err := buildAugmentationEmptyExtra(aug)
 		if err != nil {
 			t.Fatalf("%s empty: %v", name, err)
 		}
@@ -562,5 +577,16 @@ func TestAugForkVectors(t *testing.T) {
 	checkEmpty("InMsgDescr", AugInMsgDescr{}, 9) // ImportFees null (4+4+1)
 	checkEmpty("OutMsgDescr", AugOutMsgDescr{}, 5)
 	checkEmpty("OutMsgQueue", AugOutMsgQueue{}, 64)
+	checkEmpty("DispatchQueue", AugDispatchQueue{}, 64)
 	checkEmpty("ShardFees", AugShardFees{}, 10) // 2 x CC null
+}
+
+func TestAugDispatchQueueLeafBoundedView(t *testing.T) {
+	got, err := buildAugmentationLeafExtra(AugDispatchQueue{},
+		cell.BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustCellHashEqual(t, "DispatchQueue absent messages leaf", got,
+		cell.BeginCell().MustStoreUInt(^uint64(0), 64).EndCell())
 }

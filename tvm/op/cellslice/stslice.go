@@ -26,7 +26,7 @@ func STSLICE() *helpers.SimpleOP {
 				return err
 			}
 
-			if err := b0.StoreBuilderUncheckedDepth(s1.ToBuilder()); err != nil {
+			if err := b0.StoreSliceFromUncheckedDepth(s1); err != nil {
 				return err
 			}
 			return state.Stack.PushOwnedBuilder(b0)

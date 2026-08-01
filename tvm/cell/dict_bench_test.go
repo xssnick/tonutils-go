@@ -116,6 +116,20 @@ func BenchmarkAugmentedDictionarySetReplace(b *testing.B) {
 	}
 }
 
+func BenchmarkAugmentedDictionaryDelete(b *testing.B) {
+	dict, key, _, _ := mustBuildBenchAugDict(b)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		copy := dict.Copy()
+		if err := copy.Delete(key); err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDictCellSink = copy.root
+	}
+}
+
 func BenchmarkPrefixDictionaryLookupPrefix(b *testing.B) {
 	dict, key := mustBuildBenchPrefixDict(b)
 

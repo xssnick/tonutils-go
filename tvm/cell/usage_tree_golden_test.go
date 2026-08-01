@@ -203,7 +203,8 @@ func TestCellUsageTreeCppGoldenLoadMarkAndIgnoreSemantics(t *testing.T) {
 	if _, ok := tree.loadedCell(right); ok {
 		t.Fatal("ignore_loads should not cache loaded cell by node")
 	}
-	if _, ok := tree.loadedCellByHash(rightCell.HashKey()); ok {
+	index := newUsageTreeCellIndex(tree)
+	if _, ok := index.loadedCellByHash(rightCell.HashKey()); ok {
 		t.Fatal("ignore_loads should not cache loaded cell by hash")
 	}
 

@@ -11,6 +11,7 @@ import (
 var (
 	benchmarkStackIndexSink int
 	benchmarkStackLenSink   int
+	benchmarkPushContBits   int64
 )
 
 func benchmarkSliceValue(v uint64) *cell.Slice {
@@ -78,4 +79,30 @@ func BenchmarkSWAP2Slices(b *testing.B) {
 		}
 	}
 	benchmarkStackLenSink = st.Len()
+}
+
+func BenchmarkPUSHCONTDeserializeInline(b *testing.B) {
+	for _, tt := range []struct {
+		name string
+		bits uint
+	}{
+		{name: "small", bits: 8},
+		{name: "big", bits: 128},
+	} {
+		b.Run(tt.name, func(b *testing.B) {
+			body := cell.BeginCell().MustStoreSlice(make([]byte, (tt.bits+7)/8), tt.bits).EndCell()
+			encoded := PUSHCONT(body).Serialize().EndCell().MustBeginParse()
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				code := *encoded
+				op := PUSHCONT(nil)
+				if err := op.Deserialize(&code); err != nil {
+					b.Fatal(err)
+				}
+				benchmarkPushContBits = op.InstructionBits()
+			}
+		})
+	}
 }

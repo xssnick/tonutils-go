@@ -111,6 +111,46 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 	}
 }
 
+func TestTransactionTickTockGasHonorsConfiguredZeroLimits(t *testing.T) {
+	tests := []struct {
+		name      string
+		prices    tlb.ConfigGasLimitsPrices
+		isSpecial bool
+	}{
+		{
+			name: "ordinary_gas_limit",
+			prices: tlb.ConfigGasLimitsPrices{
+				GasPrice:      1 << 16,
+				GasLimit:      0,
+				BlockGasLimit: 1_000_000,
+			},
+		},
+		{
+			name: "special_gas_limit",
+			prices: tlb.ConfigGasLimitsPrices{
+				HasSeparateSpecialLimit: true,
+				GasPrice:                1 << 16,
+				GasLimit:                1_000,
+				SpecialGasLimit:         0,
+				BlockGasLimit:           1_000_000,
+			},
+			isSpecial: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGasPricesBasechain: transactionFeesGasPricesCell(t, tt.prices),
+			})
+			got := transactionTickTockGas(vm.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(1_000_000), tt.isSpecial)
+			if got != (vm.Gas{}) {
+				t.Fatalf("configured zero tick/tock gas = %+v, want zero limits", got)
+			}
+		})
+	}
+}
+
 func TestTransactionGlobalVersionFallbackContracts(t *testing.T) {
 	if _, err := prepareBlockchainConfigLenient(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("prepare config without root error = %v, want %v", err, errConfigRootRequired)
@@ -160,6 +200,50 @@ func TestTransactionSizeLimitsV1Config(t *testing.T) {
 	}
 	if limits.maxAccStateCells != 1<<16 || limits.maxMCAccStateCells != 1<<11 || limits.maxMsgExtraCurrencies != 2 {
 		t.Fatalf("v1 defaults were not preserved: %+v", limits)
+	}
+	if limits.maxTotalMsgBits != (1<<21)*5/2 || limits.maxTotalMsgCells != (1<<13)*5/2 {
+		t.Fatalf("v1 total message defaults were not preserved: %+v", limits)
+	}
+}
+
+func TestTransactionSizeLimitsV3Config(t *testing.T) {
+	maxLibraryLoads := uint32(17)
+	limitsCell, err := tlb.ToCell(&tlb.SizeLimitsConfigV3{
+		MaxMsgBits:                  100,
+		MaxMsgCells:                 101,
+		MaxLibraryCells:             102,
+		MaxVMDataDepth:              103,
+		MaxExtMsgSize:               104,
+		MaxExtMsgDepth:              105,
+		MaxAccStateCells:            106,
+		MaxMCAccStateCells:          107,
+		MaxAccPublicLibraries:       108,
+		DeferOutQueueSizeLimit:      109,
+		MaxMsgExtraCurrencies:       110,
+		MaxAccFixedPrefixLength:     11,
+		AccStateCellsForStorageDict: 112,
+		MaxTransactionLibraryLoads:  &maxLibraryLoads,
+		MaxTotalMsgBits:             113,
+		MaxTotalMsgCells:            114,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamSizeLimits: limitsCell,
+	})
+	limits := transactionGetSizeLimits(cfg)
+	if limits.maxMsgBits != 100 || limits.maxMsgCells != 101 || limits.maxLibraryCells != 102 || limits.maxExtMsgDepth != 105 {
+		t.Fatalf("v3 base size limits = %+v", limits)
+	}
+	if limits.maxAccStateCells != 106 || limits.maxMCAccStateCells != 107 || limits.maxAccPublicLibraries != 108 || limits.maxMsgExtraCurrencies != 110 {
+		t.Fatalf("v3 account size limits = %+v", limits)
+	}
+	if limits.maxTotalMsgBits != 113 || limits.maxTotalMsgCells != 114 {
+		t.Fatalf("v3 total message limits = %d/%d, want 113/114", limits.maxTotalMsgBits, limits.maxTotalMsgCells)
+	}
+	if limits.maxTransactionLibraryLoads == nil || *limits.maxTransactionLibraryLoads != maxLibraryLoads {
+		t.Fatalf("v3 max transaction library loads = %v, want %d", limits.maxTransactionLibraryLoads, maxLibraryLoads)
 	}
 }
 

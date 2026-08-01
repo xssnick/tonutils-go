@@ -8,14 +8,27 @@ type AugDictItem struct {
 	Extra *Slice
 }
 
+// AugDictItemView is a borrowed decomposed iterator item. Its slices are valid
+// only until the iterator's next Next or Reset call and must not be retained,
+// nor read through RawCell: that hands out the iterator's scratch key cell.
+// Key.ToCell and Key.BaseCell materialize an owned key that survives advance.
+type AugDictItemView struct {
+	Key   Slice
+	Value Slice
+	Extra Slice
+}
+
 type AugDictIterator struct {
 	raw     *DictIterator
 	dict    *AugmentedDictionary
 	current AugDictItem
+	view    AugDictItemView
+	hasView bool
 	err     error
 }
 
 type AugDictForeachFunc func(value, extra *Slice, key *Cell) (bool, error)
+type AugDictBorrowedForeachFunc func(item AugDictItemView) error
 type AugDictFilterFunc func(value, extra *Slice, key *Cell) (DictFilterAction, error)
 type AugDictTraverseFunc func(keyPrefix *Cell, extra *Slice, value *Slice) (int, error)
 
@@ -30,33 +43,84 @@ func (it *AugDictIterator) Next() bool {
 		}
 		return false
 	}
-	raw := it.raw.Item()
-	value, extra, err := it.dict.decomposeValueExtra(raw.Value)
-	if err != nil {
+	it.current = AugDictItem{}
+	it.hasView = false
+	raw := it.raw.View()
+	it.view = AugDictItemView{Key: raw.Key, Value: raw.Value, Extra: raw.Value}
+	if err := it.dict.skipExtra(&it.view.Value); err != nil {
 		it.err = err
 		return false
 	}
-	it.current = AugDictItem{Key: raw.Key, Value: value, Extra: extra}
+	it.view.Extra.bitEnd = it.view.Value.bitStart
+	it.view.Extra.refEnd = it.view.Value.refStart
+	it.hasView = true
 	return true
 }
 
 func (it *AugDictIterator) Item() AugDictItem {
-	if it == nil {
+	if it == nil || !it.hasView {
 		return AugDictItem{}
 	}
+	it.materializeKey()
+	it.materializeValue()
+	it.materializeExtra()
 	return it.current
 }
 
+// View returns the current decomposed item without materializing owned key,
+// value, or extra objects. The result is invalidated by the next Next or Reset
+// call and must not be retained, nor read through RawCell: that hands out the
+// iterator's scratch key cell. Key.ToCell and Key.BaseCell materialize an owned
+// key that survives advance.
+func (it *AugDictIterator) View() AugDictItemView {
+	if it == nil || !it.hasView {
+		return AugDictItemView{}
+	}
+	return it.view
+}
+
 func (it *AugDictIterator) Key() *Cell {
-	return it.Item().Key
+	if it == nil || !it.hasView {
+		return nil
+	}
+	it.materializeKey()
+	return it.current.Key
 }
 
 func (it *AugDictIterator) Value() *Slice {
-	return it.Item().Value
+	if it == nil || !it.hasView {
+		return nil
+	}
+	it.materializeValue()
+	return it.current.Value
 }
 
 func (it *AugDictIterator) Extra() *Slice {
-	return it.Item().Extra
+	if it == nil || !it.hasView {
+		return nil
+	}
+	it.materializeExtra()
+	return it.current.Extra
+}
+
+func (it *AugDictIterator) materializeKey() {
+	if it.current.Key == nil {
+		it.current.Key = it.raw.Key()
+	}
+}
+
+func (it *AugDictIterator) materializeValue() {
+	if it.current.Value == nil {
+		value := it.view.Value
+		it.current.Value = &value
+	}
+}
+
+func (it *AugDictIterator) materializeExtra() {
+	if it.current.Extra == nil {
+		extra := it.view.Extra
+		it.current.Extra = &extra
+	}
 }
 
 func (it *AugDictIterator) Reset() {
@@ -64,6 +128,8 @@ func (it *AugDictIterator) Reset() {
 		return
 	}
 	it.current = AugDictItem{}
+	it.view = AugDictItemView{}
+	it.hasView = false
 	it.err = nil
 	if it.raw != nil {
 		it.raw.Reset()
@@ -179,6 +245,26 @@ func (d *AugmentedDictionary) IteratorExtra(rev bool, sgnd bool) (*AugDictIterat
 		return nil, err
 	}
 	return newAugDictIterator(raw, d), nil
+}
+
+// ForEachBorrowed visits every decomposed item in iterator order without
+// materializing owned key, value, or extra objects per leaf. Each item is valid
+// only for the duration of its callback; it must not be retained, nor read
+// through RawCell: that hands out the iterator's scratch key cell.
+func (d *AugmentedDictionary) ForEachBorrowed(rev bool, sgnd bool, fn AugDictBorrowedForeachFunc) error {
+	if fn == nil {
+		return nil
+	}
+	it, err := d.IteratorExtra(rev, sgnd)
+	if err != nil {
+		return err
+	}
+	for it.Next() {
+		if err = fn(it.View()); err != nil {
+			return err
+		}
+	}
+	return it.Err()
 }
 
 // IteratorAt creates a lazy raw iterator positioned at the nearest key to
@@ -491,6 +577,7 @@ type augmentedDictFilterState struct {
 	dict       *AugmentedDictionary
 	fn         AugDictFilterFunc
 	prefix     Builder
+	mutation   augmentedMutationState
 	changes    int
 	keepRest   bool
 	removeRest bool
@@ -604,12 +691,8 @@ func filterAugmentedDictNode(root *Cell, remaining uint, state *augmentedDictFil
 	}
 
 	parentLabel := node.labelSlice()
-	rebuilt, extraCell, err := state.dict.storeForkWithExtraSlices(&parentLabel, newLeft.root, &newLeft.extra, newRight.root, &newRight.extra, remaining)
+	rebuilt, extra, err := state.dict.storeForkWithExtraSlices(&parentLabel, newLeft.root, &newLeft.extra, newRight.root, &newRight.extra, remaining, &state.mutation)
 	if err != nil {
-		return augmentedDictFilterResult{}, err
-	}
-	var extra Slice
-	if err = extraCell.BeginParseInto(&extra); err != nil {
 		return augmentedDictFilterResult{}, err
 	}
 	return augmentedDictFilterResult{root: rebuilt, extra: extra, changed: true}, nil

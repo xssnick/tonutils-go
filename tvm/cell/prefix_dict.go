@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 )
@@ -23,6 +24,16 @@ func (c *Cell) AsPrefixDict(keySz uint) *PrefixDictionary {
 	return &PrefixDictionary{
 		keySz: keySz,
 		root:  c,
+	}
+}
+
+// AsPrefixDictWithTrace creates a traced prefix-dictionary view without
+// copying the root cell.
+func (c *Cell) AsPrefixDictWithTrace(keySz uint, trace *Trace) *PrefixDictionary {
+	return &PrefixDictionary{
+		keySz: keySz,
+		root:  c,
+		trace: trace,
 	}
 }
 
@@ -104,6 +115,10 @@ func (d *PrefixDictionary) SetTrace(trace *Trace) *PrefixDictionary {
 	return d
 }
 
+func (d *PrefixDictionary) tracedRoot() *Cell {
+	return d.root.withTraceCombined(d.trace)
+}
+
 func (d *PrefixDictionary) setRoot(root *Cell) {
 	d.root = root
 }
@@ -113,41 +128,97 @@ func (d *PrefixDictionary) IsEmpty() bool {
 }
 
 func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
+	value := new(Slice)
+	matched, err := d.lookupPrefixInto(key, value)
+	if errors.Is(err, ErrNoSuchKeyInDict) {
+		return nil, matched, nil
+	}
+	if err != nil {
+		return nil, matched, err
+	}
+	return value, matched, nil
+}
+
+// LookupPrefixInto finds the longest stored prefix of key and writes its value
+// into caller-owned storage. It returns ErrNoSuchKeyInDict when no stored
+// prefix matches. matched reports how many key bits matched even on that miss.
+func (d *PrefixDictionary) LookupPrefixInto(key *Cell, value *Slice) (matched uint, err error) {
+	return d.lookupPrefixInto(key, value)
+}
+
+func (d *PrefixDictionary) lookupPrefixInto(key *Cell, value *Slice) (matched uint, err error) {
 	if d == nil {
-		return nil, 0, nil
+		return 0, ErrNoSuchKeyInDict
 	}
 	if key == nil {
-		return nil, 0, fmt.Errorf("key is nil")
+		return 0, fmt.Errorf("key is nil")
 	}
 	if d.root == nil {
-		return nil, 0, nil
+		return 0, ErrNoSuchKeyInDict
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return 0, fmt.Errorf("failed to load key: %w", err)
+	}
+	return d.lookupPrefixSliceInto(&keySlice, value)
+}
+
+// LookupPrefixBySliceInto finds the longest stored prefix using at most the
+// first key-size remaining bits of key without materializing a key cell.
+func (d *PrefixDictionary) LookupPrefixBySliceInto(key *Slice, value *Slice) (matched uint, err error) {
+	if d == nil {
+		return 0, ErrNoSuchKeyInDict
+	}
+	if key == nil {
+		return 0, fmt.Errorf("key is nil")
+	}
+	keySlice := prefixDictKeySlice(key, d.keySz)
+	return d.lookupPrefixSliceInto(&keySlice, value)
+}
+
+// prefixDictKeySlice views at most the first bits remaining bits of key as a
+// prefix-dict key: references and the trace are dropped so the descent cannot
+// consume them, and anything past bits is clamped away. Prefix keys may be
+// shorter than the key size; callers that must reject a longer one check
+// BitsLeft themselves before calling, so the clamp never fires for them.
+func prefixDictKeySlice(key *Slice, bits uint) Slice {
+	keySlice := *key
+	if keySlice.BitsLeft() > bits {
+		keySlice.bitEnd = keySlice.bitStart + uint16(bits)
+	}
+	keySlice.refEnd = keySlice.refStart
+	keySlice.trace = nil
+	return keySlice
+}
+
+func (d *PrefixDictionary) lookupPrefixSliceInto(keySlice *Slice, value *Slice) (matched uint, err error) {
+	if d.root == nil {
+		return 0, ErrNoSuchKeyInDict
 	}
 
 	branch := d.root
+	branchTrace := CombineTraces(branch.Trace(), d.trace)
 	remaining := d.keySz
-	matched := uint(0)
 
-	// the descent reuses value slices, only the found value escapes
-	var keySlice, branchSlice Slice
-	if err := key.BeginParseInto(&keySlice); err != nil {
-		return nil, 0, fmt.Errorf("failed to load key: %w", err)
-	}
+	// The descent and result both use caller-owned Slice values.
+	var branchSlice Slice
 
 	for {
-		if err := branch.BeginParseInto(&branchSlice); err != nil {
-			return nil, matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
+		if err := branch.BeginParseIntoWithTrace(&branchSlice, branchTrace); err != nil {
+			return matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
 		}
 		if branchSlice.cell.IsSpecial() {
-			return nil, matched, fmt.Errorf("prefix dict %w", ErrDictHasSpecialCells)
+			return matched, fmt.Errorf("prefix dict %w", ErrDictHasSpecialCells)
 		}
 
-		labelLen, commonPrefix, err := matchLabelPrefix(remaining, &branchSlice, &keySlice)
+		labelLen, commonPrefix, err := matchLabelPrefix(remaining, &branchSlice, keySlice)
 		if err != nil {
-			return nil, matched, err
+			return matched, err
 		}
 
 		if commonPrefix < labelLen {
-			return nil, matched + commonPrefix, nil
+			return matched + commonPrefix, ErrNoSuchKeyInDict
 		}
 
 		matched += labelLen
@@ -155,62 +226,93 @@ func (d *PrefixDictionary) LookupPrefix(key *Cell) (*Slice, uint, error) {
 
 		isFork, err := branchSlice.LoadBoolBit()
 		if err != nil {
-			return nil, matched, fmt.Errorf("no node constructor in a prefix code dictionary")
+			return matched, fmt.Errorf("no node constructor in a prefix code dictionary")
 		}
 
 		if !isFork {
-			value := branchSlice
-			return &value, matched, nil
+			*value = branchSlice
+			return matched, nil
 		}
 
 		if remaining == 0 {
-			return nil, matched, fmt.Errorf("a fork node in a prefix code dictionary with zero remaining key length")
+			return matched, fmt.Errorf("a fork node in a prefix code dictionary with zero remaining key length")
 		}
 		if branchSlice.BitsLeft() != 0 || branchSlice.RefsNum() != 2 {
-			return nil, matched, fmt.Errorf("invalid fork node in a prefix code dictionary")
+			return matched, fmt.Errorf("invalid fork node in a prefix code dictionary")
 		}
 		if keySlice.BitsLeft() == 0 {
-			return nil, matched, nil
+			return matched, ErrNoSuchKeyInDict
 		}
 
 		idx, err := keySlice.LoadUInt(1)
 		if err != nil {
-			return nil, matched, err
+			return matched, err
 		}
 
 		matched++
 		remaining--
 
-		next, err := branchSlice.peekRefCellAt(int(idx))
+		next, nextTrace, err := branchSlice.refAndTraceAt(int(idx))
 		if err != nil {
-			return nil, matched, err
+			return matched, err
 		}
 		branch = next
+		branchTrace = nextTrace
 	}
 }
 
 func (d *PrefixDictionary) LoadValue(key *Cell) (*Slice, error) {
-	if key == nil {
-		return nil, fmt.Errorf("key is nil")
-	}
-
-	value, matched, err := d.LookupPrefix(key)
-	if err != nil {
+	value := new(Slice)
+	if err := d.LoadValueInto(key, value); err != nil {
 		return nil, err
 	}
-	if matched != key.BitsSize() || value == nil {
-		return nil, ErrNoSuchKeyInDict
-	}
 	return value, nil
+}
+
+// LoadValueInto is LoadValue with caller-owned result storage.
+func (d *PrefixDictionary) LoadValueInto(key *Cell, value *Slice) error {
+	if key == nil {
+		return fmt.Errorf("key is nil")
+	}
+
+	var found Slice
+	matched, err := d.lookupPrefixInto(key, &found)
+	if err != nil {
+		return err
+	}
+	if matched != key.BitsSize() {
+		return ErrNoSuchKeyInDict
+	}
+	*value = found
+	return nil
 }
 
 // LoadValueByIntKey loads a full-width prefix-dictionary key without
 // finalizing and hashing an intermediate key cell.
 func (d *PrefixDictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
+	value := new(Slice)
+	if err := d.LoadValueByIntKeyInto(key, value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// LoadValueByIntKeyInto is LoadValueByIntKey with caller-owned result storage.
+func (d *PrefixDictionary) LoadValueByIntKeyInto(key *big.Int, value *Slice) error {
 	var builder Builder
-	var cell Cell
-	initIntKeyCell(key, d.keySz, &builder, &cell)
-	return d.LoadValue(&cell)
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	var foundValue Slice
+	found, err := d.lookupPrefixSliceInto(&keySlice, &foundValue)
+	if err != nil {
+		return err
+	}
+	if found != d.keySz {
+		return ErrNoSuchKeyInDict
+	}
+	*value = foundValue
+	return nil
 }
 
 func (d *PrefixDictionary) Get(key *Cell) *Cell {
@@ -236,10 +338,15 @@ func (d *PrefixDictionary) Set(key, value *Cell) error {
 
 // SetIntKey stores a full-width prefix-dictionary key.
 func (d *PrefixDictionary) SetIntKey(key *big.Int, value *Cell) error {
+	if value == nil {
+		return d.DeleteIntKey(key)
+	}
 	var builder Builder
-	var cell Cell
-	initIntKeyCell(key, d.keySz, &builder, &cell)
-	return d.Set(&cell, value)
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	_, err := d.setBuilderWithModeSlice(&keySlice, value.ToBuilder(), DictSetModeSet)
+	return err
 }
 
 func (d *PrefixDictionary) SetBuilder(key *Cell, value *Builder) error {
@@ -265,12 +372,33 @@ func (d *PrefixDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode Di
 		return false, fmt.Errorf("value is nil")
 	}
 
-	keySlice, err := key.BeginParse()
-	if err != nil {
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
 		return false, fmt.Errorf("failed to load key: %w", err)
 	}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
 
-	newRoot, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
+// SetBuilderBySliceKeyWithMode stores a prefix key directly from the remaining
+// bits of key without materializing a key cell.
+func (d *PrefixDictionary) SetBuilderBySliceKeyWithMode(key *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("prefix dict is nil")
+	}
+	if key == nil || key.BitsLeft() > d.keySz {
+		return false, fmt.Errorf("invalid key size")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value is nil")
+	}
+
+	keySlice := prefixDictKeySlice(key, d.keySz)
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
+
+func (d *PrefixDictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
+
+	newRoot, changed, err := d.set(d.tracedRoot(), keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, err
 	}
@@ -288,12 +416,29 @@ func (d *PrefixDictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 		return nil, fmt.Errorf("incorrect key size")
 	}
 
-	keySlice, err := key.BeginParse()
-	if err != nil {
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
 		return nil, fmt.Errorf("failed to load key: %w", err)
 	}
+	return d.loadValueAndDeleteBySliceKey(&keySlice)
+}
 
-	value, newRoot, changed, err := d.lookupDelete(d.root, keySlice, d.keySz)
+// LoadValueAndDeleteBySliceKey removes a prefix key directly from the
+// remaining key bits without materializing a key cell.
+func (d *PrefixDictionary) LoadValueAndDeleteBySliceKey(key *Slice) (*Slice, error) {
+	if d == nil {
+		return nil, ErrNoSuchKeyInDict
+	}
+	if key == nil || key.BitsLeft() > d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+	keySlice := prefixDictKeySlice(key, d.keySz)
+	return d.loadValueAndDeleteBySliceKey(&keySlice)
+}
+
+func (d *PrefixDictionary) loadValueAndDeleteBySliceKey(keySlice *Slice) (*Slice, error) {
+
+	value, newRoot, changed, err := d.lookupDelete(d.tracedRoot(), keySlice, d.keySz)
 	if err != nil {
 		return nil, err
 	}
@@ -313,9 +458,11 @@ func (d *PrefixDictionary) Delete(key *Cell) error {
 // DeleteIntKey removes a full-width prefix-dictionary key.
 func (d *PrefixDictionary) DeleteIntKey(key *big.Int) error {
 	var builder Builder
-	var cell Cell
-	initIntKeyCell(key, d.keySz, &builder, &cell)
-	return d.Delete(&cell)
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	_, err := d.loadValueAndDeleteBySliceKey(&keySlice)
+	return err
 }
 
 func (d *PrefixDictionary) MustToCell() *Cell {
@@ -326,14 +473,14 @@ func (d *PrefixDictionary) AsCell() *Cell {
 	if d == nil {
 		return nil
 	}
-	return d.root
+	return d.tracedRoot()
 }
 
 func (d *PrefixDictionary) ToCell() (*Cell, error) {
 	if d == nil {
 		return nil, nil
 	}
-	return d.root, nil
+	return d.tracedRoot(), nil
 }
 
 func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *Builder, mode DictSetMode) (*Cell, bool, error) {
@@ -377,7 +524,9 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 			return nil, false, fmt.Errorf("failed to build new leaf: %w", err)
 		}
 
-		oldChild, err := d.storePrefixNode(labelRemainder, node.loader.ToBuilder(), remaining-(bitsMatches+1))
+		var oldPayload Builder
+		node.loader.ToBuilderInto(&oldPayload)
+		oldChild, err := d.storePrefixNode(labelRemainder, &oldPayload, remaining-(bitsMatches+1))
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to rebuild old child: %w", err)
 		}
@@ -547,7 +696,9 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, err
 	}
 
-	merged, err := d.storePrefixNode(mergedLabel, survivorSlice.ToBuilder(), remaining)
+	var survivorPayload Builder
+	survivorSlice.ToBuilderInto(&survivorPayload)
+	merged, err := d.storePrefixNode(mergedLabel, &survivorPayload, remaining)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to merge prefix edges: %w", err)
 	}

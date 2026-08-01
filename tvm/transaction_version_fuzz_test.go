@@ -4530,6 +4530,7 @@ func FuzzTransactionVersionedStorageExtraDictHash(f *testing.F) {
 			data.EndCell(),
 			nil,
 			nil,
+			version >= 10,
 			cfg,
 			nil,
 		)
@@ -5981,6 +5982,7 @@ func checkAccountSerializationVersion(t *testing.T, addr *address.Address, rawDa
 		cell.BeginCell().EndCell(),
 		nil,
 		nil,
+		version >= 10,
 		transactionTestConfigWithGlobalVersion(t, version),
 		nil,
 	)

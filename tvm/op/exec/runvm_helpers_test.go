@@ -421,7 +421,7 @@ func TestContinuationHelpers(t *testing.T) {
 	state.InitForExecution()
 
 	codeCell := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
-	cont, err := loadContinuationFromCodeCell(state, codeCell)
+	cont, err := loadContinuationFromCodeCell(state, codeCell, codeCell.Trace())
 	if err != nil {
 		t.Fatalf("load continuation: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	refB := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 	suffixValue := uint64(0)
 
-	op := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(state *vm.State, refs []*cell.Cell) error {
+	op := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(state *vm.State, refs []*cell.Cell, _ []*cell.Trace) error {
 		if len(refs) != 2 {
 			t.Fatalf("unexpected refs len: %d", len(refs))
 		}
@@ -534,7 +534,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	}
 
 	serialized := op.Serialize().EndCell()
-	decoded := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell) error { return nil })
+	decoded := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	decoded.fixedBits = 3
 	decoded.deserializeSuffix = op.deserializeSuffix
 	if err := decoded.Deserialize(serialized.MustBeginParse()); err != nil {
@@ -545,6 +545,21 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 	}
 	if decoded.refs[0] == nil || decoded.refs[1] == nil {
 		t.Fatalf("expected both refs to be decoded")
+	}
+
+	childTrace := cell.NewTrace(cell.TraceHooks{OnLoad: func(*cell.Cell) {}})
+	parentTrace := cell.NewTrace(cell.TraceHooks{OnChild: func(int) *cell.Trace { return childTrace }})
+	tracedDecoded := newRefCodeOp("REFOP", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
+	tracedDecoded.fixedBits = 3
+	tracedDecoded.deserializeSuffix = op.deserializeSuffix
+	if err := tracedDecoded.Deserialize(serialized.MustBeginParse().SetTrace(parentTrace)); err != nil {
+		t.Fatalf("traced deserialize failed: %v", err)
+	}
+	if tracedDecoded.refs[0] != refA || tracedDecoded.refs[1] != refB {
+		t.Fatal("traced ref decode cloned immutable cells")
+	}
+	if tracedDecoded.refTraces[0] != childTrace || tracedDecoded.refTraces[1] != childTrace {
+		t.Fatal("traced ref decode lost child trace")
 	}
 
 	state := newTestState()
@@ -559,7 +574,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		t.Fatalf("unexpected sum: %s", sum.String())
 	}
 
-	missing := newRefCodeOp("MISSING", vmPrefixForTest(), 1, func(*vm.State, []*cell.Cell) error { return nil })
+	missing := newRefCodeOp("MISSING", vmPrefixForTest(), 1, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	err = missing.Interpret(newTestState())
 	if err == nil {
 		t.Fatal("expected missing refs error")
@@ -574,22 +589,22 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 				t.Fatal("expected ref count panic")
 			}
 		}()
-		_ = newRefCodeOp("BADREFS", vmPrefixForTest(), 5, func(*vm.State, []*cell.Cell) error { return nil })
+		_ = newRefCodeOp("BADREFS", vmPrefixForTest(), 5, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	}()
 
-	oneRef := newRefCodeOp("ONEREF", vmPrefixForTest(), 1, func(*vm.State, []*cell.Cell) error { return nil })
+	oneRef := newRefCodeOp("ONEREF", vmPrefixForTest(), 1, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	bindRefCodeOp(oneRef, refA, refB)
 	if oneRef.refs[0] != refA || oneRef.refs[1] != nil {
 		t.Fatal("bindRefCodeOp should ignore references past refsNum")
 	}
 
-	shortPrefix := newRefCodeOp("SHORT", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell) error { return nil })
+	shortPrefix := newRefCodeOp("SHORT", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	if err = shortPrefix.DeserializeMatched(cell.BeginCell().EndCell().MustBeginParse()); err == nil {
 		t.Fatal("expected short prefix deserialize error")
 	}
 
 	suffixErr := errors.New("suffix")
-	badSuffix := newRefCodeOp("BADSUFFIX", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell) error { return nil })
+	badSuffix := newRefCodeOp("BADSUFFIX", vmPrefixForTest(), 0, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	badSuffix.deserializeSuffix = func(*cell.Slice) error {
 		return suffixErr
 	}
@@ -598,7 +613,7 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 		t.Fatalf("expected suffix error, got %v", err)
 	}
 
-	partialRefs := newRefCodeOp("PARTIALREFS", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell) error { return nil })
+	partialRefs := newRefCodeOp("PARTIALREFS", vmPrefixForTest(), 2, func(*vm.State, []*cell.Cell, []*cell.Trace) error { return nil })
 	partialRefs.refs[1] = refB
 	partialCell := cell.BeginCell().
 		MustStoreSlice(vmPrefixForTest().Data, vmPrefixForTest().Bits).

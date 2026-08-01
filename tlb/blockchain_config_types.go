@@ -81,6 +81,7 @@ func init() {
 	Register(NewConsensusConfigSimplexV2{})
 	Register(SizeLimitsConfigV1{})
 	Register(SizeLimitsConfigV2{})
+	Register(SizeLimitsConfigV3{})
 	Register(WorkchainDescrV1{})
 	Register(WorkchainDescrV2{})
 	Register(WorkchainFormatBasic{})
@@ -309,7 +310,7 @@ type MisbehaviourPunishmentConfig struct {
 }
 
 type SizeLimitsConfig struct {
-	Config any `tlb:"[SizeLimitsConfigV1,SizeLimitsConfigV2]"`
+	Config any `tlb:"[SizeLimitsConfigV1,SizeLimitsConfigV2,SizeLimitsConfigV3]"`
 }
 
 type SizeLimitsConfigV1 struct {
@@ -338,6 +339,26 @@ type SizeLimitsConfigV2 struct {
 	MaxAccFixedPrefixLength     uint8   `tlb:"## 8"`
 	AccStateCellsForStorageDict uint32  `tlb:"## 32"`
 	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
+}
+
+type SizeLimitsConfigV3 struct {
+	_                           Magic   `tlb:"#03"`
+	MaxMsgBits                  uint32  `tlb:"## 32"`
+	MaxMsgCells                 uint32  `tlb:"## 32"`
+	MaxLibraryCells             uint32  `tlb:"## 32"`
+	MaxVMDataDepth              uint16  `tlb:"## 16"`
+	MaxExtMsgSize               uint32  `tlb:"## 32"`
+	MaxExtMsgDepth              uint16  `tlb:"## 16"`
+	MaxAccStateCells            uint32  `tlb:"## 32"`
+	MaxMCAccStateCells          uint32  `tlb:"## 32"`
+	MaxAccPublicLibraries       uint32  `tlb:"## 32"`
+	DeferOutQueueSizeLimit      uint32  `tlb:"## 32"`
+	MaxMsgExtraCurrencies       uint32  `tlb:"## 32"`
+	MaxAccFixedPrefixLength     uint8   `tlb:"## 8"`
+	AccStateCellsForStorageDict uint32  `tlb:"## 32"`
+	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
+	MaxTotalMsgBits             uint32  `tlb:"## 32"`
+	MaxTotalMsgCells            uint32  `tlb:"## 32"`
 }
 
 type SuspendedAddressList struct {

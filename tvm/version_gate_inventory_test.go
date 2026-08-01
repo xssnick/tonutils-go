@@ -34,11 +34,11 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/math/rshiftrcode.go":               1,
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
-	"transaction_account.go":               15,
-	"transaction_actions.go":               37,
+	"transaction_account.go":               14,
+	"transaction_actions.go":               38,
 	"transaction_bounce.go":                3,
 	"transaction_config.go":                1,
-	"transaction_emulation.go":             3,
+	"transaction_emulation.go":             4,
 	"transaction_fees.go":                  4,
 	"vm/cell_manager.go":                   1,
 	"vm/child_vm.go":                       2,
@@ -51,11 +51,11 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 var expectedTransactionGlobalVersionGateCounts = map[string]int{
-	"transaction_account.go":   15,
-	"transaction_actions.go":   37,
+	"transaction_account.go":   14,
+	"transaction_actions.go":   38,
 	"transaction_bounce.go":    3,
 	"transaction_config.go":    1,
-	"transaction_emulation.go": 3,
+	"transaction_emulation.go": 4,
 	"transaction_fees.go":      4,
 }
 
@@ -63,7 +63,7 @@ var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 4
-	expectedRuntimeGlobalVersionDynamicGateHash  = "2fd2d17cc39b27fba532a2bddd184706c1810aab4300f234a6c22670a125c1a2"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "632b9449aa6f588c10bbd140a7b65f7c435698a224380f5d4efaa33f590eb59d"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )

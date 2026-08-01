@@ -270,6 +270,17 @@ func BenchmarkSliceToBuilder(b *testing.B) {
 	}
 }
 
+func BenchmarkSliceToBuilderInto(b *testing.B) {
+	slice := benchLargeCell().MustBeginParse()
+	var builder Builder
+
+	b.ReportAllocs()
+	for b.Loop() {
+		slice.ToBuilderInto(&builder)
+		benchmarkUint64Sink = uint64(builder.BitsUsed())
+	}
+}
+
 func BenchmarkSliceToCell(b *testing.B) {
 	slice := benchLargeCell().MustBeginParse()
 
@@ -322,6 +333,25 @@ func BenchmarkCellToBuilder(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				benchmarkBuilderSink = bm.cell.ToBuilder()
+			}
+		})
+	}
+}
+
+func BenchmarkCellToBuilderInto(b *testing.B) {
+	for _, bm := range []struct {
+		name string
+		cell *Cell
+	}{
+		{name: "Small", cell: benchSmallCell()},
+		{name: "Large", cell: benchLargeCell()},
+	} {
+		b.Run(bm.name, func(b *testing.B) {
+			var builder Builder
+			b.ReportAllocs()
+			for b.Loop() {
+				bm.cell.ToBuilderInto(&builder)
+				benchmarkUint64Sink = uint64(builder.BitsUsed())
 			}
 		})
 	}

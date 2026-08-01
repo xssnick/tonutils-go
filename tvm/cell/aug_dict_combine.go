@@ -18,10 +18,17 @@ type augmentedCombineNode struct {
 	label    Slice
 	labelLen uint
 	payload  Slice
-	extra    *Cell
+	extra    Slice
 	left     *Cell
 	right    *Cell
 	leaf     bool
+}
+
+type augmentedCombineState struct {
+	aug                   Augmentation
+	loader, cursor        Slice
+	leftExtra, rightExtra Slice
+	extra, payload, node  Builder
 }
 
 // CombineWith structurally merges other into d.
@@ -75,99 +82,109 @@ func (d *AugmentedDictionary) CombineWith(other *AugmentedDictionary) (bool, err
 }
 
 func combineAugmentedRoots(left, right *Cell, keySz uint, aug Augmentation) (*Cell, *Cell, error) {
-	return combineAugmentedRootViews(
+	state := augmentedCombineState{aug: aug}
+	root, extra, err := combineAugmentedRootViews(
 		augmentedRootView{cell: left, keySz: keySz},
 		augmentedRootView{cell: right, keySz: keySz},
-		aug,
+		&state,
 	)
+	if err != nil {
+		return nil, nil, err
+	}
+	extraCell, err := extra.ToCell()
+	if err != nil {
+		return nil, nil, err
+	}
+	return root, extraCell, nil
 }
 
-func combineAugmentedRootViews(left, right augmentedRootView, aug Augmentation) (*Cell, *Cell, error) {
+func combineAugmentedRootViews(left, right augmentedRootView, state *augmentedCombineState) (*Cell, Slice, error) {
 	if left.cell == nil {
 		if right.cell == nil {
-			extra, err := aug.EmptyExtra()
-			if err != nil {
-				return nil, nil, err
+			state.extra = Builder{}
+			if err := state.aug.EmptyExtra(&state.extra); err != nil {
+				return nil, Slice{}, err
 			}
-			return nil, extra, nil
+			extraCell := state.extra.EndCell()
+			return nil, Slice{cell: extraCell, bitEnd: extraCell.bitsSz, refEnd: uint8(extraCell.refsCount())}, nil
 		}
 
-		rightNode, err := parseAugmentedNodeForCombine(right, aug)
+		rightNode, err := parseAugmentedNodeForCombine(right, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
-		root, err := materializeAugmentedNodeForCombine(rightNode, rightNode.remainingKeyBits())
+		root, err := materializeAugmentedNodeForCombine(rightNode, rightNode.remainingKeyBits(), state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 		return root, rightNode.extra, nil
 	}
 	if right.cell == nil {
-		leftNode, err := parseAugmentedNodeForCombine(left, aug)
+		leftNode, err := parseAugmentedNodeForCombine(left, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
-		root, err := materializeAugmentedNodeForCombine(leftNode, leftNode.remainingKeyBits())
+		root, err := materializeAugmentedNodeForCombine(leftNode, leftNode.remainingKeyBits(), state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 		return root, leftNode.extra, nil
 	}
 
-	return combineAugmentedNonEmptyRootViews(left, right, aug)
+	return combineAugmentedNonEmptyRootViews(left, right, state)
 }
 
-func combineAugmentedNonEmptyRootViews(left, right augmentedRootView, aug Augmentation) (*Cell, *Cell, error) {
-	leftNode, err := parseAugmentedNodeForCombine(left, aug)
+func combineAugmentedNonEmptyRootViews(left, right augmentedRootView, state *augmentedCombineState) (*Cell, Slice, error) {
+	leftNode, err := parseAugmentedNodeForCombine(left, state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
-	rightNode, err := parseAugmentedNodeForCombine(right, aug)
+	rightNode, err := parseAugmentedNodeForCombine(right, state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
 	if leftNode.remainingKeyBits() != rightNode.remainingKeyBits() {
-		return nil, nil, fmt.Errorf("cannot combine augmented dictionary views with different remaining key sizes: %d != %d", leftNode.remainingKeyBits(), rightNode.remainingKeyBits())
+		return nil, Slice{}, fmt.Errorf("cannot combine augmented dictionary views with different remaining key sizes: %d != %d", leftNode.remainingKeyBits(), rightNode.remainingKeyBits())
 	}
 
-	common := commonAugmentedLabelPrefix(leftNode, rightNode)
+	common := commonAugmentedLabelPrefix(&leftNode, &rightNode)
 	switch {
 	case common < leftNode.visibleLabelLen() && common < rightNode.visibleLabelLen():
-		return combineAugmentedDivergedRoots(leftNode, rightNode, common, aug)
+		return combineAugmentedDivergedRoots(leftNode, rightNode, common, state)
 
 	case common == leftNode.visibleLabelLen() && common == rightNode.visibleLabelLen():
-		return combineAugmentedSameLabelRoots(leftNode, rightNode, aug)
+		return combineAugmentedSameLabelRoots(leftNode, rightNode, state)
 
 	case common == leftNode.visibleLabelLen():
-		return combineAugmentedIntoLeftFork(leftNode, rightNode, common, aug)
+		return combineAugmentedIntoLeftFork(leftNode, rightNode, common, state)
 
 	default:
-		return combineAugmentedIntoRightFork(leftNode, rightNode, common, aug)
+		return combineAugmentedIntoRightFork(leftNode, rightNode, common, state)
 	}
 }
 
-func combineAugmentedDivergedRoots(leftNode, rightNode *augmentedCombineNode, common uint, aug Augmentation) (*Cell, *Cell, error) {
+func combineAugmentedDivergedRoots(leftNode, rightNode augmentedCombineNode, common uint, state *augmentedCombineState) (*Cell, Slice, error) {
 	leftBit := leftNode.visibleLabelBit(common)
 	rightBit := rightNode.visibleLabelBit(common)
 	if leftBit == rightBit {
-		return nil, nil, fmt.Errorf("invalid augmented dictionary labels: divergent labels share branch bit")
+		return nil, Slice{}, fmt.Errorf("invalid augmented dictionary labels: divergent labels share branch bit")
 	}
 
 	remaining := leftNode.remainingKeyBits()
-	prefix := leftNode.visibleLabelSlice(0, common)
+	prefix := leftNode.visibleLabelValue(0, common)
 	childKeySz := remaining - common - 1
 
-	leftChild, err := materializeAugmentedNodeSuffixForCombine(leftNode, common+1, childKeySz)
+	leftChild, err := materializeAugmentedNodeSuffixForCombine(leftNode, common+1, childKeySz, state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
-	rightChild, err := materializeAugmentedNodeSuffixForCombine(rightNode, common+1, childKeySz)
+	rightChild, err := materializeAugmentedNodeSuffixForCombine(rightNode, common+1, childKeySz, state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
 
 	var forkLeft, forkRight *Cell
-	var forkLeftExtra, forkRightExtra *Cell
+	var forkLeftExtra, forkRightExtra Slice
 	if leftBit == 0 {
 		forkLeft, forkLeftExtra = leftChild, leftNode.extra
 		forkRight, forkRightExtra = rightChild, rightNode.extra
@@ -176,38 +193,39 @@ func combineAugmentedDivergedRoots(leftNode, rightNode *augmentedCombineNode, co
 		forkRight, forkRightExtra = leftChild, leftNode.extra
 	}
 
-	return storeAugmentedForkForCombine(aug, prefix, forkLeft, forkLeftExtra, forkRight, forkRightExtra, remaining)
+	return storeAugmentedForkForCombine(&prefix, forkLeft, &forkLeftExtra, forkRight, &forkRightExtra, remaining, state)
 }
 
-func combineAugmentedSameLabelRoots(leftNode, rightNode *augmentedCombineNode, aug Augmentation) (*Cell, *Cell, error) {
+func combineAugmentedSameLabelRoots(leftNode, rightNode augmentedCombineNode, state *augmentedCombineState) (*Cell, Slice, error) {
 	if leftNode.leaf || rightNode.leaf {
 		if leftNode.leaf && rightNode.leaf {
-			return nil, nil, errAugmentedDictionaryConflict
+			return nil, Slice{}, errAugmentedDictionaryConflict
 		}
-		return nil, nil, fmt.Errorf("invalid augmented dictionary node: leaf/fork mismatch on equal label")
+		return nil, Slice{}, fmt.Errorf("invalid augmented dictionary node: leaf/fork mismatch on equal label")
 	}
 
 	remaining := leftNode.remainingKeyBits()
 	if leftNode.visibleLabelLen() >= remaining {
-		return nil, nil, fmt.Errorf("invalid augmented dictionary fork label length %d for key size %d", leftNode.visibleLabelLen(), remaining)
+		return nil, Slice{}, fmt.Errorf("invalid augmented dictionary fork label length %d for key size %d", leftNode.visibleLabelLen(), remaining)
 	}
 
 	childKeySz := remaining - leftNode.visibleLabelLen() - 1
-	leftChild, leftExtra, err := combineAugmentedRootViews(leftNode.leftChildView(childKeySz), rightNode.leftChildView(childKeySz), aug)
+	leftChild, leftExtra, err := combineAugmentedRootViews(leftNode.leftChildView(childKeySz), rightNode.leftChildView(childKeySz), state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
-	rightChild, rightExtra, err := combineAugmentedRootViews(leftNode.rightChildView(childKeySz), rightNode.rightChildView(childKeySz), aug)
+	rightChild, rightExtra, err := combineAugmentedRootViews(leftNode.rightChildView(childKeySz), rightNode.rightChildView(childKeySz), state)
 	if err != nil {
-		return nil, nil, err
+		return nil, Slice{}, err
 	}
 
-	return storeAugmentedForkForCombine(aug, leftNode.visibleLabelSlice(0, leftNode.visibleLabelLen()), leftChild, leftExtra, rightChild, rightExtra, remaining)
+	label := leftNode.visibleLabelValue(0, leftNode.visibleLabelLen())
+	return storeAugmentedForkForCombine(&label, leftChild, &leftExtra, rightChild, &rightExtra, remaining, state)
 }
 
-func combineAugmentedIntoLeftFork(leftNode, rightNode *augmentedCombineNode, common uint, aug Augmentation) (*Cell, *Cell, error) {
+func combineAugmentedIntoLeftFork(leftNode, rightNode augmentedCombineNode, common uint, state *augmentedCombineState) (*Cell, Slice, error) {
 	if leftNode.leaf {
-		return nil, nil, fmt.Errorf("invalid augmented dictionary node: leaf cannot contain a longer key")
+		return nil, Slice{}, fmt.Errorf("invalid augmented dictionary node: leaf cannot contain a longer key")
 	}
 
 	remaining := leftNode.remainingKeyBits()
@@ -215,36 +233,38 @@ func combineAugmentedIntoLeftFork(leftNode, rightNode *augmentedCombineNode, com
 	childKeySz := remaining - common - 1
 	longerView := rightNode.consumeVisibleLabelBits(common + 1)
 
-	var leftChild, rightChild, leftExtra, rightExtra *Cell
+	var leftChild, rightChild *Cell
+	var leftExtra, rightExtra Slice
 	var err error
 	if branchBit == 0 {
-		leftChild, leftExtra, err = combineAugmentedRootViews(leftNode.leftChildView(childKeySz), longerView, aug)
+		leftChild, leftExtra, err = combineAugmentedRootViews(leftNode.leftChildView(childKeySz), longerView, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 		rightChild = leftNode.right
-		rightExtra, err = extractAugmentedNodeExtraStrict(rightChild, childKeySz, aug)
+		rightExtra, err = extractAugmentedNodeExtraStrictView(rightChild, childKeySz, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 	} else {
 		leftChild = leftNode.left
-		leftExtra, err = extractAugmentedNodeExtraStrict(leftChild, childKeySz, aug)
+		leftExtra, err = extractAugmentedNodeExtraStrictView(leftChild, childKeySz, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
-		rightChild, rightExtra, err = combineAugmentedRootViews(leftNode.rightChildView(childKeySz), longerView, aug)
+		rightChild, rightExtra, err = combineAugmentedRootViews(leftNode.rightChildView(childKeySz), longerView, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 	}
 
-	return storeAugmentedForkForCombine(aug, leftNode.visibleLabelSlice(0, leftNode.visibleLabelLen()), leftChild, leftExtra, rightChild, rightExtra, remaining)
+	label := leftNode.visibleLabelValue(0, leftNode.visibleLabelLen())
+	return storeAugmentedForkForCombine(&label, leftChild, &leftExtra, rightChild, &rightExtra, remaining, state)
 }
 
-func combineAugmentedIntoRightFork(leftNode, rightNode *augmentedCombineNode, common uint, aug Augmentation) (*Cell, *Cell, error) {
+func combineAugmentedIntoRightFork(leftNode, rightNode augmentedCombineNode, common uint, state *augmentedCombineState) (*Cell, Slice, error) {
 	if rightNode.leaf {
-		return nil, nil, fmt.Errorf("invalid augmented dictionary node: leaf cannot contain a longer key")
+		return nil, Slice{}, fmt.Errorf("invalid augmented dictionary node: leaf cannot contain a longer key")
 	}
 
 	remaining := rightNode.remainingKeyBits()
@@ -252,55 +272,56 @@ func combineAugmentedIntoRightFork(leftNode, rightNode *augmentedCombineNode, co
 	childKeySz := remaining - common - 1
 	longerView := leftNode.consumeVisibleLabelBits(common + 1)
 
-	var leftChild, rightChild, leftExtra, rightExtra *Cell
+	var leftChild, rightChild *Cell
+	var leftExtra, rightExtra Slice
 	var err error
 	if branchBit == 0 {
-		leftChild, leftExtra, err = combineAugmentedRootViews(longerView, rightNode.leftChildView(childKeySz), aug)
+		leftChild, leftExtra, err = combineAugmentedRootViews(longerView, rightNode.leftChildView(childKeySz), state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 		rightChild = rightNode.right
-		rightExtra, err = extractAugmentedNodeExtraStrict(rightChild, childKeySz, aug)
+		rightExtra, err = extractAugmentedNodeExtraStrictView(rightChild, childKeySz, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 	} else {
 		leftChild = rightNode.left
-		leftExtra, err = extractAugmentedNodeExtraStrict(leftChild, childKeySz, aug)
+		leftExtra, err = extractAugmentedNodeExtraStrictView(leftChild, childKeySz, state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
-		rightChild, rightExtra, err = combineAugmentedRootViews(longerView, rightNode.rightChildView(childKeySz), aug)
+		rightChild, rightExtra, err = combineAugmentedRootViews(longerView, rightNode.rightChildView(childKeySz), state)
 		if err != nil {
-			return nil, nil, err
+			return nil, Slice{}, err
 		}
 	}
 
-	return storeAugmentedForkForCombine(aug, rightNode.visibleLabelSlice(0, rightNode.visibleLabelLen()), leftChild, leftExtra, rightChild, rightExtra, remaining)
+	label := rightNode.visibleLabelValue(0, rightNode.visibleLabelLen())
+	return storeAugmentedForkForCombine(&label, leftChild, &leftExtra, rightChild, &rightExtra, remaining, state)
 }
 
-func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*augmentedCombineNode, error) {
+func parseAugmentedNodeForCombine(view augmentedRootView, state *augmentedCombineState) (augmentedCombineNode, error) {
 	if view.cell.IsSpecial() && !view.cell.IsLazy() {
-		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", view.cell.GetType())
+		return augmentedCombineNode{}, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", view.cell.GetType())
 	}
 
-	var loader Slice
-	if err := view.cell.BeginParseInto(&loader); err != nil {
-		return nil, err
+	if err := view.cell.BeginParseInto(&state.loader); err != nil {
+		return augmentedCombineNode{}, err
 	}
-	if loader.cell.IsSpecial() {
-		return nil, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", loader.cell.GetType())
+	if state.loader.cell.IsSpecial() {
+		return augmentedCombineNode{}, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", state.loader.cell.GetType())
 	}
-	labelLen, label, err := readLabelView(view.keySz, &loader)
+	labelLen, label, err := readLabelView(view.keySz, &state.loader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load augmented dictionary label: %w", err)
+		return augmentedCombineNode{}, fmt.Errorf("failed to load augmented dictionary label: %w", err)
 	}
 	if view.skip > labelLen {
-		return nil, fmt.Errorf("invalid augmented dictionary label skip %d for label length %d", view.skip, labelLen)
+		return augmentedCombineNode{}, fmt.Errorf("invalid augmented dictionary label skip %d for label length %d", view.skip, labelLen)
 	}
 
-	payload := loader
-	node := &augmentedCombineNode{
+	payload := state.loader
+	node := augmentedCombineNode{
 		view:     view,
 		label:    label,
 		labelLen: labelLen,
@@ -309,29 +330,33 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 	}
 
 	if node.leaf {
-		payloadCopy := payload
-		extra, err := captureConsumedPrefix(&payloadCopy, aug.SkipExtra)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load augmented dictionary leaf extra: %w", err)
+		extra := payload
+		state.cursor = payload
+		if err := state.aug.SkipExtra(&state.cursor); err != nil {
+			return augmentedCombineNode{}, fmt.Errorf("failed to load augmented dictionary leaf extra: %w", err)
 		}
+		extra.bitEnd = state.cursor.bitStart
+		extra.refEnd = state.cursor.refStart
 		node.extra = extra
 		return node, nil
 	}
 
-	left, err := loader.LoadRefCell()
+	left, err := state.loader.LoadRefCell()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load augmented dictionary left fork: %w", err)
+		return augmentedCombineNode{}, fmt.Errorf("failed to load augmented dictionary left fork: %w", err)
 	}
-	right, err := loader.LoadRefCell()
+	right, err := state.loader.LoadRefCell()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load augmented dictionary right fork: %w", err)
+		return augmentedCombineNode{}, fmt.Errorf("failed to load augmented dictionary right fork: %w", err)
 	}
-	extra, err := captureConsumedPrefix(&loader, aug.SkipExtra)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load augmented dictionary fork extra: %w", err)
+	extra := state.loader
+	if err = state.aug.SkipExtra(&state.loader); err != nil {
+		return augmentedCombineNode{}, fmt.Errorf("failed to load augmented dictionary fork extra: %w", err)
 	}
-	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
-		return nil, fmt.Errorf("augmented dictionary fork has trailing data")
+	extra.bitEnd = state.loader.bitStart
+	extra.refEnd = state.loader.refStart
+	if state.loader.BitsLeft() != 0 || state.loader.RefsNum() != 0 {
+		return augmentedCombineNode{}, fmt.Errorf("augmented dictionary fork has trailing data")
 	}
 
 	node.left = left
@@ -342,28 +367,31 @@ func parseAugmentedNodeForCombine(view augmentedRootView, aug Augmentation) (*au
 }
 
 func chooseAugmentedRootExtraForCombine(root, rootExtra *Cell, keySz uint, aug Augmentation) (*Cell, error) {
-	nodeExtra, err := extractAugmentedNodeExtraStrict(root, keySz, aug)
+	state := augmentedCombineState{aug: aug}
+	nodeExtra, err := extractAugmentedNodeExtraStrictView(root, keySz, &state)
 	if err != nil {
 		return nil, err
 	}
 
 	if rootExtra == nil {
-		return nodeExtra, nil
+		return nodeExtra.ToCell()
 	}
 	if err := validateAugmentedExtraCellForCombine(rootExtra, aug); err != nil {
 		return nil, err
 	}
-	if !equalCellContents(rootExtra, nodeExtra) {
+	var expected Builder
+	nodeExtra.ToBuilderInto(&expected)
+	if !expected.EqualsCell(rootExtra) {
 		return nil, fmt.Errorf("augmented dictionary root extra does not match root node extra")
 	}
 
 	return rootExtra, nil
 }
 
-func extractAugmentedNodeExtraStrict(c *Cell, keySz uint, aug Augmentation) (*Cell, error) {
-	node, err := parseAugmentedNodeForCombine(augmentedRootView{cell: c, keySz: keySz}, aug)
+func extractAugmentedNodeExtraStrictView(c *Cell, keySz uint, state *augmentedCombineState) (Slice, error) {
+	node, err := parseAugmentedNodeForCombine(augmentedRootView{cell: c, keySz: keySz}, state)
 	if err != nil {
-		return nil, err
+		return Slice{}, err
 	}
 	return node.extra, nil
 }
@@ -383,80 +411,67 @@ func validateAugmentedExtraCellForCombine(extra *Cell, aug Augmentation) error {
 	return nil
 }
 
-func storeAugmentedForkForCombine(aug Augmentation, label *Slice, left, leftExtra, right, rightExtra *Cell, keySz uint) (*Cell, *Cell, error) {
-	leftExtraSlice, err := leftExtra.BeginParse()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load left extra: %w", err)
-	}
-	rightExtraSlice, err := rightExtra.BeginParse()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load right extra: %w", err)
+func storeAugmentedForkForCombine(label *Slice, left *Cell, leftExtra *Slice, right *Cell, rightExtra *Slice, keySz uint, state *augmentedCombineState) (*Cell, Slice, error) {
+	state.leftExtra = *leftExtra
+	state.rightExtra = *rightExtra
+	state.extra = Builder{}
+	if err := state.aug.CombineExtra(&state.leftExtra, &state.rightExtra, &state.extra); err != nil {
+		return nil, Slice{}, err
 	}
 
-	extra, err := aug.CombineExtra(leftExtraSlice, rightExtraSlice)
-	if err != nil {
-		return nil, nil, err
+	state.node = Builder{}
+	if err := storeDictLabel(&state.node, label, keySz); err != nil {
+		return nil, Slice{}, err
+	}
+	if err := state.node.StoreRef(left); err != nil {
+		return nil, Slice{}, err
+	}
+	if err := state.node.StoreRef(right); err != nil {
+		return nil, Slice{}, err
+	}
+	extraBitStart, extraRefStart := state.node.bitsSz, state.node.refsNum
+	if err := state.node.StoreBuilder(&state.extra); err != nil {
+		return nil, Slice{}, err
 	}
 
-	extraSlice, err := extra.BeginParse()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load combined extra: %w", err)
-	}
-
-	fork := BeginCell().
-		MustStoreRef(left).
-		MustStoreRef(right).
-		MustStoreBuilder(extraSlice.ToBuilder())
-
-	root, err := storeDictNode(label, fork, keySz)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return root, extra, nil
+	root := state.node.EndCell()
+	return root, Slice{
+		cell:     root,
+		bitStart: uint16(extraBitStart),
+		bitEnd:   root.bitsSz,
+		refStart: extraRefStart,
+		refEnd:   uint8(root.refsCount()),
+	}, nil
 }
 
-func materializeAugmentedNodeForCombine(node *augmentedCombineNode, keySz uint) (*Cell, error) {
+func materializeAugmentedNodeForCombine(node augmentedCombineNode, keySz uint, state *augmentedCombineState) (*Cell, error) {
 	if node.view.skip == 0 && node.view.keySz == keySz {
 		return node.view.cell, nil
 	}
 
-	return materializeAugmentedNodeSuffixForCombine(node, 0, keySz)
+	return materializeAugmentedNodeSuffixForCombine(node, 0, keySz, state)
 }
 
-func materializeAugmentedNodeSuffixForCombine(node *augmentedCombineNode, skip uint, keySz uint) (*Cell, error) {
-	payload, err := augmentedPayloadBuilderForCombine(&node.payload)
-	if err != nil {
-		return nil, err
-	}
-	return storeDictNode(node.visibleLabelSlice(skip, node.visibleLabelLen()-skip), payload, keySz)
-}
-
-func augmentedPayloadBuilderForCombine(payload *Slice) (*Builder, error) {
-	b := BeginCell()
-
-	bits := payload.BitsLeft()
-	if err := payload.loadSliceInto(b.data[:], bits, true); err != nil {
-		return nil, err
-	}
-	b.bitsSz = bits
-
-	refsCount := payload.RefsNum()
-	for i := 0; i < refsCount; i++ {
-		ref, err := payload.peekRefCellAt(i)
+func materializeAugmentedNodeSuffixForCombine(node augmentedCombineNode, skip uint, keySz uint, state *augmentedCombineState) (*Cell, error) {
+	state.payload = Builder{}
+	node.payload.ToBuilderInto(&state.payload)
+	for i, ref := range state.payload.rawRefs() {
+		loaded, err := ref.load()
 		if err != nil {
 			return nil, err
 		}
-		ref, err = ref.load()
-		if err != nil {
-			return nil, err
-		}
-		if err = b.StoreRef(ref); err != nil {
-			return nil, err
-		}
+		state.payload.refs[i] = loaded
 	}
 
-	return b, nil
+	state.node = Builder{}
+	label := node.visibleLabelValue(skip, node.visibleLabelLen()-skip)
+	if err := storeDictLabel(&state.node, &label, keySz); err != nil {
+		return nil, err
+	}
+	if err := state.node.StoreBuilderUncheckedDepth(&state.payload); err != nil {
+		return nil, err
+	}
+	return state.node.EndCell(), nil
 }
 
 func commonAugmentedLabelPrefix(left, right *augmentedCombineNode) uint {
@@ -484,11 +499,6 @@ func (n *augmentedCombineNode) visibleLabelLen() uint {
 func (n *augmentedCombineNode) visibleLabelBit(bit uint) uint64 {
 	value, _ := n.label.BitAt(n.view.skip + bit)
 	return uint64(value)
-}
-
-func (n *augmentedCombineNode) visibleLabelSlice(start, length uint) *Slice {
-	label := n.visibleLabelValue(start, length)
-	return &label
 }
 
 func (n *augmentedCombineNode) visibleLabelValue(start, length uint) Slice {

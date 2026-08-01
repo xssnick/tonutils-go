@@ -643,6 +643,8 @@ func transactionDefaultSizeLimits() transactionSizeLimits {
 	return transactionSizeLimits{
 		maxMsgBits:                  1 << 21,
 		maxMsgCells:                 1 << 13,
+		maxTotalMsgBits:             (1 << 21) * 5 / 2,
+		maxTotalMsgCells:            (1 << 13) * 5 / 2,
 		maxLibraryCells:             1000,
 		maxExtMsgDepth:              512,
 		maxAccStateCells:            1 << 16,
@@ -709,6 +711,24 @@ func transactionApplySizeLimits(config tlb.SizeLimitsConfig) transactionSizeLimi
 		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
 		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
 		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
+		if v.MaxTransactionLibraryLoads != nil {
+			limit := *v.MaxTransactionLibraryLoads
+			out.maxTransactionLibraryLoads = &limit
+		}
+	case tlb.SizeLimitsConfigV3:
+		out.maxMsgBits = uint64(v.MaxMsgBits)
+		out.maxMsgCells = uint64(v.MaxMsgCells)
+		out.maxLibraryCells = uint64(v.MaxLibraryCells)
+		out.maxExtMsgDepth = v.MaxExtMsgDepth
+		out.maxVMDataDepth = v.MaxVMDataDepth
+		out.maxAccStateCells = uint64(v.MaxAccStateCells)
+		out.maxMCAccStateCells = uint64(v.MaxMCAccStateCells)
+		out.maxAccPublicLibraries = uint64(v.MaxAccPublicLibraries)
+		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
+		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
+		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
+		out.maxTotalMsgBits = uint64(v.MaxTotalMsgBits)
+		out.maxTotalMsgCells = uint64(v.MaxTotalMsgCells)
 		if v.MaxTransactionLibraryLoads != nil {
 			limit := *v.MaxTransactionLibraryLoads
 			out.maxTransactionLibraryLoads = &limit

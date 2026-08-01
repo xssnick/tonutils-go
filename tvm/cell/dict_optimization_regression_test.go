@@ -9,6 +9,81 @@ import (
 	"testing"
 )
 
+func TestInitIntKeyBuilderMatchesReferenceEncodingAndBoundaries(t *testing.T) {
+	widths := []uint{0, 1, 7, 8, 9, 64, 256, 257, 258, 1023}
+	for _, width := range widths {
+		values := []*big.Int{new(big.Int)}
+		if width > 0 {
+			limit := new(big.Int).Lsh(big.NewInt(1), width)
+			values = append(values,
+				big.NewInt(1),
+				new(big.Int).Sub(new(big.Int).Set(limit), big.NewInt(1)),
+				big.NewInt(-1),
+				new(big.Int).Neg(new(big.Int).Rsh(new(big.Int).Set(limit), 1)),
+			)
+		}
+
+		for _, value := range values {
+			t.Run(fmt.Sprintf("bits=%d/value=%s", width, value), func(t *testing.T) {
+				var got Builder
+				initIntKeyBuilder(value, width, &got)
+
+				encoded := new(big.Int).Set(value)
+				if encoded.Sign() < 0 {
+					encoded.Add(encoded, new(big.Int).Lsh(big.NewInt(1), width))
+				}
+				var want Builder
+				for bit := width; bit > 0; bit-- {
+					want.MustStoreBoolBit(encoded.Bit(int(bit-1)) != 0)
+				}
+
+				if got.bitsSz != want.bitsSz || !bytes.Equal(got.data[:got.usedBytes()], want.data[:want.usedBytes()]) {
+					t.Fatalf("encoding = %x/%d bits, want %x/%d bits",
+						got.data[:got.usedBytes()], got.bitsSz, want.data[:want.usedBytes()], want.bitsSz)
+				}
+
+				if width <= 257 {
+					var legacy Builder
+					if err := legacy.storeBigIntWrap(value, width); err != nil {
+						t.Fatal(err)
+					}
+					if got.bitsSz != legacy.bitsSz || !bytes.Equal(got.data[:got.usedBytes()], legacy.data[:legacy.usedBytes()]) {
+						t.Fatalf("encoding differs from legacy: got %x, legacy %x",
+							got.data[:got.usedBytes()], legacy.data[:legacy.usedBytes()])
+					}
+				}
+			})
+		}
+	}
+
+	tests := []struct {
+		name string
+		key  *big.Int
+		bits uint
+		want error
+	}{
+		{name: "nil", bits: 8, want: ErrNilBigInt},
+		{name: "too wide", key: new(big.Int), bits: 1024, want: ErrTooBigSize},
+		{name: "nonzero zero width", key: big.NewInt(1), want: ErrTooBigValue},
+		{name: "positive overflow", key: big.NewInt(256), bits: 8, want: ErrTooBigValue},
+		{name: "negative overflow", key: big.NewInt(-129), bits: 8, want: ErrTooBigValue},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got any
+			func() {
+				defer func() { got = recover() }()
+				var builder Builder
+				initIntKeyBuilder(test.key, test.bits, &builder)
+			}()
+			err, ok := got.(error)
+			if !ok || !errors.Is(err, test.want) {
+				t.Fatalf("panic = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDictIteratorParityResetAndSignedOrder(t *testing.T) {
 	dict := NewDict(8)
 	for _, key := range []uint64{0x00, 0x10, 0x7f, 0x80, 0x81, 0xf0, 0xff} {
@@ -674,34 +749,41 @@ func (refCountAugmentation) SkipExtra(loader *Slice) error {
 	return err
 }
 
-func (refCountAugmentation) EmptyExtra() (*Cell, error) {
-	return refCountExtra(0), nil
+func (refCountAugmentation) EmptyExtra(dst *Builder) error {
+	return storeRefCountExtra(dst, 0)
 }
 
-func (refCountAugmentation) LeafExtra(*Slice) (*Cell, error) {
-	return refCountExtra(1), nil
+func (refCountAugmentation) LeafExtra(_ *Slice, dst *Builder) error {
+	return storeRefCountExtra(dst, 1)
 }
 
-func (refCountAugmentation) CombineExtra(left, right *Slice) (*Cell, error) {
+func (refCountAugmentation) CombineExtra(left, right *Slice, dst *Builder) error {
 	leftCount, err := left.LoadUInt(8)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if _, err = left.LoadRefCell(); err != nil {
-		return nil, err
+		return err
 	}
 	rightCount, err := right.LoadUInt(8)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if _, err = right.LoadRefCell(); err != nil {
-		return nil, err
+		return err
 	}
-	return refCountExtra(leftCount + rightCount), nil
+	return storeRefCountExtra(dst, leftCount+rightCount)
 }
 
 func refCountExtra(count uint64) *Cell {
 	return BeginCell().MustStoreUInt(count, 8).MustStoreRef(BeginCell().MustStoreUInt(0xaa, 8).EndCell()).EndCell()
+}
+
+func storeRefCountExtra(dst *Builder, count uint64) error {
+	if err := dst.StoreUInt(count, 8); err != nil {
+		return err
+	}
+	return dst.StoreRef(BeginCell().MustStoreUInt(0xaa, 8).EndCell())
 }
 
 func newSequentialTestDict(t *testing.T, count int) *Dictionary {

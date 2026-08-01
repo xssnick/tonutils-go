@@ -113,14 +113,22 @@ func markExecutionProofStack(stack *vm.Stack, usageTree *cell.CellUsageTree, gas
 func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
 	switch v := val.(type) {
 	case *cell.Cell:
-		return markExecutionProofCell(v, usageTree, seen)
+		return markExecutionProofCell(v, v.Trace(), usageTree, seen)
 	case *cell.Slice:
 		if v == nil {
 			return nil
 		}
-		return markExecutionProofCell(v.BaseCell(), usageTree, seen)
+		trace := v.Trace()
+		if trace == nil {
+			// Match BaseCell semantics without cloning the cell: a Slice can
+			// suppress its own trace while its immutable backing cell still
+			// carries the usage-tree identity.
+			trace = v.RawCell().Trace()
+		}
+		return markExecutionProofCell(v.RawCell(), trace, usageTree, seen)
 	case *cell.Builder:
-		return markExecutionProofCell(v.EndCell(), usageTree, seen)
+		built := v.EndCell()
+		return markExecutionProofCell(built, built.Trace(), usageTree, seen)
 	case tuple.Tuple:
 		ln := v.Len()
 		for i := 0; i < ln; i++ {
@@ -136,32 +144,31 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 	return nil
 }
 
-func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
-	node, ok := usageTree.NodeForCell(c)
+func markExecutionProofCell(c *cell.Cell, trace *cell.Trace, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
+	node, ok := usageTree.NodeForTrace(trace)
 	if !ok {
-		loader, err := c.BeginParseWithTrace(nil)
-		if err != nil {
+		var loader cell.Slice
+		if err := c.BeginParseIntoWithTrace(&loader, nil); err != nil {
 			return err
 		}
 		refsNum := loader.RefsNum()
 		for i := 0; i < refsNum; i++ {
-			ref, err := loader.PeekRefCellAt(i)
+			ref, refTrace, err := loader.PeekRefCellAtWithTrace(i)
 			if err != nil {
 				return err
 			}
-			if err = markExecutionProofCell(ref, usageTree, seen); err != nil {
+			if err = markExecutionProofCell(ref, refTrace, usageTree, seen); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
 
-	loader, err := c.BeginParseWithTrace(usageTree.Trace(node))
-	if err != nil {
+	var loader cell.Slice
+	if err := c.BeginParseIntoWithTrace(&loader, usageTree.Trace(node)); err != nil {
 		return err
 	}
-	base := loader.BaseCell()
-	key := base.HashKey()
+	key := loader.RawCell().HashKey()
 	if _, ok = seen[key]; ok {
 		return nil
 	}
@@ -169,11 +176,11 @@ func markExecutionProofCell(c *cell.Cell, usageTree *cell.CellUsageTree, seen ma
 
 	refsNum := loader.RefsNum()
 	for i := 0; i < refsNum; i++ {
-		ref, err := loader.PeekRefCellAt(i)
+		ref, refTrace, err := loader.PeekRefCellAtWithTrace(i)
 		if err != nil {
 			return err
 		}
-		if err = markExecutionProofCell(ref, usageTree, seen); err != nil {
+		if err = markExecutionProofCell(ref, refTrace, usageTree, seen); err != nil {
 			return err
 		}
 	}

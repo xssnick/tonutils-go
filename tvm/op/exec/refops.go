@@ -20,8 +20,8 @@ func init() {
 }
 
 func CALLREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("CALLREF", helpers.BytesPrefix(0xDB, 0x3C), 1, func(state *vm.State, refs []*cell.Cell) error {
-		cont, err := loadContinuationFromCodeCell(state, refs[0])
+	return bindRefCodeOp(newRefCodeOp("CALLREF", helpers.BytesPrefix(0xDB, 0x3C), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
+		cont, err := loadContinuationFromCodeCell(state, refs[0], traces[0])
 		if err != nil {
 			return err
 		}
@@ -30,36 +30,32 @@ func CALLREF(code *cell.Cell) vm.OP {
 }
 
 func JMPREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("JMPREF", helpers.BytesPrefix(0xDB, 0x3D), 1, func(state *vm.State, refs []*cell.Cell) error {
-		cont, err := loadContinuationFromCodeCell(state, refs[0])
-		if err != nil {
-			return err
-		}
-		return state.Jump(cont)
+	return bindRefCodeOp(newRefCodeOp("JMPREF", helpers.BytesPrefix(0xDB, 0x3D), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
+		return jumpToCodeCell(state, refs[0], traces[0])
 	}), code)
 }
 
 func JMPREFDATA(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("JMPREFDATA", helpers.BytesPrefix(0xDB, 0x3E), 1, func(state *vm.State, refs []*cell.Cell) error {
-		cont, err := loadContinuationFromCodeCell(state, refs[0])
-		if err != nil {
+	return bindRefCodeOp(newRefCodeOp("JMPREFDATA", helpers.BytesPrefix(0xDB, 0x3E), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
+		var target cell.Slice
+		if err := state.Cells.BeginParseIntoWithTrace(refs[0], traces[0], &target); err != nil {
 			return err
 		}
-		if err = pushCurrentCode(state); err != nil {
+		if err := pushCurrentCode(state); err != nil {
 			return err
 		}
-		return state.Jump(cont)
+		return state.JumpToCode(&target, state.CP)
 	}), code)
 }
 
 func IFREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFREF", helpers.BytesPrefix(0xE3, 0x00), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFREF", helpers.BytesPrefix(0xE3, 0x00), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		cond, err := state.Stack.PopBool()
 		if err != nil {
 			return err
 		}
 		if cond {
-			cont, err := loadContinuationFromCodeCell(state, refs[0])
+			cont, err := loadContinuationFromCodeCell(state, refs[0], traces[0])
 			if err != nil {
 				return err
 			}
@@ -70,13 +66,13 @@ func IFREF(code *cell.Cell) vm.OP {
 }
 
 func IFNOTREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFNOTREF", helpers.BytesPrefix(0xE3, 0x01), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFNOTREF", helpers.BytesPrefix(0xE3, 0x01), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		cond, err := state.Stack.PopBool()
 		if err != nil {
 			return err
 		}
 		if !cond {
-			cont, err := loadContinuationFromCodeCell(state, refs[0])
+			cont, err := loadContinuationFromCodeCell(state, refs[0], traces[0])
 			if err != nil {
 				return err
 			}
@@ -87,41 +83,33 @@ func IFNOTREF(code *cell.Cell) vm.OP {
 }
 
 func IFJMPREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFJMPREF", helpers.BytesPrefix(0xE3, 0x02), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFJMPREF", helpers.BytesPrefix(0xE3, 0x02), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		cond, err := state.Stack.PopBool()
 		if err != nil {
 			return err
 		}
 		if cond {
-			cont, err := loadContinuationFromCodeCell(state, refs[0])
-			if err != nil {
-				return err
-			}
-			return state.Jump(cont)
+			return jumpToCodeCell(state, refs[0], traces[0])
 		}
 		return nil
 	}), code)
 }
 
 func IFNOTJMPREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFNOTJMPREF", helpers.BytesPrefix(0xE3, 0x03), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFNOTJMPREF", helpers.BytesPrefix(0xE3, 0x03), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		cond, err := state.Stack.PopBool()
 		if err != nil {
 			return err
 		}
 		if !cond {
-			cont, err := loadContinuationFromCodeCell(state, refs[0])
-			if err != nil {
-				return err
-			}
-			return state.Jump(cont)
+			return jumpToCodeCell(state, refs[0], traces[0])
 		}
 		return nil
 	}), code)
 }
 
 func IFREFELSE(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFREFELSE", helpers.BytesPrefix(0xE3, 0x0D), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFREFELSE", helpers.BytesPrefix(0xE3, 0x0D), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		if err := checkStackDepth(state, 2); err != nil {
 			return err
 		}
@@ -135,7 +123,7 @@ func IFREFELSE(code *cell.Cell) vm.OP {
 			return err
 		}
 		if cond {
-			cont, err = loadContinuationFromCodeCell(state, refs[0])
+			cont, err = loadContinuationFromCodeCell(state, refs[0], traces[0])
 			if err != nil {
 				return err
 			}
@@ -145,7 +133,7 @@ func IFREFELSE(code *cell.Cell) vm.OP {
 }
 
 func IFELSEREF(code *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFELSEREF", helpers.BytesPrefix(0xE3, 0x0E), 1, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFELSEREF", helpers.BytesPrefix(0xE3, 0x0E), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		if err := checkStackDepth(state, 2); err != nil {
 			return err
 		}
@@ -159,7 +147,7 @@ func IFELSEREF(code *cell.Cell) vm.OP {
 			return err
 		}
 		if !cond {
-			cont, err = loadContinuationFromCodeCell(state, refs[0])
+			cont, err = loadContinuationFromCodeCell(state, refs[0], traces[0])
 			if err != nil {
 				return err
 			}
@@ -169,16 +157,16 @@ func IFELSEREF(code *cell.Cell) vm.OP {
 }
 
 func IFREFELSEREF(codeTrue, codeFalse *cell.Cell) vm.OP {
-	return bindRefCodeOp(newRefCodeOp("IFREFELSEREF", helpers.BytesPrefix(0xE3, 0x0F), 2, func(state *vm.State, refs []*cell.Cell) error {
+	return bindRefCodeOp(newRefCodeOp("IFREFELSEREF", helpers.BytesPrefix(0xE3, 0x0F), 2, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		cond, err := state.Stack.PopBool()
 		if err != nil {
 			return err
 		}
-		ref := refs[1]
+		ref, trace := refs[1], traces[1]
 		if cond {
-			ref = refs[0]
+			ref, trace = refs[0], traces[0]
 		}
-		cont, err := loadContinuationFromCodeCell(state, ref)
+		cont, err := loadContinuationFromCodeCell(state, ref, trace)
 		if err != nil {
 			return err
 		}

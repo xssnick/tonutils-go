@@ -382,6 +382,8 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		if out.addr == nil {
 			return nil, errors.New("account address is required for non-existing shard account")
 		}
+		out.forgetAddressRewrite()
+		out.stateHash = append([]byte(nil), out.addr.Data()...)
 		return out, nil
 	}
 
@@ -410,6 +412,10 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		return nil, fmt.Errorf("account storage last transaction lt %d is not after shard account lt %d", out.storageLT, out.prevTxLT)
 	}
 	out.stateHash = append([]byte(nil), acc.StateHash...)
+	if out.status == tlb.AccountStatusUninit {
+		out.forgetAddressRewrite()
+		out.stateHash = append([]byte(nil), out.addr.Data()...)
+	}
 	if buildStorageCell {
 		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
 		if err != nil {
@@ -450,6 +456,13 @@ func (a *transactionRuntimeAccount) setAddressIdentity(raw *address.Address) err
 	a.addr = exact
 	a.addrExact = exact
 	return nil
+}
+
+// forgetAddressRewrite matches Account::forget_addr_rewrite_length: the
+// effective shard key becomes the stored address and anycast metadata is lost.
+func (a *transactionRuntimeAccount) forgetAddressRewrite() {
+	a.addrRaw = a.addrExact
+	a.addrRewriteDepth = 0
 }
 
 func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
@@ -592,7 +605,7 @@ type builtTransactionAccount struct {
 	storageCellForStat *cell.Cell
 }
 
-func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
+func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, removeAnycast bool, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
 	if status == tlb.AccountStatusNonExist {
 		accountState := &tlb.AccountState{
 			IsValid: false,
@@ -645,7 +658,10 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		return nil, fmt.Errorf("unsupported final account status %s", status)
 	}
 
-	accountAddr := acc.vmAddress(cfg.globalVersion())
+	accountAddr := acc.rawAddress()
+	if removeAnycast {
+		accountAddr = acc.exactAddress()
+	}
 	storageBuilder, err := buildTransactionAccountStorageBuilder(status, endLT, balance, extraCurrencies, accountStorage.StateInit, accountStorage.StateHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize account storage: %w", err)
@@ -704,25 +720,6 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		built.storageCellForStat = storageCellForStat
 	}
 	return built, nil
-}
-
-func transactionAccountSerializationAddr(addr *address.Address, cfg *PreparedBlockchainConfig) (*address.Address, error) {
-	if addr == nil || addr.Anycast() == nil {
-		return addr, nil
-	}
-	if cfg.globalVersion() < 10 {
-		return addr, nil
-	}
-
-	data, err := transactionRewrittenAccountAddressData(addr)
-	if err != nil {
-		return nil, err
-	}
-
-	out := addr.Copy()
-	copy(out.Data(), data)
-	out.SetAnycast(nil)
-	return out, nil
 }
 
 func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
@@ -1408,10 +1405,11 @@ func transactionFinalizeAccountStatus(status tlb.AccountStatus, deleted bool, ba
 }
 
 func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status tlb.AccountStatus, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, cfg *PreparedBlockchainConfig) (tlb.AccountStatus, tlb.AccountStatus, []byte, error) {
-	if status != tlb.AccountStatusFrozen || acc.addr == nil {
+	originalAddr := acc.rawAddress()
+	if status != tlb.AccountStatusFrozen || originalAddr == nil {
 		return status, status, stateHash, nil
 	}
-	addrData := acc.addr.Data()
+	addrData := originalAddr.Data()
 	if len(addrData) != 32 {
 		return status, status, stateHash, nil
 	}
@@ -1441,6 +1439,8 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 
 func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedBlockchainConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
 	stateInit := transactionMessageStateInit(msg)
+	disableAnycast := cfg.globalVersion() >= 10
+	removeAnycast := disableAnycast && acc.rawAddress().Anycast() != nil
 	if deleted {
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
 	}
@@ -1458,6 +1458,12 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		if stateInit != nil && stateInit.Lib != nil && !stateInit.Lib.IsEmpty() {
 			next := *acc
 			next.inMsgLibraries = stateInit.Lib
+			next.removeAnycast = removeAnycast
+			return &next, false, nil, nil
+		}
+		if removeAnycast {
+			next := *acc
+			next.removeAnycast = true
 			return &next, false, nil, nil
 		}
 		return acc, false, nil, nil
@@ -1474,9 +1480,6 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	case tlb.AccountStatusUninit, tlb.AccountStatusNonExist:
 		if addressSuspended {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonSuspended}, nil
-		}
-		if cfg.globalVersion() >= 10 && stateInit.Depth != nil && *stateInit.Depth > transactionGetSizeLimits(cfg).maxAccFixedPrefixLength {
-			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 		stateHash := stateCell.HashKey()
 		if !transactionStateInitMatchesAddress(stateHash[:], acc.addr, stateInit.Depth) {
@@ -1518,8 +1521,14 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	if exceedsLimits {
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 	}
+	if (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist) && disableAnycast && stateInit.Depth != nil && *stateInit.Depth > transactionGetSizeLimits(cfg).maxAccFixedPrefixLength {
+		next := *acc
+		next.removeAnycast = removeAnycast
+		return &next, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+	}
 
 	next := *acc
+	next.removeAnycast = removeAnycast
 	next.status = tlb.AccountStatusActive
 	next.code = stateInit.Code
 	next.data = stateInit.Data

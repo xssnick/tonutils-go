@@ -27,11 +27,11 @@ const (
 	expectedCrossEmulatorFullRangeVersionFuzzerCount = 130
 	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "b3eb80a34606257611af0070116dfa8c365ab0ed500de04b400205222c30a338"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 14
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "d7d0e70718f440dc0ec3df430a873336400f31d94a7af98650fa5228a3607e53"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 16
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "2f61204dbd657f7eba2c830a9435c479b57b18e6c4e57617089ec33529cf3765"
 
-	expectedCrossEmulatorTransactionVersionTestCount = 50
-	expectedCrossEmulatorTransactionVersionTestHash  = "2be0d2dcf35dba0b40721f9d1f0f025114ec479cd8252cc834158b7f5ce81fd0"
+	expectedCrossEmulatorTransactionVersionTestCount = 52
+	expectedCrossEmulatorTransactionVersionTestHash  = "186b499794fe37daa7cd168d36841be196fb87573709de728c48506620279298"
 	expectedCrossEmulatorTransactionVersionFuzzCount = 48
 	expectedCrossEmulatorTransactionVersionFuzzHash  = "2bbcff7f27693d609863afd367a66292d7d07036419640531b3fdc1d9dd4460c"
 
@@ -184,6 +184,19 @@ var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmul
 		reason: "focused action-source parity enumerates the v7-v10 anycast rewrite transition; the outbound-anycast global-version fuzzer owns broader anycast version coverage",
 		versionAnchors: []string{
 			"FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion",
+		},
+	},
+	"transaction_anycast_identity_cross_emulator_test.go:TestTVMCrossEmulatorTransactionAnycastFrozenHashUsesOriginalAddress": {
+		reason: "focused account-lifecycle parity pins the freeze-to-uninit and reload transitions around the v10 and v13 gates; dedicated anycast and frozen-state fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion",
+		},
+	},
+	"transaction_total_message_cross_emulator_test.go:TestTVMCrossEmulatorTransactionTotalMessageLimits": {
+		reason: "focused cumulative outbound-size parity pins the v14/v15 SizeLimitsConfig transition; the send-size global-version fuzzer owns broader message-size coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion",
 		},
 	},
 	"transaction_version_cross_emulator_test.go:TestTVMCrossEmulatorTransactionOutboundMessageResult39": {

@@ -99,6 +99,13 @@ func TestDictNamingAndRegistrationHelpers(t *testing.T) {
 	}
 }
 
+func sameMaybeCell(a, b *cell.Cell) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.HashKey() == b.HashKey()
+}
+
 func TestDictHelpers(t *testing.T) {
 	stack := vm.NewStack()
 	ref := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
@@ -129,35 +136,28 @@ func TestDictHelpers(t *testing.T) {
 		t.Fatal("ref maybe-ref should be non-empty dict")
 	}
 
-	if bits, ok := encodeDictIntBits(big.NewInt(5), 4, false); !ok || len(bits) == 0 {
-		t.Fatalf("encode unsigned key failed")
+	keyFitTests := []struct {
+		name   string
+		value  *big.Int
+		bits   uint
+		signed bool
+		want   bool
+	}{
+		{name: "nil", bits: 4},
+		{name: "zero width", value: big.NewInt(0), want: true},
+		{name: "nonzero zero width", value: big.NewInt(1)},
+		{name: "unsigned max", value: big.NewInt(15), bits: 4, want: true},
+		{name: "unsigned overflow", value: big.NewInt(16), bits: 4},
+		{name: "unsigned negative", value: big.NewInt(-1), bits: 4},
+		{name: "signed min", value: big.NewInt(-8), bits: 4, signed: true, want: true},
+		{name: "signed max", value: big.NewInt(7), bits: 4, signed: true, want: true},
+		{name: "signed below min", value: big.NewInt(-9), bits: 4, signed: true},
+		{name: "signed above max", value: big.NewInt(8), bits: 4, signed: true},
 	}
-	if _, ok := encodeDictIntBits(big.NewInt(-1), 4, false); ok {
-		t.Fatal("negative unsigned key should not encode")
-	}
-	if key, ok := encodeDictIntKey(big.NewInt(-1), 4, true); !ok || key == nil {
-		t.Fatal("signed key should encode")
-	}
-	if _, ok := encodeDictIntKey(big.NewInt(-8), 4, true); !ok {
-		t.Fatal("signed min key should encode")
-	}
-	if _, ok := encodeDictIntKey(big.NewInt(7), 4, true); !ok {
-		t.Fatal("signed max key should encode")
-	}
-	if _, ok := encodeDictIntKey(big.NewInt(-9), 4, true); ok {
-		t.Fatal("below signed min key should fail")
-	}
-	if _, ok := encodeDictIntKey(big.NewInt(8), 4, true); ok {
-		t.Fatal("above signed max key should fail")
-	}
-	if _, ok := encodeDictIntKey(big.NewInt(16), 4, false); ok {
-		t.Fatal("out-of-range unsigned key should fail")
-	}
-
-	data := []byte{0x12, 0x34}
-	shiftSliceLeft(data, 4)
-	if data[0] != 0x23 || data[1] != 0x40 {
-		t.Fatalf("unexpected shifted bytes: %#v", data)
+	for _, test := range keyFitTests {
+		if got := dictIntKeyFits(test.value, test.bits, test.signed); got != test.want {
+			t.Fatalf("%s: fits = %v, want %v", test.name, got, test.want)
+		}
 	}
 	if minUint(3, 7) != 3 || minUint(9, 7) != 7 {
 		t.Fatal("unexpected minUint result")
@@ -188,44 +188,39 @@ func TestDictHelpers(t *testing.T) {
 		t.Fatal("vm errors should be returned as-is")
 	}
 
-	sl := mustDictKeySlice(t, 0xA, 4)
-	keyCell, err := sliceKeyCell(sl, 4)
-	if err != nil {
-		t.Fatalf("sliceKeyCell failed: %v", err)
-	}
-	if got := keyCell.MustBeginParse().MustLoadUInt(4); got != 0xA {
-		t.Fatalf("unexpected key cell: %#x", got)
-	}
-	if _, err = sliceKeyCell(mustDictKeySlice(t, 0x1, 1), 4); err == nil {
-		t.Fatal("expected sliceKeyCell underflow")
-	}
-
+	var err error
 	state := newDictTestState()
 	if err = state.Stack.PushSlice(mustDictKeySlice(t, 0xA, 4)); err != nil {
 		t.Fatalf("push slice key: %v", err)
 	}
-	if key, ok, err := popDictKey(state, 4, dictKeySlice, false); err != nil || !ok || key.MustBeginParse().MustLoadUInt(4) != 0xA {
+	if key, ok, err := popDirectDictKey(state, 4, dictKeySlice, false); err != nil || !ok || key.slice.MustLoadUInt(4) != 0xA {
 		t.Fatalf("unexpected slice pop result: key=%v ok=%v err=%v", key, ok, err)
+	}
+	if err = state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 1)); err != nil {
+		t.Fatalf("push short slice key: %v", err)
+	}
+	if _, ok, err := popDirectDictKey(state, 4, dictKeySlice, false); err == nil || ok {
+		t.Fatalf("short slice key result: ok=%v err=%v", ok, err)
 	}
 
 	if err = state.Stack.PushInt(big.NewInt(-1)); err != nil {
 		t.Fatalf("push signed key: %v", err)
 	}
-	if key, ok, err := popDictKey(state, 4, dictKeySignedInt, true); err != nil || !ok || key == nil {
+	if key, ok, err := popDirectDictKey(state, 4, dictKeySignedInt, true); err != nil || !ok || key.integer.Cmp(big.NewInt(-1)) != 0 {
 		t.Fatalf("unexpected signed pop result: key=%v ok=%v err=%v", key, ok, err)
 	}
 
 	if err = state.Stack.PushInt(big.NewInt(-1)); err != nil {
 		t.Fatalf("push invalid unsigned key: %v", err)
 	}
-	if key, ok, err := popDictKey(state, 4, dictKeyUnsignedInt, false); err != nil || ok || key != nil {
+	if key, ok, err := popDirectDictKey(state, 4, dictKeyUnsignedInt, false); err != nil || ok || key.integer != nil {
 		t.Fatalf("unexpected relaxed unsigned result: key=%v ok=%v err=%v", key, ok, err)
 	}
 
 	if err = state.Stack.PushInt(big.NewInt(-1)); err != nil {
 		t.Fatalf("push invalid strict unsigned key: %v", err)
 	}
-	if _, _, err := popDictKey(state, 4, dictKeyUnsignedInt, true); err == nil {
+	if _, _, err := popDirectDictKey(state, 4, dictKeyUnsignedInt, true); err == nil {
 		t.Fatal("expected strict unsigned range check")
 	}
 
@@ -255,8 +250,13 @@ func TestDictHelpers(t *testing.T) {
 	if err = state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push prefix bits: %v", err)
 	}
-	if bits, prefix, err := popSubdictPrefix(state, 4, dictKeySlice); err != nil || bits != 2 || prefix.MustBeginParse().MustLoadUInt(2) != 0b10 {
-		t.Fatalf("unexpected slice prefix result: bits=%d prefix=%v err=%v", bits, prefix, err)
+	prefix, err := popSubdictPrefix(state, 4, dictKeySlice)
+	if err != nil {
+		t.Fatalf("pop slice prefix: %v", err)
+	}
+	prefixValue, err := prefix.slice.PreloadUInt(prefix.bits)
+	if err != nil || prefix.bits != 2 || prefixValue != 0b10 {
+		t.Fatalf("unexpected slice prefix result: bits=%d value=%d err=%v", prefix.bits, prefixValue, err)
 	}
 
 	if err = state.Stack.PushInt(big.NewInt(-1)); err != nil {
@@ -265,8 +265,9 @@ func TestDictHelpers(t *testing.T) {
 	if err = state.Stack.PushInt(big.NewInt(4)); err != nil {
 		t.Fatalf("push signed prefix bits: %v", err)
 	}
-	if bits, prefix, err := popSubdictPrefix(state, 8, dictKeySignedInt); err != nil || bits != 4 || prefix == nil {
-		t.Fatalf("unexpected signed prefix result: bits=%d prefix=%v err=%v", bits, prefix, err)
+	prefix, err = popSubdictPrefix(state, 8, dictKeySignedInt)
+	if err != nil || prefix.bits != 4 || prefix.integer == nil || prefix.integer.Int64() != -1 {
+		t.Fatalf("unexpected signed prefix result: prefix=%+v err=%v", prefix, err)
 	}
 
 	if err = pushDictKeyValue(state, mustDictKeyCell(t, 0xA, 4), dictKeySlice); err != nil {

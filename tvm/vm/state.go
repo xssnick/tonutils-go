@@ -2,10 +2,11 @@ package vm
 
 import (
 	"errors"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
 )
 
 const ControlDataAllArgs = -1
@@ -179,6 +180,10 @@ type State struct {
 	// (Call/CallArgs/ExtractCurrentContinuation) or came from a caller, so
 	// the next jump allocates a fresh slice instead of overwriting in place.
 	currentCodeOwned bool
+
+	// c7Isolated reports that mutable cursor values nested in Reg.C7 were
+	// snapshotted for this State. Gas trace attachment is intentionally lazy.
+	c7Isolated bool
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -255,10 +260,20 @@ func (s *State) SetMaxDataDepth(depth uint16) {
 
 func (s *State) InitForExecution() {
 	s.Cells.Init(s)
+	trace := s.Cells.Trace()
 	if s.Stack != nil {
-		s.Stack.SetTrace(s.Cells.Trace())
+		s.Stack.SetTrace(trace)
 	}
-	s.Reg.C7 = bindTupleTrace(s.Reg.C7, s.Cells.Trace())
+	if !s.c7Isolated {
+		// Internally constructed C7 values use the trace binding ID as an
+		// ownership token: their mutable leaves were already copied and bound.
+		// This is the same trust contract used by bindTupleTrace and avoids
+		// rebuilding the message-emulation context immediately after creation.
+		if !s.Reg.C7.HasBindingID(trace) {
+			s.Reg.C7 = snapshotTupleValue(s.Reg.C7)
+		}
+		s.c7Isolated = true
+	}
 }
 
 func (s *State) effectiveGlobalVersion() int {
@@ -386,15 +401,7 @@ func (s *State) RegisterGetExtraBalanceCall() bool {
 
 func (s *State) RegisterCellLoadFreeKey(key cell.Hash) bool {
 	s.Cells.Init(s)
-	if s.Cells.loaded == nil {
-		s.Cells.loaded = map[cell.Hash]struct{}{}
-	}
-	_, ok := s.Cells.loaded[key]
-	if !ok {
-		s.Cells.loaded[key] = struct{}{}
-		return true
-	}
-	return false
+	return s.Cells.loaded.add(key)
 }
 
 func (s *State) ConsumeStackGasLen(depth int) error {
@@ -427,13 +434,18 @@ func (s *State) PushTupleCharged(t tuple.Tuple) error {
 }
 
 func (s *State) SetC7(t tuple.Tuple) error {
+	if t.IsNull() {
+		return vmerr.Error(vmerr.CodeTypeCheck, "c7 is null")
+	}
 	s.Cells.Init(s)
 	s.Reg.C7 = bindTupleTrace(t, s.Cells.Trace())
+	s.c7Isolated = true
 	return nil
 }
 
 func (s *State) UpdateC7(fn func(tuple.Tuple) (tuple.Tuple, error)) error {
-	next, err := fn(s.Reg.C7.Copy())
+	current := bindTupleTrace(s.Reg.C7, s.Cells.Trace())
+	next, err := fn(current.Copy())
 	if err != nil {
 		return err
 	}
@@ -456,7 +468,7 @@ func (s *State) GetParam(idx int) (any, error) {
 		return nil, err
 	}
 
-	return v, nil
+	return bindClonedValueTrace(v, s.Cells.Trace()), nil
 }
 
 func (s *State) GetUnpackedConfigTuple() (tuple.Tuple, error) {
@@ -478,7 +490,11 @@ func (s *State) GetGlobal(idx int) (any, error) {
 	if idx >= s.Reg.C7.Len() {
 		return nil, nil
 	}
-	return s.Reg.C7.Index(idx)
+	val, err := s.Reg.C7.Index(idx)
+	if err != nil {
+		return nil, err
+	}
+	return bindClonedValueTrace(val, s.Cells.Trace()), nil
 }
 
 func (s *State) SetGlobal(idx int, val any) error {

@@ -83,7 +83,7 @@ func newIfBitJmpOp(bit uint8, negate bool) *helpers.AdvancedOP {
 }
 
 func newIfBitJmpRefOp(bit uint8, negate bool, ref *cell.Cell) *refCodeOp {
-	op := newRefCodeOp("", helpers.SlicePrefix(10, []byte{0xE3, 0xC0}), 1, func(state *vm.State, refs []*cell.Cell) error {
+	op := newRefCodeOp("", helpers.SlicePrefix(10, []byte{0xE3, 0xC0}), 1, func(state *vm.State, refs []*cell.Cell, traces []*cell.Trace) error {
 		x, err := state.Stack.PopIntFinite()
 		if err != nil {
 			return err
@@ -93,11 +93,7 @@ func newIfBitJmpRefOp(bit uint8, negate bool, ref *cell.Cell) *refCodeOp {
 			return err
 		}
 		if val != negate {
-			cont, loadErr := loadContinuationFromCodeCell(state, refs[0])
-			if loadErr != nil {
-				return loadErr
-			}
-			return state.Jump(cont)
+			return jumpToCodeCell(state, refs[0], traces[0])
 		}
 		return nil
 	})
@@ -129,6 +125,7 @@ func newIfBitJmpRefOp(bit uint8, negate bool, ref *cell.Cell) *refCodeOp {
 	}
 	if ref != nil {
 		op.refs[0] = ref
+		op.refTraces[0] = ref.Trace()
 	}
 	return op
 }

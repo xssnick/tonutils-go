@@ -350,17 +350,6 @@ func storeDictLabel(b *Builder, data *Slice, keyLen uint) error {
 	return b.storeSliceFromSlice(data, ln)
 }
 
-func storeDictNode(label *Slice, payload *Builder, keyLen uint) (*Cell, error) {
-	b := BeginCell()
-	if err := storeDictLabel(b, label, keyLen); err != nil {
-		return nil, err
-	}
-	if err := b.StoreBuilder(payload); err != nil {
-		return nil, err
-	}
-	return b.EndCell(), nil
-}
-
 func storeDictNodeTraced(label *Slice, payload *Builder, keyLen uint, trace *Trace) (*Cell, error) {
 	b := BeginCell().SetTrace(trace)
 	if err := storeDictLabel(b, label, keyLen); err != nil {

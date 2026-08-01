@@ -147,7 +147,7 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 		}
 	}
 
-	exitCode, gasUsed, err := referenceTickTockComputePhase(txCell)
+	exitCode, gasUsed, accepted, err := referenceTickTockComputePhase(txCell)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 	return &referenceTickTockResult{
 		exitCode:  exitCode,
 		gasUsed:   gasUsed,
-		accepted:  true,
+		accepted:  accepted,
 		txCell:    txCell,
 		shardCell: shardCell,
 		code:      codeCell,
@@ -248,23 +248,25 @@ func buildReferenceTickTockShardAccount(addr *address.Address, code, data *cell.
 	})
 }
 
-func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
+func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, bool, error) {
 	var tx tlb.Transaction
 	if err := tlb.Parse(&tx, txCell); err != nil {
-		return 0, 0, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
+		return 0, 0, false, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
 	}
 
 	desc, ok := tx.Description.(tlb.TransactionDescriptionTickTock)
 	if !ok {
-		return 0, 0, fmt.Errorf("unexpected reference transaction description type %T", tx.Description)
+		return 0, 0, false, fmt.Errorf("unexpected reference transaction description type %T", tx.Description)
 	}
 
-	vmPhase, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseVM)
-	if !ok {
-		return 0, 0, fmt.Errorf("unexpected reference tick/tock compute phase type %T", desc.ComputePhase.Phase)
+	switch phase := desc.ComputePhase.Phase.(type) {
+	case tlb.ComputePhaseVM:
+		return int64(phase.Details.ExitCode), phase.Details.GasUsed.Int64(), true, nil
+	case tlb.ComputePhaseSkipped:
+		return 0, 0, false, nil
+	default:
+		return 0, 0, false, fmt.Errorf("unexpected reference tick/tock compute phase type %T", desc.ComputePhase.Phase)
 	}
-
-	return int64(vmPhase.Details.ExitCode), vmPhase.Details.GasUsed.Int64(), nil
 }
 
 func referenceTickTockAccountState(shardCell *cell.Cell) (*cell.Cell, *cell.Cell, error) {

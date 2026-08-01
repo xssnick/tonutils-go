@@ -64,6 +64,73 @@ func TestPrefixDictionary_LookupPrefix(t *testing.T) {
 	}
 }
 
+func TestPrefixDictionary_SliceKeyViewSemantics(t *testing.T) {
+	dict := NewPrefixDict(8)
+	if err := dict.Set(mustPrefixKey(t, 0b10, 2), mustPrefixValue(t, 0xaa, 8)); err != nil {
+		t.Fatal(err)
+	}
+
+	// a key slice carrying trailing bits and refs: the lookup clamps to the key
+	// size and must leave the caller's refs alone
+	source := BeginCell().MustStoreUInt(0b1011001101, 10).
+		MustStoreRef(BeginCell().MustStoreUInt(1, 8).EndCell()).EndCell()
+
+	key := source.MustBeginParse()
+	var value Slice
+	matched, err := dict.LookupPrefixBySliceInto(key, &value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if matched != 2 {
+		t.Fatalf("matched = %d, want 2", matched)
+	}
+	if got := mustLoadTestValue(t, &value, 8); got != 0xaa {
+		t.Fatalf("value = %#x, want 0xaa", got)
+	}
+	if key.BitsLeft() != 10 || key.RefsNum() != 1 {
+		t.Fatalf("caller key consumed: %d bits, %d refs left", key.BitsLeft(), key.RefsNum())
+	}
+
+	// the mutating entry points reject an over-long key instead of clamping it
+	if _, err = dict.SetBuilderBySliceKeyWithMode(source.MustBeginParse(), BeginCell().MustStoreUInt(0xbb, 8), DictSetModeSet); err == nil {
+		t.Fatal("set accepted a key longer than the key size")
+	}
+	if _, err = dict.LoadValueAndDeleteBySliceKey(source.MustBeginParse()); err == nil {
+		t.Fatal("delete accepted a key longer than the key size")
+	}
+
+	// a within-size key slice mutates and must not consume the caller's refs
+	shortSource := BeginCell().MustStoreUInt(0b011, 3).
+		MustStoreRef(BeginCell().MustStoreUInt(2, 8).EndCell()).EndCell()
+
+	setKey := shortSource.MustBeginParse()
+	changed, err := dict.SetBuilderBySliceKeyWithMode(setKey, BeginCell().MustStoreUInt(0xbb, 8), DictSetModeSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("set reported no change")
+	}
+	if setKey.BitsLeft() != 3 || setKey.RefsNum() != 1 {
+		t.Fatalf("caller set key consumed: %d bits, %d refs left", setKey.BitsLeft(), setKey.RefsNum())
+	}
+
+	deleteKey := shortSource.MustBeginParse()
+	deleted, err := dict.LoadValueAndDeleteBySliceKey(deleteKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, deleted, 8); got != 0xbb {
+		t.Fatalf("deleted value = %#x, want 0xbb", got)
+	}
+	if deleteKey.BitsLeft() != 3 || deleteKey.RefsNum() != 1 {
+		t.Fatalf("caller delete key consumed: %d bits, %d refs left", deleteKey.BitsLeft(), deleteKey.RefsNum())
+	}
+	if _, err = dict.LoadValue(mustPrefixKey(t, 0b011, 3)); !errors.Is(err, ErrNoSuchKeyInDict) {
+		t.Fatalf("key survived delete: %v", err)
+	}
+}
+
 func TestPrefixDictionary_SetModesAndForkCollision(t *testing.T) {
 	dict := NewPrefixDict(8)
 

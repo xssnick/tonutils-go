@@ -441,6 +441,32 @@ func TestMarkExecutionProofStackNoopsAndPrimitiveValues(t *testing.T) {
 	}
 }
 
+func TestMarkExecutionProofSliceUsesBackingCellTraceFallback(t *testing.T) {
+	leaf := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	root := cell.BeginCell().MustStoreRef(leaf).EndCell()
+	tree := cell.NewCellUsageTree()
+
+	traced := root.WithTrace(tree.RootTrace())
+	slice, err := traced.BeginParseWithTrace(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slice.Trace() != nil || slice.RawCell().Trace() == nil {
+		t.Fatal("fixture does not have a slice-local nil trace over a traced backing cell")
+	}
+
+	if err = markExecutionProofValue(slice, tree, map[cell.Hash]struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if !tree.IsLoaded(tree.RootNode()) {
+		t.Fatal("backing-cell usage trace did not mark the root")
+	}
+	child := tree.GetChild(tree.RootNode(), 0)
+	if child == 0 || !tree.IsLoaded(child) {
+		t.Fatal("backing-cell usage trace did not mark the referenced subtree")
+	}
+}
+
 func TestExecuteDetailedWithAccountProofDoesNotFinalCommitGetMethodData(t *testing.T) {
 	code := cell.BeginCell().MustStoreRef(executionProofCodeTail(t, opexec.RET().Serialize())).EndCell()
 	data := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()

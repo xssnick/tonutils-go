@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -327,6 +328,147 @@ func TestFromBOCMultiRootReaderLazyConcurrentAccess(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestLazyBOCLoaderReleasesComputedMetaAfterFullMaterialization(t *testing.T) {
+	payload := []byte{
+		1, 2, 0xAB, 1,
+		0, 2, 0xCD,
+	}
+	loader := &lazyBOCLoader{
+		payload:    payload,
+		cells:      make([]bocPayloadCellInfo, 2),
+		refSzBytes: 1,
+		cache:      make([]atomic.Pointer[Cell], 2),
+	}
+	if err := loader.init([]uint32{0}, bocCellIndex{}); err != nil {
+		t.Fatal(err)
+	}
+	meta := loader.computedMeta.Load()
+	if meta == nil {
+		t.Fatal("computed metadata should remain available before lazy cells are materialized")
+	}
+	retainedBytes := len(meta.offsets)*4 + len(meta.hashes) + len(meta.depths)*depthSize
+	wantRetainedBytes := 2 * (4 + hashSize + depthSize)
+	if retainedBytes != wantRetainedBytes {
+		t.Fatalf("unexpected retained metadata size: got=%d want=%d", retainedBytes, wantRetainedBytes)
+	}
+
+	root, err := loader.loadDataCell(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boundary := root.rawRefs()[0]
+
+	const workers = 8
+	loaded := make([]*Cell, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := range loaded {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			cell, err := boundary.load()
+			if err != nil {
+				errs <- err
+				return
+			}
+			loaded[i] = cell
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err = range errs {
+		t.Fatal(err)
+	}
+
+	for i := 1; i < len(loaded); i++ {
+		if loaded[i] != loaded[0] {
+			t.Fatal("concurrent materialization should return the cached cell")
+		}
+	}
+	if loader.computedMeta.Load() != nil {
+		t.Fatal("computed metadata should be released after every cell is cached")
+	}
+	if again, err := boundary.load(); err != nil || again != loaded[0] {
+		t.Fatalf("cached cell should remain loadable after metadata release: cell=%p err=%v", again, err)
+	}
+
+	want := BeginCell().MustStoreUInt(0xAB, 8).
+		MustStoreRef(BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell()
+	if root.HashKey() != want.HashKey() {
+		t.Fatalf("unexpected materialized root hash: got=%x want=%x", root.Hash(), want.Hash())
+	}
+}
+
+func TestLazyBOCLoaderKeepsCachePolicyWithoutRawIndex(t *testing.T) {
+	payload := []byte{
+		2, 2, 0xAB, 1, 1,
+		0, 2, 0xCD,
+	}
+	indexData := []byte{10, 17}
+	loader := &lazyBOCLoader{
+		payload:    payload,
+		cells:      make([]bocPayloadCellInfo, 2),
+		refSzBytes: 1,
+		cache:      make([]atomic.Pointer[Cell], 2),
+	}
+	if err := loader.init([]uint32{0}, bocCellIndex{
+		data:         indexData,
+		offsetBytes:  1,
+		hasCacheBits: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The raw index belongs to the parser input and is no longer retained or
+	// consulted after initialization.
+	clear(indexData)
+
+	firstRoot, err := loader.loadDataCell(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRoot, err := loader.loadDataCell(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstRoot == secondRoot {
+		t.Fatal("uncached root should be materialized independently")
+	}
+
+	firstChild, err := firstRoot.rawRefs()[0].load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := secondRoot.rawRefs()[0].load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstChild != secondChild {
+		t.Fatal("cache-bit cell should keep stable pointer identity")
+	}
+	if loader.computedMeta.Load() == nil {
+		t.Fatal("metadata is still needed while uncached cells can be materialized again")
+	}
+}
+
+func TestLazyBOCLoaderRejectsInvalidCachePolicy(t *testing.T) {
+	loader := &lazyBOCLoader{
+		payload:    []byte{0, 2, 0xAB},
+		cells:      make([]bocPayloadCellInfo, 1),
+		refSzBytes: 1,
+	}
+	err := loader.init([]uint32{0}, bocCellIndex{
+		data:         []byte{7},
+		offsetBytes:  1,
+		hasCacheBits: true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid cache flag") {
+		t.Fatalf("expected invalid cache policy error, got %v", err)
 	}
 }
 

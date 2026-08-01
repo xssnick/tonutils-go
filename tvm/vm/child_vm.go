@@ -189,14 +189,14 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if err := s.ConsumeStackGasLen(retCnt); err != nil {
 		return err
 	}
-	if err := copyTopValuesToParent(s.Stack, child.Stack, retCnt); err != nil {
+	childTrace := child.Cells.Trace()
+	if err := copyTopValuesToParentWithTrace(s.Stack, child.Stack, retCnt, childTrace); err != nil {
 		return err
 	}
 	if err := s.Stack.PushSmallInt(exitCode); err != nil {
 		return err
 	}
 
-	childTrace := child.Cells.Trace()
 	if cfg.ReturnData {
 		data := childResultRegisterValue(child, child.Committed.Data, child.Reg.D[0])
 		data = unbindCellTrace(data, childTrace)
@@ -219,5 +219,35 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		}
 	}
 
+	return nil
+}
+
+func copyTopValuesToParentWithTrace(parent, child *Stack, count int, childTrace *cell.Trace) error {
+	if count <= 0 {
+		return nil
+	}
+
+	start := child.Len() - count
+	if start < 0 {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+
+	copier := continuationTraceCopier{trace: childTrace}
+	for _, val := range child.elems[start:] {
+		switch v := val.(type) {
+		case Continuation:
+			if err := parent.PushOwnedContinuation(copier.continuation(v)); err != nil {
+				return err
+			}
+			continue
+		case tuple.Tuple:
+			val = copier.returnTuple(v)
+		default:
+			val = unbindValueTrace(val, childTrace)
+		}
+		if err := parent.PushAny(val); err != nil {
+			return err
+		}
+	}
 	return nil
 }

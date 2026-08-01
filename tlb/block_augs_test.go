@@ -21,6 +21,72 @@ var mainnetBlockBOC []byte
 
 const legacyMsgDescrGlobalVersion = uint32(11)
 
+func buildAugmentationEmptyExtra(aug cell.Augmentation) (*cell.Cell, error) {
+	var dst cell.Builder
+	if err := aug.EmptyExtra(&dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+func buildAugmentationLeafExtra(aug cell.Augmentation, value *cell.Slice) (*cell.Cell, error) {
+	view, err := boundedAugmentationView(value)
+	if err != nil {
+		return nil, err
+	}
+	var dst cell.Builder
+	if err = aug.LeafExtra(&view, &dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+func buildAugmentationCombinedExtra(aug cell.Augmentation, left, right *cell.Slice) (*cell.Cell, error) {
+	leftView, err := boundedAugmentationView(left)
+	if err != nil {
+		return nil, err
+	}
+	rightView, err := boundedAugmentationView(right)
+	if err != nil {
+		return nil, err
+	}
+	var dst cell.Builder
+	if err = aug.CombineExtra(&leftView, &rightView, &dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+// boundedAugmentationView puts the input behind an unrelated bit prefix and
+// suffix. Augmentation implementations must consume only the supplied Slice
+// range; inspecting RawCell/BaseCell identity or metadata would observe the
+// wrapper instead of the augmentation value.
+func boundedAugmentationView(src *cell.Slice) (cell.Slice, error) {
+	var value cell.Builder
+	src.ToBuilderInto(&value)
+
+	var wrapper cell.Builder
+	if err := wrapper.StoreUInt(0b101, 3); err != nil {
+		return cell.Slice{}, err
+	}
+	if err := wrapper.StoreBuilder(&value); err != nil {
+		return cell.Slice{}, err
+	}
+	if err := wrapper.StoreUInt(0b11, 2); err != nil {
+		return cell.Slice{}, err
+	}
+
+	loader := wrapper.EndCell().MustBeginParse()
+	if err := loader.SkipBits(3); err != nil {
+		return cell.Slice{}, err
+	}
+	var view cell.Slice
+	if err := loader.FetchSubsliceInto(&view, value.BitsUsed(), value.RefsUsed()); err != nil {
+		return cell.Slice{}, err
+	}
+	return view, nil
+}
+
 func loadMainnetBlock(t *testing.T) *Block {
 	t.Helper()
 
@@ -102,7 +168,7 @@ func rebuildAugDictAndCompare(t *testing.T, name string, original, rebuilt *cell
 			t.Fatalf("%s: failed to capture extra %d: %v", name, i, err)
 		}
 
-		derivedExtra, err := aug.LeafExtra(item.Value.Copy())
+		derivedExtra, err := buildAugmentationLeafExtra(aug, item.Value.Copy())
 		if err != nil {
 			t.Fatalf("%s: failed to derive leaf extra %d (key %x): %v", name, i, item.Key.Hash(), err)
 		}
@@ -254,7 +320,7 @@ func TestAugAccountTransactionsRebuildFromMainnetBlock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			derived, err := AugAccountTransactions{}.LeafExtra(tx.Value.Copy())
+			derived, err := buildAugmentationLeafExtra(AugAccountTransactions{}, tx.Value.Copy())
 			if err != nil {
 				t.Fatalf("failed to derive tx %d extra: %v", i, err)
 			}
@@ -565,6 +631,9 @@ func TestAugShardAccountsSynthetic(t *testing.T) {
 	acc1 := synthAccountCell(t, addr1, big.NewInt(1_000_000_000), nil)
 	acc2 := synthAccountCell(t, addr2, big.NewInt(25), extra2)
 	accNone := cell.BeginCell().MustStoreBoolBit(false).EndCell() // account_none$0
+	if _, err := buildAugmentationLeafExtra(AugShardAccounts{}, synthShardAccountValue(t, acc1, 100).MustBeginParse()); err != nil {
+		t.Fatalf("ShardAccounts augmentation rejected a bounded value view: %v", err)
+	}
 
 	dict, err := NewShardAccountsAugDict()
 	if err != nil {
@@ -683,6 +752,9 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = buildAugmentationLeafExtra(AugOutMsgQueue{}, synthEnqueuedMsgValue(t, 500, nil).MustBeginParse()); err != nil {
+		t.Fatalf("OutMsgQueue augmentation rejected a bounded value view: %v", err)
+	}
 
 	// A v1 envelope uses the enclosed message's created_lt as its extra.
 	if err = dict.Set(queueKey(0x01), synthEnqueuedMsgValue(t, 500, nil)); err != nil {
@@ -756,6 +828,9 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 
 	valA := synthShardFeeCreatedValue(t, 100, 40, extraA)
 	valB := synthShardFeeCreatedValue(t, 23, 60, extraB)
+	if _, err = buildAugmentationLeafExtra(AugShardFees{}, valA.MustBeginParse()); err != nil {
+		t.Fatalf("ShardFees augmentation rejected a bounded value view: %v", err)
+	}
 
 	if err = dict.Set(shardFeeKey(0, 0x2000000000000000), valA); err != nil {
 		t.Fatal(err)

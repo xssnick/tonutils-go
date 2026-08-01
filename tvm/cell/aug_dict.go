@@ -11,11 +11,17 @@ var ErrAugmentationSemanticsUnavailable = errors.New("augmented dict was loaded 
 
 type AugmentedExtraSkipper func(*Slice) error
 
+// Augmentation computes HashmapAug extras directly into an empty destination
+// builder. Inputs are synchronous borrowed views that support Slice parsing
+// methods, ToCell and BaseCell; both return an owned, finalized cell.
+// Implementations must not use RawCell identity, hashes, levels, or metadata —
+// it exposes an unfinalized shell over reused mutation scratch — and must not
+// retain the Slice pointers after returning.
 type Augmentation interface {
 	SkipExtra(*Slice) error
-	EmptyExtra() (*Cell, error)
-	LeafExtra(value *Slice) (*Cell, error)
-	CombineExtra(leftExtra, rightExtra *Slice) (*Cell, error)
+	EmptyExtra(dst *Builder) error
+	LeafExtra(value *Slice, dst *Builder) error
+	CombineExtra(leftExtra, rightExtra *Slice, dst *Builder) error
 }
 
 type ReadOnlyAugmentation struct {
@@ -29,16 +35,16 @@ func (a ReadOnlyAugmentation) SkipExtra(loader *Slice) error {
 	return a.SkipExtraFn(loader)
 }
 
-func (a ReadOnlyAugmentation) EmptyExtra() (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (a ReadOnlyAugmentation) EmptyExtra(*Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
-func (a ReadOnlyAugmentation) LeafExtra(*Slice) (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (a ReadOnlyAugmentation) LeafExtra(*Slice, *Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
-func (a ReadOnlyAugmentation) CombineExtra(*Slice, *Slice) (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (a ReadOnlyAugmentation) CombineExtra(*Slice, *Slice, *Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
 type AugmentedDictionary struct {
@@ -53,19 +59,27 @@ type AugmentedDictionary struct {
 	trace *Trace
 }
 
+type augmentedMutationState struct {
+	extra                 Builder
+	node                  Builder
+	valueCell             Cell
+	value                 Slice
+	leftExtra, rightExtra Slice
+}
+
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
 	if aug == nil {
 		return nil, fmt.Errorf("augmentation is nil")
 	}
 
-	rootExtra, err := aug.EmptyExtra()
-	if err != nil {
+	var rootExtra Builder
+	if err := aug.EmptyExtra(&rootExtra); err != nil {
 		return nil, fmt.Errorf("failed to compute empty extra: %w", err)
 	}
 
 	return &AugmentedDictionary{
 		keySz:     keySz,
-		rootExtra: rootExtra,
+		rootExtra: rootExtra.EndCell(),
 		wrapped:   true,
 		aug:       aug,
 	}, nil
@@ -271,11 +285,11 @@ func (c *Slice) loadAugDictWithAugmentation(keySz uint, aug Augmentation) (*Augm
 		}
 
 		if hasSemantics {
-			expected, expectedErr := aug.EmptyExtra()
-			if expectedErr != nil {
-				return nil, fmt.Errorf("failed to compute augmented dict empty extra: %w", expectedErr)
+			var expected Builder
+			if err = aug.EmptyExtra(&expected); err != nil {
+				return nil, fmt.Errorf("failed to compute augmented dict empty extra: %w", err)
 			}
-			if !equalCellContents(rootExtra, expected) {
+			if !expected.EqualsCell(rootExtra) {
 				return nil, fmt.Errorf("augmented dict empty extra mismatch")
 			}
 		}
@@ -432,11 +446,11 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 		if d.aug == nil {
 			return nil, fmt.Errorf("augmentation is nil")
 		}
-		extra, err := d.aug.EmptyExtra()
-		if err != nil {
+		var extra Builder
+		if err := d.aug.EmptyExtra(&extra); err != nil {
 			return nil, err
 		}
-		return extra.BeginParse()
+		return extra.EndCell().BeginParse()
 	}
 
 	if d.aug == nil {
@@ -451,85 +465,148 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 }
 
 func (d *AugmentedDictionary) SetIntKey(key *big.Int, value *Cell) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	if value == nil {
+		return fmt.Errorf("value is nil")
+	}
+	if err := d.ensureWritable(); err != nil {
+		return err
+	}
 	var builder Builder
-	var cell Cell
-	initIntKeyCell(key, d.keySz, &builder, &cell)
-	_, err := d.SetWithMode(&cell, value, DictSetModeSet)
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	_, err := d.setBuilderWithModeSlice(&keySlice, value.ToBuilder(), DictSetModeSet)
 	return err
 }
 
 func (d *AugmentedDictionary) DeleteIntKey(key *big.Int) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	if err := d.ensureWritable(); err != nil {
+		return err
+	}
 	var builder Builder
-	var cell Cell
-	initIntKeyCell(key, d.keySz, &builder, &cell)
-	return d.Delete(&cell)
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	_, _, err := d.lookupDeleteWithExtraSlice(&keySlice)
+	return err
 }
 
 func (d *AugmentedDictionary) LoadValueByIntKey(key *big.Int) (*Slice, error) {
-	valueExtra, err := d.loadValueExtraByIntKey(key)
-	if err != nil {
-		return nil, err
-	}
-	value, _, err := d.decomposeValueExtra(valueExtra)
-	return value, err
-}
-
-func (d *AugmentedDictionary) LoadValueWithExtraByIntKey(key *big.Int) (*Slice, error) {
-	return d.loadValueExtraByIntKey(key)
-}
-
-func (d *AugmentedDictionary) loadValueExtraByIntKey(key *big.Int) (*Slice, error) {
-	var builder Builder
-	if err := builder.storeBigIntWrap(key, d.keySz); err != nil {
-		panic(err)
-	}
-	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
-	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	return (&Dictionary{keySz: d.keySz, root: d.root, trace: d.trace}).findKeySlice(&keySlice)
-}
-
-func (d *AugmentedDictionary) LoadValueWithExtra(key *Cell) (*Slice, error) {
-	return d.loadValueExtraSlice(key)
-}
-
-func (d *AugmentedDictionary) loadValueExtraSlice(key *Cell) (*Slice, error) {
-	if key == nil || key.BitsSize() != d.keySz {
-		return nil, fmt.Errorf("incorrect key size")
-	}
-	return (&Dictionary{
-		keySz: d.keySz,
-		root:  d.root,
-		trace: d.trace,
-	}).LoadValue(key)
-}
-
-func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
-	valueExtra, err := d.loadValueExtraSlice(key)
-	if err != nil {
-		return nil, err
-	}
-
-	value, _, err := d.decomposeValueExtra(valueExtra)
-	if err != nil {
+	value := new(Slice)
+	if err := d.LoadValueByIntKeyInto(key, value); err != nil {
 		return nil, err
 	}
 	return value, nil
 }
 
+func (d *AugmentedDictionary) LoadValueWithExtraByIntKey(key *big.Int) (*Slice, error) {
+	valueExtra := new(Slice)
+	if err := d.LoadValueWithExtraByIntKeyInto(key, valueExtra); err != nil {
+		return nil, err
+	}
+	return valueExtra, nil
+}
+
+// LoadValueWithExtraByIntKeyInto is LoadValueWithExtraByIntKey with
+// caller-owned result storage.
+func (d *AugmentedDictionary) LoadValueWithExtraByIntKeyInto(key *big.Int, valueExtra *Slice) error {
+	var builder Builder
+	initIntKeyBuilder(key, d.keySz, &builder)
+	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	plain := Dictionary{keySz: d.keySz, root: d.root, trace: d.trace}
+	return plain.findKeySliceInto(&keySlice, valueExtra)
+}
+
+// LoadValueByIntKeyInto is LoadValueByIntKey with caller-owned result storage.
+func (d *AugmentedDictionary) LoadValueByIntKeyInto(key *big.Int, value *Slice) error {
+	var valueExtra Slice
+	if err := d.LoadValueWithExtraByIntKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, nil)
+}
+
+func (d *AugmentedDictionary) LoadValueWithExtra(key *Cell) (*Slice, error) {
+	valueExtra := new(Slice)
+	if err := d.LoadValueWithExtraInto(key, valueExtra); err != nil {
+		return nil, err
+	}
+	return valueExtra, nil
+}
+
+// LoadValueWithExtraInto is LoadValueWithExtra with caller-owned result storage.
+func (d *AugmentedDictionary) LoadValueWithExtraInto(key *Cell, valueExtra *Slice) error {
+	if key == nil || key.BitsSize() != d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+	plain := Dictionary{
+		keySz: d.keySz,
+		root:  d.root,
+		trace: d.trace,
+	}
+	return plain.LoadValueInto(key, valueExtra)
+}
+
+func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
+	value := new(Slice)
+	if err := d.LoadValueInto(key, value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
+// LoadValueInto is LoadValue with caller-owned result storage.
+func (d *AugmentedDictionary) LoadValueInto(key *Cell, value *Slice) error {
+	var valueExtra Slice
+	if err := d.LoadValueWithExtraInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, nil)
+}
+
 func (d *AugmentedDictionary) LoadValueExtra(key *Cell) (*Slice, *Slice, error) {
-	valueExtra, err := d.loadValueExtraSlice(key)
-	if err != nil {
+	value := new(Slice)
+	extra := new(Slice)
+	if err := d.LoadValueExtraInto(key, value, extra); err != nil {
 		return nil, nil, err
 	}
-	return d.decomposeValueExtra(valueExtra)
+	return value, extra, nil
+}
+
+// LoadValueExtraInto is LoadValueExtra with caller-owned result storage. The
+// value and extra destinations must be distinct.
+func (d *AugmentedDictionary) LoadValueExtraInto(key *Cell, value, extra *Slice) error {
+	var valueExtra Slice
+	if err := d.LoadValueWithExtraInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
 }
 
 func (d *AugmentedDictionary) LoadValueExtraByIntKey(key *big.Int) (*Slice, *Slice, error) {
-	valueExtra, err := d.loadValueExtraByIntKey(key)
-	if err != nil {
+	value := new(Slice)
+	extra := new(Slice)
+	if err := d.LoadValueExtraByIntKeyInto(key, value, extra); err != nil {
 		return nil, nil, err
 	}
-	return d.decomposeValueExtra(valueExtra)
+	return value, extra, nil
+}
+
+// LoadValueExtraByIntKeyInto is LoadValueExtraByIntKey with caller-owned
+// result storage. The value and extra destinations must be distinct.
+func (d *AugmentedDictionary) LoadValueExtraByIntKeyInto(key *big.Int, value, extra *Slice) error {
+	var valueExtra Slice
+	if err := d.LoadValueWithExtraByIntKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
 }
 
 func (d *AugmentedDictionary) GetWithExtra(key *Cell) *Cell {
@@ -625,19 +702,27 @@ func (d *AugmentedDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode
 		return false, err
 	}
 
-	keySlice, err := key.BeginParse()
-	if err != nil {
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
 		return false, fmt.Errorf("failed to load key: %w", err)
 	}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
 
-	newRoot, rootExtra, changed, err := d.set(d.root, keySlice, d.keySz, value, mode)
+func (d *AugmentedDictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	var state augmentedMutationState
+	newRoot, rootExtra, changed, err := d.set(d.root, keySlice, d.keySz, value, mode, &state)
 	if err != nil {
 		return false, err
 	}
 	if !changed {
 		return false, nil
 	}
-	if err = d.setRootWithExtra(newRoot, rootExtra); err != nil {
+	rootExtraCell, err := rootExtra.ToCell()
+	if err != nil {
+		return false, err
+	}
+	if err = d.setRootWithExtra(newRoot, rootExtraCell); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -706,11 +791,8 @@ func (d *AugmentedDictionary) ensureWritable() error {
 	if d == nil || d.aug == nil {
 		return fmt.Errorf("augmentation is nil")
 	}
-	_, err := d.aug.EmptyExtra()
-	if err != nil {
-		return err
-	}
-	return nil
+	var extra Builder
+	return d.aug.EmptyExtra(&extra)
 }
 
 func (d *AugmentedDictionary) ensureRootExtra() (*Cell, error) {
@@ -721,12 +803,12 @@ func (d *AugmentedDictionary) ensureRootExtra() (*Cell, error) {
 		return nil, fmt.Errorf("augmentation is nil")
 	}
 	if d.root == nil {
-		extra, err := d.aug.EmptyExtra()
-		if err != nil {
+		var extra Builder
+		if err := d.aug.EmptyExtra(&extra); err != nil {
 			return nil, err
 		}
-		d.rootExtra = extra
-		return extra, nil
+		d.rootExtra = extra.EndCell()
+		return d.rootExtra, nil
 	}
 	extra, err := extractAugmentedNodeExtra(d.root, d.keySz, d.aug.SkipExtra)
 	if err != nil {
@@ -740,15 +822,36 @@ func (d *AugmentedDictionary) decomposeValueExtra(valueExtra *Slice) (*Slice, *S
 	if valueExtra == nil {
 		return nil, nil, ErrNoSuchKeyInDict
 	}
-
-	value := *valueExtra
-	if err := d.skipExtra(&value); err != nil {
+	value := new(Slice)
+	extra := new(Slice)
+	if err := d.decomposeValueExtraInto(valueExtra, value, extra); err != nil {
 		return nil, nil, err
 	}
-	extra := *valueExtra
-	extra.bitEnd = value.bitStart
-	extra.refEnd = value.refStart
-	return &value, &extra, nil
+	return value, extra, nil
+}
+
+func (d *AugmentedDictionary) decomposeValueExtraInto(valueExtra, value, extra *Slice) error {
+	if value == extra && extra != nil {
+		return fmt.Errorf("value and extra destinations must be distinct")
+	}
+
+	original := *valueExtra
+	valueBefore := *value
+	*value = original
+	if err := d.skipExtra(value); err != nil {
+		// Use the caller-owned destination as parsing scratch so the
+		// interface call does not force a temporary Slice onto the heap.
+		// Roll it back before returning to keep Into error paths atomic.
+		*value = valueBefore
+		return err
+	}
+
+	if extra != nil {
+		*extra = original
+		extra.bitEnd = value.bitStart
+		extra.refEnd = value.refStart
+	}
+	return nil
 }
 
 func augmentedNodeExtraView(node fixedDictNode, remaining uint, skipExtra AugmentedExtraSkipper) (Slice, error) {
@@ -768,6 +871,17 @@ func augmentedNodeExtraView(node fixedDictNode, remaining uint, skipExtra Augmen
 	return extra, nil
 }
 
+func extractAugmentedNodeExtraView(c *Cell, keySz uint, skipExtra AugmentedExtraSkipper) (Slice, error) {
+	node, err := parseFixedDictNode(c, keySz)
+	if err != nil {
+		return Slice{}, fmt.Errorf("failed to load augmented dict node: %w", err)
+	}
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return Slice{}, err
+	}
+	return augmentedNodeExtraView(node, keySz, skipExtra)
+}
+
 func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, error) {
 	if d == nil {
 		return nil, false, fmt.Errorf("dict is nil")
@@ -779,19 +893,30 @@ func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, er
 		return nil, false, err
 	}
 
-	keySlice, err := key.BeginParse()
-	if err != nil {
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
 		return nil, false, fmt.Errorf("failed to load key: %w", err)
 	}
+	return d.lookupDeleteWithExtraSlice(&keySlice)
+}
 
-	newRoot, rootExtra, removed, changed, err := d.delete(d.root, keySlice, d.keySz)
+func (d *AugmentedDictionary) lookupDeleteWithExtraSlice(keySlice *Slice) (*Slice, bool, error) {
+	var state augmentedMutationState
+	newRoot, rootExtra, removed, changed, err := d.delete(d.root, keySlice, d.keySz, &state)
 	if err != nil {
 		return nil, false, err
 	}
 	if !changed {
 		return nil, false, nil
 	}
-	if err = d.setRootWithExtra(newRoot, rootExtra); err != nil {
+	var rootExtraCell *Cell
+	if newRoot != nil {
+		rootExtraCell, err = rootExtra.ToCell()
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if err = d.setRootWithExtra(newRoot, rootExtraCell); err != nil {
 		return nil, false, err
 	}
 	return removed, true, nil
@@ -810,11 +935,11 @@ func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {
 
 	if root == nil {
 		if rootExtra == nil {
-			extra, err := d.aug.EmptyExtra()
-			if err != nil {
+			var extra Builder
+			if err := d.aug.EmptyExtra(&extra); err != nil {
 				return err
 			}
-			rootExtra = extra
+			rootExtra = extra.EndCell()
 		}
 		d.rootExtra = rootExtra
 		return nil
@@ -831,70 +956,73 @@ func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {
 	return nil
 }
 
-func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode) (*Cell, *Cell, bool, error) {
+func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode, state *augmentedMutationState) (*Cell, Slice, bool, error) {
 	if branch == nil {
 		if mode == DictSetModeReplace {
-			return nil, nil, false, nil
+			return nil, Slice{}, false, nil
 		}
-		leaf, extra, err := d.storeLeafWithExtra(pfx, value, keyOffset)
-		return leaf, extra, err == nil, err
+		leaf, leafExtra, err := d.storeLeafWithExtra(pfx, value, keyOffset, state)
+		return leaf, leafExtra, err == nil, err
 	}
 
-	s, err := branch.BeginParse()
+	node, err := parseFixedDictNode(branch, keyOffset)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to load branch: %w", err)
+		return nil, Slice{}, false, fmt.Errorf("failed to load branch: %w", err)
 	}
-
-	sz, kPart, err := readLabelView(keyOffset, s)
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return nil, Slice{}, false, err
 	}
+	sz, kPart := node.labelLen, node.label
 
 	bitsMatches, isNewRight, diverged, err := matchLabelView(kPart, sz, pfx)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+		return nil, Slice{}, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 
 	if !diverged {
 		if pfx.BitsLeft() == 0 {
 			if mode == DictSetModeAdd {
-				return branch, nil, false, nil
+				return branch, Slice{}, false, nil
 			}
 			kPartView := kPart
-			leaf, extra, err := d.storeLeafWithExtra(&kPartView, value, keyOffset)
-			return leaf, extra, err == nil, err
+			leaf, leafExtra, err := d.storeLeafWithExtra(&kPartView, value, keyOffset, state)
+			return leaf, leafExtra, err == nil, err
 		}
 
 		refIdx := int(pfx.MustLoadUInt(1))
-		ref, err := branch.PeekRef(refIdx)
+		ref, err := node.ref(refIdx)
 		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+			return nil, Slice{}, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 		}
 
 		nextKeyOffset := keyOffset - (bitsMatches + 1)
-		ref, refExtra, changed, err := d.set(ref, pfx, nextKeyOffset, value, mode)
+		ref, refExtra, changed, err := d.set(ref, pfx, nextKeyOffset, value, mode, state)
 		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+			return nil, Slice{}, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 		}
 		if !changed {
-			return branch, nil, false, nil
+			return branch, Slice{}, false, nil
 		}
 
 		if ref == nil {
-			return nil, nil, false, fmt.Errorf("set produced nil child")
+			return nil, Slice{}, false, fmt.Errorf("set produced nil child")
 		}
 
-		left, err := branch.PeekRef(0)
+		left, err := node.ref(0)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, Slice{}, false, err
 		}
-		right, err := branch.PeekRef(1)
+		right, err := node.ref(1)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, Slice{}, false, err
 		}
-		otherExtra, err := extractAugmentedNodeExtra(branch.MustPeekRef(refIdx^1), nextKeyOffset, d.aug.SkipExtra)
+		other, err := node.ref(refIdx ^ 1)
 		if err != nil {
-			return nil, nil, false, err
+			return nil, Slice{}, false, err
+		}
+		otherExtra, err := extractAugmentedNodeExtraView(other, nextKeyOffset, d.aug.SkipExtra)
+		if err != nil {
+			return nil, Slice{}, false, err
 		}
 		leftExtra, rightExtra := otherExtra, otherExtra
 		if refIdx == 0 {
@@ -906,135 +1034,148 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		}
 
 		kPartView := kPart
-		newBranch, extra, err := d.storeForkWithExtra(&kPartView, left, leftExtra, right, rightExtra, keyOffset)
-		return newBranch, extra, err == nil, err
+		newBranch, branchExtra, err := d.storeForkWithExtraSlices(&kPartView, left, &leftExtra, right, &rightExtra, keyOffset, state)
+		return newBranch, branchExtra, err == nil, err
 	}
 
 	if mode == DictSetModeReplace {
-		return branch, nil, false, nil
+		return branch, Slice{}, false, nil
 	}
 
 	prefixLabel, labelRemainder, err := fixedDictNode{label: kPart, labelLen: sz}.splitLabel(bitsMatches)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to split old child label: %w", err)
+		return nil, Slice{}, false, fmt.Errorf("failed to split old child label: %w", err)
 	}
 
 	oldChild := BeginCell()
 	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
-		return nil, nil, false, fmt.Errorf("failed to store old child label: %w", err)
+		return nil, Slice{}, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
-	if err = oldChild.StoreBuilderUncheckedDepth(s.ToBuilder()); err != nil {
-		return nil, nil, false, fmt.Errorf("failed to store old child payload: %w", err)
+	node.loader.ToBuilderInto(&state.extra)
+	if err = oldChild.StoreBuilderUncheckedDepth(&state.extra); err != nil {
+		return nil, Slice{}, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
-	oldExtra, err := extractAugmentedNodeExtra(branch, keyOffset, d.aug.SkipExtra)
+	oldExtra, err := augmentedNodeExtraView(node, keyOffset, d.aug.SkipExtra)
 	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to extract old child extra: %w", err)
+		return nil, Slice{}, false, fmt.Errorf("failed to extract old child extra: %w", err)
+	}
+	oldChildCell := oldChild.EndCell()
+
+	newChild, newExtra, err := d.storeLeafWithExtra(pfx, value, keyOffset-(bitsMatches+1), state)
+	if err != nil {
+		return nil, Slice{}, false, fmt.Errorf("failed to store new child leaf: %w", err)
 	}
 
-	newChild, newExtra, err := d.storeLeafWithExtra(pfx, value, keyOffset-(bitsMatches+1))
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
-	}
-
-	left, right := newChild, oldChild.EndCell()
+	left, right := newChild, oldChildCell
 	leftExtra, rightExtra := newExtra, oldExtra
 	if isNewRight {
 		left, right = right, left
 		leftExtra, rightExtra = rightExtra, leftExtra
 	}
 
-	newBranch, extra, err := d.storeForkWithExtra(prefixLabel, left, leftExtra, right, rightExtra, keyOffset)
-	return newBranch, extra, err == nil, err
+	newBranch, branchExtra, err := d.storeForkWithExtraSlices(prefixLabel, left, &leftExtra, right, &rightExtra, keyOffset, state)
+	return newBranch, branchExtra, err == nil, err
 }
 
-func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (*Cell, *Cell, *Slice, bool, error) {
+func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, *Slice, bool, error) {
 	if branch == nil {
-		return nil, nil, nil, false, nil
+		return nil, Slice{}, nil, false, nil
 	}
 
-	s, err := branch.BeginParse()
+	node, err := parseFixedDictNode(branch, keyOffset)
 	if err != nil {
-		return nil, nil, nil, false, fmt.Errorf("failed to load branch: %w", err)
+		return nil, Slice{}, nil, false, fmt.Errorf("failed to load branch: %w", err)
 	}
-
-	sz, kPart, err := loadLabel(keyOffset, s, BeginCell())
-	if err != nil {
-		return nil, nil, nil, false, fmt.Errorf("failed to load label: %w", err)
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return nil, Slice{}, nil, false, err
 	}
+	sz, kPart := node.labelLen, node.label
 
-	bitsMatches, err := consumeCommonPrefix(builderSliceView(kPart), pfx, sz)
+	label := kPart
+	bitsMatches, err := commonSlicePrefix(&label, pfx, sz)
 	if err != nil {
-		return nil, nil, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+		return nil, Slice{}, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 	if bitsMatches < sz {
-		return branch, nil, nil, false, nil
+		return branch, Slice{}, nil, false, nil
+	}
+	if err = pfx.SkipBits(sz); err != nil {
+		return nil, Slice{}, nil, false, fmt.Errorf("failed to consume key prefix: %w", err)
 	}
 
 	if pfx.BitsLeft() == 0 {
-		return nil, nil, s, true, nil
+		removed := node.loader
+		return nil, Slice{}, &removed, true, nil
 	}
 
 	refIdx := int(pfx.MustLoadUInt(1))
-	ref, err := branch.PeekRef(refIdx)
+	ref, err := node.ref(refIdx)
 	if err != nil {
-		return nil, nil, nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+		return nil, Slice{}, nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 	}
 
 	nextKeyOffset := keyOffset - (bitsMatches + 1)
-	ref, refExtra, removed, changed, err := d.delete(ref, pfx, nextKeyOffset)
+	ref, refExtra, removed, changed, err := d.delete(ref, pfx, nextKeyOffset, state)
 	if err != nil {
-		return nil, nil, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+		return nil, Slice{}, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 	}
 	if !changed {
-		return branch, nil, nil, false, nil
+		return branch, Slice{}, nil, false, nil
 	}
 
 	if ref == nil {
 		otherIdx := refIdx ^ 1
-		otherRef, err := branch.PeekRef(otherIdx)
+		otherRef, err := node.ref(otherIdx)
 		if err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
 		}
 
-		slc, err := otherRef.BeginParse()
+		otherNode, err := parseFixedDictNode(otherRef, nextKeyOffset)
 		if err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+		if err = otherNode.rejectSpecial("augmented dict"); err != nil {
+			return nil, Slice{}, nil, false, err
+		}
+		otherExtra, err := augmentedNodeExtraView(otherNode, nextKeyOffset, d.aug.SkipExtra)
+		if err != nil {
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to extract neighbour extra: %w", err)
 		}
 
-		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
+		var mergedLabel Builder
+		if err = mergedLabel.storeSliceFromSlice(&kPart, sz); err != nil {
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to append base label: %w", err)
+		}
+		if err = mergedLabel.StoreUInt(uint64(otherIdx), 1); err != nil {
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to append neighbour edge bit: %w", err)
+		}
+		otherLabel := otherNode.labelSlice()
+		if err = mergedLabel.storeSliceFromSlice(&otherLabel, otherNode.labelLen); err != nil {
+			return nil, Slice{}, nil, false, fmt.Errorf("failed to append neighbour label: %w", err)
+		}
+		otherNode.loader.ToBuilderInto(&state.extra)
+		merged, err := d.storeNode(builderSliceView(&mergedLabel), &state.extra, keyOffset)
 		if err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
-		}
-		otherExtra, err := extractAugmentedNodeExtra(otherRef, nextKeyOffset, d.aug.SkipExtra)
-		if err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to extract neighbour extra: %w", err)
-		}
-
-		if err = kPart.StoreUInt(uint64(otherIdx), 1); err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to append neighbour edge bit: %w", err)
-		}
-		if err = kPart.StoreBuilder(otherLabel); err != nil {
-			return nil, nil, nil, false, fmt.Errorf("failed to append neighbour label: %w", err)
-		}
-
-		merged, err := d.storeNode(builderSliceView(kPart), slc.ToBuilder(), keyOffset)
-		if err != nil {
-			return nil, nil, nil, false, err
+			return nil, Slice{}, nil, false, err
 		}
 		return merged, otherExtra, removed, true, nil
 	}
 
-	left, err := branch.PeekRef(0)
+	left, err := node.ref(0)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, Slice{}, nil, false, err
 	}
-	right, err := branch.PeekRef(1)
+	right, err := node.ref(1)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, Slice{}, nil, false, err
 	}
-	otherExtra, err := extractAugmentedNodeExtra(branch.MustPeekRef(refIdx^1), nextKeyOffset, d.aug.SkipExtra)
+	otherRef, err := node.ref(refIdx ^ 1)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, Slice{}, nil, false, err
+	}
+	otherExtra, err := extractAugmentedNodeExtraView(otherRef, nextKeyOffset, d.aug.SkipExtra)
+	if err != nil {
+		return nil, Slice{}, nil, false, err
 	}
 	leftExtra, rightExtra := otherExtra, otherExtra
 	if refIdx == 0 {
@@ -1045,38 +1186,62 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint) (
 		rightExtra = refExtra
 	}
 
-	newBranch, extra, err := d.storeForkWithExtra(builderSliceView(kPart), left, leftExtra, right, rightExtra, keyOffset)
+	newBranch, branchExtra, err := d.storeForkWithExtraSlices(&kPart, left, &leftExtra, right, &rightExtra, keyOffset, state)
 	if err != nil {
-		return nil, nil, nil, false, err
+		return nil, Slice{}, nil, false, err
 	}
-	return newBranch, extra, removed, true, nil
+	return newBranch, branchExtra, removed, true, nil
 }
 
-func (d *AugmentedDictionary) storeLeafWithExtra(keyPfx *Slice, value *Builder, keyOffset uint) (*Cell, *Cell, error) {
+func (d *AugmentedDictionary) storeLeafWithExtra(keyPfx *Slice, value *Builder, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, error) {
 	if value == nil {
-		return nil, nil, nil
+		return nil, Slice{}, nil
 	}
 
-	extra, err := d.aug.LeafExtra(value.ToSlice())
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to compute leaf extra: %w", err)
+	refs := value.rawRefs()
+	state.valueCell = Cell{data: value.data[:value.usedBytes()], bitsSz: uint16(value.bitsSz)}
+	state.valueCell.setRefs(refs)
+	// The shell stands in for the cell EndCell would have produced, so it needs
+	// that cell's level mask: without it a pruned-branch ref makes ToCell/BaseCell
+	// on the borrowed value fail boundary validation. Refs at level 0 give 0.
+	state.valueCell.setLevelMask(ordinaryLevelMask(refs))
+	state.value = Slice{
+		cell:              &state.valueCell,
+		bitEnd:            state.valueCell.bitsSz,
+		refEnd:            value.refsNum,
+		forceCopyOnToCell: true,
+	}
+	state.extra = Builder{}
+	if err := d.aug.LeafExtra(&state.value, &state.extra); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to compute leaf extra: %w", err)
 	}
 
-	b := BeginCell().SetTrace(d.trace)
-	if err = storeDictLabel(b, keyPfx, keyOffset); err != nil {
-		return nil, nil, fmt.Errorf("failed to store label: %w", err)
+	state.node = Builder{trace: d.trace}
+	b := &state.node
+	if err := storeDictLabel(b, keyPfx, keyOffset); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to store label: %w", err)
 	}
-	if err = b.StoreBuilder(extra.ToBuilder()); err != nil {
-		return nil, nil, fmt.Errorf("failed to store leaf extra: %w", err)
+	extraBitStart, extraRefStart := b.bitsSz, b.refsNum
+	if err := b.StoreBuilder(&state.extra); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to store leaf extra: %w", err)
 	}
-	if err = b.StoreBuilder(value); err != nil {
-		return nil, nil, fmt.Errorf("failed to store value: %w", err)
+	extraBitEnd, extraRefEnd := b.bitsSz, b.refsNum
+	if err := b.StoreBuilder(value); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to store value: %w", err)
 	}
-	return b.EndCell(), extra, nil
+	leaf := b.EndCell()
+	return leaf, Slice{
+		cell:     leaf,
+		bitStart: uint16(extraBitStart),
+		bitEnd:   uint16(extraBitEnd),
+		refStart: extraRefStart,
+		refEnd:   extraRefEnd,
+	}, nil
 }
 
 func (d *AugmentedDictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*Cell, error) {
-	leaf, _, err := d.storeLeafWithExtra(keyPfx, value, keyOffset)
+	var state augmentedMutationState
+	leaf, _, err := d.storeLeafWithExtra(keyPfx, value, keyOffset, &state)
 	return leaf, err
 }
 
@@ -1097,31 +1262,49 @@ func (d *AugmentedDictionary) storeForkWithExtra(label *Slice, left, leftExtra, 
 	if err := rightExtra.BeginParseInto(&rightExtraSlice); err != nil {
 		return nil, nil, fmt.Errorf("failed to load right extra: %w", err)
 	}
-	return d.storeForkWithExtraSlices(label, left, &leftExtraSlice, right, &rightExtraSlice, keyOffset)
+	var state augmentedMutationState
+	fork, extraView, err := d.storeForkWithExtraSlices(label, left, &leftExtraSlice, right, &rightExtraSlice, keyOffset, &state)
+	if err != nil {
+		return nil, nil, err
+	}
+	extraCell, err := extraView.ToCell()
+	if err != nil {
+		return nil, nil, err
+	}
+	return fork, extraCell, nil
 }
 
-func (d *AugmentedDictionary) storeForkWithExtraSlices(label *Slice, left *Cell, leftExtra *Slice, right *Cell, rightExtra *Slice, keyOffset uint) (*Cell, *Cell, error) {
-	leftExtraCopy := *leftExtra
-	rightExtraCopy := *rightExtra
-	extra, err := d.aug.CombineExtra(&leftExtraCopy, &rightExtraCopy)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to compute fork extra: %w", err)
+func (d *AugmentedDictionary) storeForkWithExtraSlices(label *Slice, left *Cell, leftExtra *Slice, right *Cell, rightExtra *Slice, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, error) {
+	state.leftExtra = *leftExtra
+	state.rightExtra = *rightExtra
+	state.extra = Builder{}
+	if err := d.aug.CombineExtra(&state.leftExtra, &state.rightExtra, &state.extra); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to compute fork extra: %w", err)
 	}
 
-	b := BeginCell().SetTrace(d.trace)
-	if err = storeDictLabel(b, label, keyOffset); err != nil {
-		return nil, nil, fmt.Errorf("failed to store label: %w", err)
+	state.node = Builder{trace: d.trace}
+	b := &state.node
+	if err := storeDictLabel(b, label, keyOffset); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to store label: %w", err)
 	}
-	if err = b.StoreRef(left); err != nil {
-		return nil, nil, err
+	if err := b.StoreRef(left); err != nil {
+		return nil, Slice{}, err
 	}
-	if err = b.StoreRef(right); err != nil {
-		return nil, nil, err
+	if err := b.StoreRef(right); err != nil {
+		return nil, Slice{}, err
 	}
-	if err = b.StoreBuilder(extra.ToBuilder()); err != nil {
-		return nil, nil, fmt.Errorf("failed to store fork extra: %w", err)
+	extraBitStart, extraRefStart := b.bitsSz, b.refsNum
+	if err := b.StoreBuilder(&state.extra); err != nil {
+		return nil, Slice{}, fmt.Errorf("failed to store fork extra: %w", err)
 	}
-	return b.EndCell(), extra, nil
+	fork := b.EndCell()
+	return fork, Slice{
+		cell:     fork,
+		bitStart: uint16(extraBitStart),
+		bitEnd:   uint16(b.bitsSz),
+		refStart: extraRefStart,
+		refEnd:   b.refsNum,
+	}, nil
 }
 
 func (d *AugmentedDictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
@@ -1175,7 +1358,8 @@ func augmentationSupportsSemantics(aug Augmentation) (bool, error) {
 		return false, fmt.Errorf("augmentation is nil")
 	}
 
-	_, err := aug.EmptyExtra()
+	var extra Builder
+	err := aug.EmptyExtra(&extra)
 	if err == nil {
 		return true, nil
 	}
@@ -1233,7 +1417,11 @@ func validateAugmentedDictNode(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 
 func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, error) {
 	if c == nil {
-		return aug.EmptyExtra()
+		var extra Builder
+		if err := aug.EmptyExtra(&extra); err != nil {
+			return nil, err
+		}
+		return extra.EndCell(), nil
 	}
 
 	if c.IsSpecial() {
@@ -1254,20 +1442,20 @@ func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, er
 	}
 
 	if labelLen == keySz {
-		valueExtra := loader.Copy()
-		storedExtra, err := captureConsumedPrefix(valueExtra, aug.SkipExtra)
+		valueExtra := *loader
+		storedExtra, err := captureConsumedPrefix(&valueExtra, aug.SkipExtra)
 		if err != nil {
 			return nil, fmt.Errorf("invalid augmented dict leaf extra: %w", err)
 		}
 
-		computedExtra, err := aug.LeafExtra(valueExtra.Copy())
-		if err != nil {
+		var computedExtra Builder
+		if err := aug.LeafExtra(&valueExtra, &computedExtra); err != nil {
 			return nil, err
 		}
-		if !equalCellContents(storedExtra, computedExtra) {
+		if !computedExtra.EqualsCell(storedExtra) {
 			return nil, fmt.Errorf("augmented dict leaf extra mismatch")
 		}
-		return computedExtra, nil
+		return computedExtra.EndCell(), nil
 	}
 
 	left, err := loader.LoadRefCell()
@@ -1296,23 +1484,22 @@ func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, er
 		return nil, fmt.Errorf("invalid right branch: %w", err)
 	}
 
-	leftExtraSlice, err := leftExtra.BeginParse()
-	if err != nil {
+	var leftExtraSlice, rightExtraSlice Slice
+	if err := leftExtra.BeginParseInto(&leftExtraSlice); err != nil {
 		return nil, fmt.Errorf("failed to load left extra: %w", err)
 	}
-	rightExtraSlice, err := rightExtra.BeginParse()
-	if err != nil {
+	if err := rightExtra.BeginParseInto(&rightExtraSlice); err != nil {
 		return nil, fmt.Errorf("failed to load right extra: %w", err)
 	}
 
-	computedExtra, err := aug.CombineExtra(leftExtraSlice, rightExtraSlice)
-	if err != nil {
+	var computedExtra Builder
+	if err := aug.CombineExtra(&leftExtraSlice, &rightExtraSlice, &computedExtra); err != nil {
 		return nil, err
 	}
-	if !equalCellContents(storedExtra, computedExtra) {
+	if !computedExtra.EqualsCell(storedExtra) {
 		return nil, fmt.Errorf("augmented dict fork extra mismatch")
 	}
-	return computedExtra, nil
+	return computedExtra.EndCell(), nil
 }
 
 func extractAugmentedNodeExtra(c *Cell, keySz uint, skipExtra AugmentedExtraSkipper) (*Cell, error) {

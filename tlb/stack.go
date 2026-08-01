@@ -3,15 +3,18 @@ package tlb
 import (
 	"errors"
 	"fmt"
-	"github.com/xssnick/tonutils-go/address"
-	"github.com/xssnick/tonutils-go/tvm/vm"
+	"math"
 	"math/big"
 	"reflect"
 
+	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 var ErrStackEmpty = errors.New("stack is empty")
+
+const maxStackDepth = 1024
 
 type Stack struct {
 	top *StackElement
@@ -34,6 +37,19 @@ func NewStackFromVM(s *vm.Stack) (*Stack, error) {
 	ns := &Stack{}
 	for range s.Len() {
 		val, err := s.PopAny()
+		if err != nil {
+			return nil, err
+		}
+		ns.Push(val)
+	}
+
+	return ns, nil
+}
+
+func newStackFromVMView(s *vm.Stack) (*Stack, error) {
+	ns := &Stack{}
+	for i := 0; i < s.Len(); i++ {
+		val, err := s.Get(i)
 		if err != nil {
 			return nil, err
 		}
@@ -72,6 +88,10 @@ func (s *Stack) Pop() (any, error) {
 }
 
 func (s *Stack) ToCell() (*cell.Cell, error) {
+	return s.toCell(newContinuationEncoder())
+}
+
+func (s *Stack) toCell(encoder *continuationEncoder) (*cell.Cell, error) {
 	var unwrap []*StackElement
 	elem := s.top
 	for elem != nil {
@@ -79,8 +99,13 @@ func (s *Stack) ToCell() (*cell.Cell, error) {
 		elem = elem.next
 	}
 
+	// C++ Stack::serialize bounds the depth only by the uint24 field and by the
+	// cell depth limit reached while building the list, maxStackDepth is enforced
+	// on the parsing side alone.
 	root := cell.BeginCell()
-	root.MustStoreUInt(uint64(len(unwrap)), 24) // depth
+	if err := root.StoreUInt(uint64(len(unwrap)), 24); err != nil {
+		return nil, fmt.Errorf("failed to store stack depth: %w", err)
+	}
 
 	if len(unwrap) == 0 {
 		return root.EndCell(), nil
@@ -89,10 +114,12 @@ func (s *Stack) ToCell() (*cell.Cell, error) {
 	next := cell.BeginCell()
 	for i := 0; i < len(unwrap); i++ {
 		b := cell.BeginCell()
-		b.MustStoreRef(next.EndCell())
+		if err := b.StoreRef(next.EndCell()); err != nil {
+			return nil, fmt.Errorf("failed to store %d stack element rest: %w", i, err)
+		}
 
-		if err := SerializeStackValue(b, unwrap[i].value); err != nil {
-			return nil, fmt.Errorf("faled to serialize %d stack element: %w", i, err)
+		if err := serializeStackValue(b, unwrap[i].value, encoder); err != nil {
+			return nil, fmt.Errorf("failed to serialize %d stack element: %w", i, err)
 		}
 
 		next = b
@@ -107,11 +134,14 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("failed to load depth, err: %w", err)
 	}
 
-	// reset stack
-	s.top = nil
+	if depth > maxStackDepth {
+		return fmt.Errorf("stack depth exceeds %d", maxStackDepth)
+	}
 
+	var loaded Stack
 	next := loader
 	for i := uint64(0); i < depth; i++ {
+		current := next
 		ref, err := next.LoadRef()
 		if err != nil {
 			return fmt.Errorf("failed to load stack next ref, err: %w", err)
@@ -122,17 +152,38 @@ func (s *Stack) LoadFromCell(loader *cell.Slice) error {
 			return fmt.Errorf("failed to parse stack value, err: %w", err)
 		}
 
-		s.Push(val)
+		if i > 0 && (current.BitsLeft() != 0 || current.RefsNum() != 0) {
+			return fmt.Errorf("stack cons cell %d has trailing data", i)
+		}
+
+		loaded.Push(val)
 
 		next = ref
 	}
+	if depth > 0 && (next.BitsLeft() != 0 || next.RefsNum() != 0) {
+		return fmt.Errorf("stack nil cell has trailing data")
+	}
 
+	s.top = loaded.top
 	return nil
 }
 
 func SerializeStackValue(b *cell.Builder, val any) error {
+	return serializeStackValue(b, val, newContinuationEncoder())
+}
+
+func serializeStackValue(b *cell.Builder, val any, encoder *continuationEncoder) error {
+	var err error
+	val, err = vmStackValueToTLB(val)
+	if err != nil {
+		return fmt.Errorf("failed to convert vm stack value: %w", err)
+	}
+
 	if vl, ok := val.(*big.Int); ok {
-		if vl.BitLen() < 64 {
+		if vl == nil {
+			return errors.New("cannot serialize nil big integer")
+		}
+		if vl.IsInt64() {
 			val = vl.Int64()
 		}
 	}
@@ -159,44 +210,52 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 		vl := reflect.ValueOf(v).Convert(reflect.TypeOf(int64(0))).Interface().(int64)
 		b.MustStoreInt(vl, 64)
 	case uint:
-		// https://github.com/ton-blockchain/ton/blob/24dc184a2ea67f9c47042b4104bbb4d82289fac1/crypto/vm/stack.cpp#L739
+		if uint64(v) <= math.MaxInt64 {
+			b.MustStoreUInt(0x01, 8)
+			b.MustStoreInt(int64(v), 64)
+			break
+		}
+
 		b.MustStoreUInt(0x0200/2, 15)
-		b.MustStoreBigInt(new(big.Int).SetUint64(uint64(v)), 257)
+		if err := b.StoreBigInt(new(big.Int).SetUint64(uint64(v)), 257); err != nil {
+			return fmt.Errorf("failed to store stack integer: %w", err)
+		}
 	case uint64:
+		if v <= math.MaxInt64 {
+			b.MustStoreUInt(0x01, 8)
+			b.MustStoreInt(int64(v), 64)
+			break
+		}
+
 		b.MustStoreUInt(0x0200/2, 15)
-		b.MustStoreBigInt(new(big.Int).SetUint64(v), 257)
+		if err := b.StoreBigInt(new(big.Int).SetUint64(v), 257); err != nil {
+			return fmt.Errorf("failed to store stack integer: %w", err)
+		}
 	case *big.Int:
 		b.MustStoreUInt(0x0200/2, 15)
-		b.MustStoreBigInt(v, 257)
+		if err := b.StoreBigInt(v, 257); err != nil {
+			return fmt.Errorf("failed to store stack integer: %w", err)
+		}
 
 	case StackNaN:
 		b.MustStoreSlice([]byte{0x02, 0xFF}, 16)
 	case *cell.Cell:
 		b.MustStoreUInt(0x03, 8)
-		b.MustStoreRef(v)
-	case *cell.Slice:
-		b.MustStoreUInt(0x04, 8)
-
-		base := v.BaseCell()
-		if base == nil {
-			base = cell.BeginCell().EndCell()
+		// deep values fail the cell depth limit, like CellBuilder in the
+		// reference VM; that must be an error, not a panic
+		if err := b.StoreRef(v); err != nil {
+			return err
 		}
-		b.MustStoreRef(base)
-		start, end := v.BitRange()
-		startRef, endRef := v.RefRange()
-
-		// start data offset
-		b.MustStoreUInt(uint64(start), 10)
-		// end data offset
-		b.MustStoreUInt(uint64(end), 10)
-
-		// start refs offset
-		b.MustStoreUInt(uint64(startRef), 3)
-		// end refs offset
-		b.MustStoreUInt(uint64(endRef), 3)
+	case *cell.Slice:
+		return serializeStackSlice(b, v, true)
 	case *cell.Builder:
 		b.MustStoreUInt(0x05, 8)
-		b.MustStoreRef(v.EndCell())
+		if err := b.StoreRef(v.EndCell()); err != nil {
+			return err
+		}
+	case vm.Continuation:
+		b.MustStoreUInt(0x06, 8)
+		return encoder.serialize(b, v)
 	case []any:
 		b.MustStoreUInt(0x07, 8)
 		b.MustStoreUInt(uint64(len(v)), 16)
@@ -212,20 +271,26 @@ func SerializeStackValue(b *cell.Builder, val any) error {
 				if err := dive(n, i-1); err != nil {
 					return err
 				}
-				b.MustStoreRef(n.EndCell())
+				if err := b.StoreRef(n.EndCell()); err != nil {
+					return err
+				}
 			} else if i == 1 {
 				n2 := cell.BeginCell()
-				if err := SerializeStackValue(n2, v[i-1]); err != nil {
-					return fmt.Errorf("faled to serialize tuple %d element: %w", i-1, err)
+				if err := serializeStackValue(n2, v[i-1], encoder); err != nil {
+					return fmt.Errorf("failed to serialize tuple %d element: %w", i-1, err)
 				}
-				b.MustStoreRef(n2.EndCell())
+				if err := b.StoreRef(n2.EndCell()); err != nil {
+					return err
+				}
 			}
 
 			n2 := cell.BeginCell()
-			if err := SerializeStackValue(n2, v[i]); err != nil {
-				return fmt.Errorf("faled to serialize tuple %d element: %w", i, err)
+			if err := serializeStackValue(n2, v[i], encoder); err != nil {
+				return fmt.Errorf("failed to serialize tuple %d element: %w", i, err)
 			}
-			b.MustStoreRef(n2.EndCell())
+			if err := b.StoreRef(n2.EndCell()); err != nil {
+				return err
+			}
 
 			return nil
 		}
@@ -286,59 +351,22 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 		}
 		return val.MustToCell(), nil
 	case 0x04:
-		val, err := slice.LoadRef()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
-		}
-
-		start, err := slice.LoadUInt(10)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load slice stack value's start, err: %w", err)
-		}
-		end, err := slice.LoadUInt(10)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load slice stack value's end, err: %w", err)
-		}
-		if start > end {
-			return nil, fmt.Errorf("start index > end index")
-		}
-
-		startRef, err := slice.LoadUInt(3)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load slice stack value's start ref, err: %w", err)
-		}
-		endRef, err := slice.LoadUInt(3)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load slice stack value's end ref, err: %w", err)
-		}
-		if startRef > endRef {
-			return nil, fmt.Errorf("start ref index > end ref index")
-		}
-		if endRef > 4 {
-			return nil, fmt.Errorf("end ref index > 4")
-		}
-
-		if err = val.SkipBitsAndRefs(uint(start), int(startRef)); err != nil {
-			return nil, fmt.Errorf("failed to skip slice stack value's prefix, err: %w", err)
-		}
-		out, err := val.PreloadSubslice(uint(end-start), int(endRef-startRef))
-		if err != nil {
-			return nil, fmt.Errorf("failed to load slice stack value, err: %w", err)
-		}
-		return out, nil
+		return parseStackSlice(slice)
 	case 0x05:
 		val, err := slice.LoadRef()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load cell stack value, err: %w", err)
 		}
 		return val.MustToCell().ToBuilder(), nil
+	case 0x06:
+		return parseContinuation(slice)
 	case 0x07:
 		ln, err := slice.LoadUInt(16)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load tuple stack value's len, err: %w", err)
 		}
 
-		var tuple []any
+		tuple := make([]any, 0)
 
 		if ln == 0 {
 			return tuple, nil
@@ -353,6 +381,9 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 			val, err := ParseStackValue(ref)
 			if err != nil {
 				return fmt.Errorf("failed to parse tuple's %d value, err: %w", i, err)
+			}
+			if ref.BitsLeft() != 0 || ref.RefsNum() != 0 {
+				return fmt.Errorf("tuple's %d value has trailing data", i)
 			}
 			tuple = append(tuple, val)
 
@@ -374,6 +405,9 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 				if err = dive(i-1, next); err != nil {
 					return err
 				}
+				if next.BitsLeft() != 0 || next.RefsNum() != 0 {
+					return fmt.Errorf("tuple's %d pair has trailing data", i)
+				}
 			} else if i == 1 {
 				if err := loadValue(0, root); err != nil {
 					return err
@@ -391,4 +425,84 @@ func ParseStackValue(slice *cell.Slice) (any, error) {
 	}
 
 	return nil, errors.New("unknown value type")
+}
+
+func serializeStackSlice(b *cell.Builder, value *cell.Slice, withTag bool) error {
+	if value == nil {
+		return fmt.Errorf("slice stack value is nil")
+	}
+	if withTag {
+		if err := b.StoreUInt(0x04, 8); err != nil {
+			return fmt.Errorf("failed to store slice stack value type: %w", err)
+		}
+	}
+
+	base := value.BaseCell()
+	if base == nil {
+		base = cell.BeginCell().EndCell()
+	}
+	if err := b.StoreRef(base); err != nil {
+		return fmt.Errorf("failed to store slice stack value cell: %w", err)
+	}
+
+	start, end := value.BitRange()
+	startRef, endRef := value.RefRange()
+	if err := b.StoreUInt(uint64(start), 10); err != nil {
+		return fmt.Errorf("failed to store slice stack value start: %w", err)
+	}
+	if err := b.StoreUInt(uint64(end), 10); err != nil {
+		return fmt.Errorf("failed to store slice stack value end: %w", err)
+	}
+	if err := b.StoreUInt(uint64(startRef), 3); err != nil {
+		return fmt.Errorf("failed to store slice stack value start ref: %w", err)
+	}
+	if err := b.StoreUInt(uint64(endRef), 3); err != nil {
+		return fmt.Errorf("failed to store slice stack value end ref: %w", err)
+	}
+
+	return nil
+}
+
+func parseStackSlice(slice *cell.Slice) (*cell.Slice, error) {
+	value, err := slice.LoadRef()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value cell: %w", err)
+	}
+
+	start, err := slice.LoadUInt(10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value's start: %w", err)
+	}
+	end, err := slice.LoadUInt(10)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value's end: %w", err)
+	}
+	if start > end {
+		return nil, fmt.Errorf("start index > end index")
+	}
+
+	startRef, err := slice.LoadUInt(3)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value's start ref: %w", err)
+	}
+	endRef, err := slice.LoadUInt(3)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value's end ref: %w", err)
+	}
+	if startRef > endRef {
+		return nil, fmt.Errorf("start ref index > end ref index")
+	}
+	if endRef > 4 {
+		return nil, fmt.Errorf("end ref index > 4")
+	}
+
+	if err = value.SkipBitsAndRefs(uint(start), int(startRef)); err != nil {
+		return nil, fmt.Errorf("failed to skip slice stack value's prefix: %w", err)
+	}
+	out, err := value.PreloadSubslice(uint(end-start), int(endRef-startRef))
+	if err != nil {
+		return nil, fmt.Errorf("failed to load slice stack value: %w", err)
+	}
+
+	return out, nil
 }

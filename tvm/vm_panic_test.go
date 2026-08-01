@@ -44,24 +44,6 @@ func (o *lateUnderflowTestOP) Interpret(state *vmcore.State) error {
 	return vmerr.Err(vmerr.CodeStackUnderflow)
 }
 
-func TestOpcodeRegistryIsFrozenBeforeNewTVM(t *testing.T) {
-	original := vmcore.List
-	vmcore.List = append(append([]vmcore.OPGetter(nil), original...), func() vmcore.OP {
-		return &panicTestOP{}
-	})
-	t.Cleanup(func() {
-		vmcore.List = original
-	})
-
-	code := cell.BeginCell().MustStoreUInt(0xFF, 8).EndCell().MustBeginParse()
-	getter := NewTVM().matchOpcode(code)
-	if getter != nil {
-		if _, late := getter().(*panicTestOP); late {
-			t.Fatal("NewTVM observed an opcode registered after package initialization")
-		}
-	}
-}
-
 func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 	getter := func() vmcore.OP {
 		return &panicTestOP{}

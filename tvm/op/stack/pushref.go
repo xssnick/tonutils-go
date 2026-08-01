@@ -66,12 +66,19 @@ func PUSHREFSLICE(value *cell.Slice) *OpPUSHREFSLICE {
 	return PUSHSLICE(value)
 }
 
-func beginPushRefCell(state *vm.State, ref *cell.Cell) (*cell.Slice, error) {
+func beginPushRefCell(state *vm.State, ref *cell.Cell, trace *cell.Trace) (*cell.Slice, error) {
+	value := new(cell.Slice)
 	if !ref.IsLazy() && !ref.IsSpecial() {
 		if err := state.Cells.RegisterCellLoad(ref); err != nil {
 			return nil, err
 		}
-		return state.Cells.BeginParseAlreadyLoadedRaw(ref)
+		if err := state.Cells.BeginParseAlreadyLoadedIntoWithTrace(ref, trace, value); err != nil {
+			return nil, err
+		}
+		return value, nil
 	}
-	return state.Cells.BeginParse(ref)
+	if err := state.Cells.BeginParseIntoWithTrace(ref, trace, value); err != nil {
+		return nil, err
+	}
+	return value, nil
 }

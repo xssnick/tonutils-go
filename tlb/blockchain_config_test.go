@@ -3,6 +3,7 @@ package tlb
 import (
 	"errors"
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -389,6 +390,76 @@ func TestBlockchainConfigGetSizeLimitsConfig(t *testing.T) {
 		}
 		if v1.MaxMsgBits != 100 || v1.MaxExtMsgDepth != 105 {
 			t.Fatalf("unexpected parsed size limits: %+v", v1)
+		}
+	})
+
+	t.Run("parsed v3 round trip", func(t *testing.T) {
+		maxTransactionLibraryLoads := uint32(0x2e2f3031)
+		expected := SizeLimitsConfigV3{
+			MaxMsgBits:                  0x01020304,
+			MaxMsgCells:                 0x05060708,
+			MaxLibraryCells:             0x090a0b0c,
+			MaxVMDataDepth:              0x0d0e,
+			MaxExtMsgSize:               0x0f101112,
+			MaxExtMsgDepth:              0x1314,
+			MaxAccStateCells:            0x15161718,
+			MaxMCAccStateCells:          0x191a1b1c,
+			MaxAccPublicLibraries:       0x1d1e1f20,
+			DeferOutQueueSizeLimit:      0x21222324,
+			MaxMsgExtraCurrencies:       0x25262728,
+			MaxAccFixedPrefixLength:     0x29,
+			AccStateCellsForStorageDict: 0x2a2b2c2d,
+			MaxTransactionLibraryLoads:  &maxTransactionLibraryLoads,
+			MaxTotalMsgBits:             0x32333435,
+			MaxTotalMsgCells:            0x36373839,
+		}
+
+		paramCell := cell.BeginCell().
+			MustStoreUInt(0x03, 8).
+			MustStoreUInt(0x01020304, 32).
+			MustStoreUInt(0x05060708, 32).
+			MustStoreUInt(0x090a0b0c, 32).
+			MustStoreUInt(0x0d0e, 16).
+			MustStoreUInt(0x0f101112, 32).
+			MustStoreUInt(0x1314, 16).
+			MustStoreUInt(0x15161718, 32).
+			MustStoreUInt(0x191a1b1c, 32).
+			MustStoreUInt(0x1d1e1f20, 32).
+			MustStoreUInt(0x21222324, 32).
+			MustStoreUInt(0x25262728, 32).
+			MustStoreUInt(0x29, 8).
+			MustStoreUInt(0x2a2b2c2d, 32).
+			MustStoreBoolBit(true).
+			MustStoreUInt(0x2e2f3031, 32).
+			MustStoreUInt(0x32333435, 32).
+			MustStoreUInt(0x36373839, 32).
+			EndCell()
+
+		cfg := BlockchainConfig{
+			Root: mustBlockchainConfigRoot(t, map[uint32]*cell.Cell{
+				ConfigParamSizeLimits: paramCell,
+			}),
+		}
+
+		limits, err := cfg.GetSizeLimitsConfig()
+		if err != nil {
+			t.Fatalf("GetSizeLimitsConfig failed: %v", err)
+		}
+
+		v3, ok := limits.Config.(SizeLimitsConfigV3)
+		if !ok {
+			t.Fatalf("unexpected parsed size limits type: %T", limits.Config)
+		}
+		if !reflect.DeepEqual(v3, expected) {
+			t.Fatalf("unexpected parsed size limits: got=%+v want=%+v", v3, expected)
+		}
+
+		roundTrip, err := ToCell(&v3)
+		if err != nil {
+			t.Fatalf("ToCell round trip failed: %v", err)
+		}
+		if roundTrip.HashKey() != paramCell.HashKey() {
+			t.Fatal("size limits v3 round trip hash mismatch")
 		}
 	})
 }

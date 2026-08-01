@@ -199,19 +199,22 @@ type transactionRuntimeAccount struct {
 	addrExact           *address.Address
 	addrRewriteDepth    uint64
 	addrIdentityDerived bool
-	status              tlb.AccountStatus
-	storageInfo         tlb.StorageInfo
-	balance             *big.Int
-	extraCurrencies     *cell.Dictionary
-	code                *cell.Cell
-	data                *cell.Cell
-	libraries           *cell.Dictionary
-	inMsgLibraries      *cell.Dictionary
-	stateDepth          *uint64
-	tickTock            *tlb.TickTock
-	stateHash           []byte
-	storageLT           uint64
-	storageCell         *cell.Cell
+	// removeAnycast is set only after compute preparation crosses the v10
+	// disable-anycast boundary; earlier skips preserve the raw account address.
+	removeAnycast   bool
+	status          tlb.AccountStatus
+	storageInfo     tlb.StorageInfo
+	balance         *big.Int
+	extraCurrencies *cell.Dictionary
+	code            *cell.Cell
+	data            *cell.Cell
+	libraries       *cell.Dictionary
+	inMsgLibraries  *cell.Dictionary
+	stateDepth      *uint64
+	tickTock        *tlb.TickTock
+	stateHash       []byte
+	storageLT       uint64
+	storageCell     *cell.Cell
 	// storageCellForStat is storageCell without the extra-currency dict (the
 	// extra-currency v2 stat form), threaded from the previous transaction of
 	// the account so it is not re-derived per transaction; nil when unknown.
@@ -222,11 +225,11 @@ type transactionRuntimeAccount struct {
 	// which masterchain accounts and pre-v11 configs never have. Only this
 	// executor sets it, so a dict that arrived from anywhere else stays
 	// untrusted. Zero means "no provenance".
-	statBoundTo cell.Hash
-	prevTxHash  []byte
-	prevTxLT           uint64
-	originalCell       *cell.Cell
-	isSpecial          bool
+	statBoundTo  cell.Hash
+	prevTxHash   []byte
+	prevTxLT     uint64
+	originalCell *cell.Cell
+	isSpecial    bool
 }
 
 func (a *transactionRuntimeAccount) rawAddress() *address.Address {
@@ -296,6 +299,8 @@ type transactionCurrencyBalance struct {
 type transactionSizeLimits struct {
 	maxMsgBits                  uint64
 	maxMsgCells                 uint64
+	maxTotalMsgBits             uint64
+	maxTotalMsgCells            uint64
 	maxLibraryCells             uint64
 	maxExtMsgDepth              uint16
 	maxAccStateCells            uint64
@@ -512,6 +517,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 
 	computeAcc := runtimeAcc
 	msgStateUsed := false
+	removeAnycast := false
 	var skipReason *tlb.ComputeSkipReason
 	var gas vm.Gas
 	if prepared.balance.Sign() <= 0 {
@@ -533,6 +539,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 			if opts.BuildProof && msgStateUsed && skipReason == nil {
 				return nil, errors.New("account execution proof cannot be built for code loaded from message state init")
 			}
+			removeAnycast = computeAcc.removeAnycast
 			if skipReason == nil {
 				gas, skipReason = transactionApplyPrecompiledGasConfig(blockchainCfg, computeAcc.code, runtimeAcc.addr, isSpecial, gas, env)
 			}
@@ -660,7 +667,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	if err != nil {
 		return nil, err
 	}
-	nextAccount, err := buildTransactionAccountCell(computeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, opts.AccountStorageStat)
+	nextAccount, err := buildTransactionAccountCell(computeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, removeAnycast, blockchainCfg, opts.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
@@ -772,6 +779,8 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	}
 
 	var msgRes *MessageExecutionResult
+	// A tick/tock skipped before VM startup keeps the raw anycast address.
+	removeAnycast := skipReason == nil && blockchainCfg.globalVersion() >= 10 && runtimeAcc.rawAddress().Anycast() != nil
 	if skipReason == nil {
 		msgRes, err = tvm.executeTickTockTransaction(runtimeAcc, isTock, env, gas)
 		if err != nil {
@@ -853,7 +862,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	if err != nil {
 		return nil, err
 	}
-	nextAccount, err := buildTransactionAccountCell(runtimeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, blockchainCfg, opts.AccountStorageStat)
+	nextAccount, err := buildTransactionAccountCell(runtimeAcc, accountStatus, finalBalance, nextExtraCurrencies, endLT, prepared.lastPaid, prepared.duePayment, nextCode, nextData, nextLibraries, nextStateHash, removeAnycast, blockchainCfg, opts.AccountStorageStat)
 	if err != nil {
 		return nil, err
 	}
@@ -1031,13 +1040,6 @@ func transactionExecutionLogicalTime(prevTxLT uint64, configured int64) int64 {
 
 func transactionBlockLogicalTime(startLT uint64) int64 {
 	return int64(startLT - startLT%transactionLTAlignment)
-}
-
-func transactionInt64OrZero(v *big.Int) int64 {
-	if v == nil || !v.IsInt64() {
-		return 0
-	}
-	return v.Int64()
 }
 
 func (c *transactionCurrencyBalance) asTuple() tuple.Tuple {

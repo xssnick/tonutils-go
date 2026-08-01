@@ -242,6 +242,15 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			if err != nil {
 				return nil, err
 			}
+			if globalVersion >= 15 && !sendRes.skipped && !sendRes.ignored && sendRes.resultCode == 0 {
+				limits := transactionGetSizeLimits(cfg)
+				projectedUsage := transactionAddUsage(totalUsage, sendRes.usage)
+				if projectedUsage.bits > limits.maxTotalMsgBits || projectedUsage.cells > limits.maxTotalMsgCells {
+					sendRes.actionFine.Set(sendRes.failActionFine)
+					sendRes.failActionFine.SetInt64(0)
+					sendRes = transactionSendResultCode(sendRes, act.Mode, 47, globalVersion)
+				}
+			}
 			if sendRes.actionFine.Sign() > 0 {
 				fine := transactionMinBig(sendRes.actionFine, remainingBalance.grams)
 				remainingBalance.grams.Sub(remainingBalance.grams, fine)

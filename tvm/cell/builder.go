@@ -984,6 +984,51 @@ func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
 	return b.StoreSlice(data[:], sz)
 }
 
+// StoreSliceFrom stores all remaining bits and references of slice directly,
+// without materializing an intermediate Builder.
+func (b *Builder) StoreSliceFrom(slice *Slice) error {
+	return b.storeSliceView(slice, true)
+}
+
+// StoreSliceFromUncheckedDepth is StoreSliceFrom without checking the depth of
+// referenced cells. It is intended for TVM paths which enforce depth elsewhere.
+func (b *Builder) StoreSliceFromUncheckedDepth(slice *Slice) error {
+	return b.storeSliceView(slice, false)
+}
+
+func (b *Builder) storeSliceView(slice *Slice, checkDepth bool) error {
+	refsNum := slice.RefsNum()
+	if int(b.refsNum)+refsNum > 4 {
+		return ErrTooMuchRefs
+	}
+	bits := slice.BitsLeft()
+	if b.bitsSz+bits >= 1024 {
+		return ErrNotFit1023
+	}
+
+	var refs [4]*Cell
+	for i := 0; i < refsNum; i++ {
+		refIdx := int(slice.refStart) + i
+		refs[i] = slice.withChildTrace(slice.boundaryRefCellAt(i), refIdx)
+	}
+	if checkDepth {
+		if err := validateCellRefDepthLimit(refs[:refsNum]); err != nil {
+			return err
+		}
+	}
+
+	// storeSliceFromSlice is the consuming helper used by dictionary walkers.
+	// This public store operation must preserve the caller's slice cursor, like
+	// the old ToBuilder + StoreBuilder path did.
+	view := *slice
+	if err := b.storeSliceFromSlice(&view, bits); err != nil {
+		return err
+	}
+	copy(b.refs[b.refsNum:], refs[:refsNum])
+	b.refsNum += uint8(refsNum)
+	return nil
+}
+
 func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
 	err := b.StoreBuilder(builder)
 	if err != nil {
@@ -1059,14 +1104,24 @@ func (b *Builder) truncateBits(sz uint) {
 }
 
 func (b *Builder) Copy() *Builder {
-	cp := &Builder{
+	cp := new(Builder)
+	return b.CopyInto(cp)
+}
+
+// CopyInto copies the builder into dst without allocating.
+func (b *Builder) CopyInto(dst *Builder) *Builder {
+	if b == dst {
+		return dst
+	}
+
+	*dst = Builder{
 		trace:   b.trace,
 		bitsSz:  b.bitsSz,
 		refsNum: b.refsNum,
 	}
-	copy(cp.data[:], b.dataSlice())
-	copy(cp.refs[:], b.rawRefs())
-	return cp
+	copy(dst.data[:], b.dataSlice())
+	copy(dst.refs[:], b.rawRefs())
+	return dst
 }
 
 func BeginCell() *Builder {

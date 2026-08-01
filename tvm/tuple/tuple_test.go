@@ -59,6 +59,36 @@ func TestTupleBindingHelpers(t *testing.T) {
 	}
 }
 
+func TestTupleAppendMaintainsSnapshotSummary(t *testing.T) {
+	original := NewTupleValue(big.NewInt(1))
+	if original.NeedsValueSnapshot() {
+		t.Fatal("scalar tuple unexpectedly needs a snapshot")
+	}
+
+	copyTuple := original.Copy()
+	copyTuple.Append(cell.BeginCell().EndCell().MustBeginParse())
+	if !copyTuple.NeedsValueSnapshot() {
+		t.Fatal("appended slice was not reflected in the snapshot summary")
+	}
+	if original.NeedsValueSnapshot() {
+		t.Fatal("append mutated the original persistent tuple")
+	}
+
+	copyTuple.Append(big.NewInt(2))
+	if !copyTuple.NeedsValueSnapshot() {
+		t.Fatal("appending a scalar cleared the snapshot summary")
+	}
+
+	nested := NewTupleValue(original)
+	if nested.NeedsValueSnapshot() {
+		t.Fatal("nested scalar tuple unexpectedly needs a snapshot")
+	}
+	nested.Append(copyTuple)
+	if !nested.NeedsValueSnapshot() {
+		t.Fatal("appended nested mutable tuple was not reflected in the snapshot summary")
+	}
+}
+
 func TestNewTupleSizedRejectsNegativeSize(t *testing.T) {
 	defer func() {
 		if recover() == nil {

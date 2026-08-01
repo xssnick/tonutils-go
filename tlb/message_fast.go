@@ -181,10 +181,6 @@ func messageLayoutChoices(layout *MessageLayout) (initChoice, bodyChoice eitherC
 	return eitherAuto.forRef(layout.StateInitInRef), eitherAuto.forRef(layout.BodyInRef)
 }
 
-func storeMaybeStateInitEither(builder *cell.Builder, state *StateInit) error {
-	return storeMaybeStateInitEitherAs(builder, state, eitherAuto)
-}
-
 func storeMaybeStateInitEitherAs(builder *cell.Builder, state *StateInit, choice eitherChoice) error {
 	if state == nil {
 		return builder.StoreBoolBit(false)
@@ -232,10 +228,6 @@ func loadMessageBody(loader *cell.Slice) (*cell.Cell, error) {
 		return nil, err
 	}
 	return body, nil
-}
-
-func storeMessageBody(builder *cell.Builder, body *cell.Cell) error {
-	return storeMessageBodyAs(builder, body, eitherAuto)
 }
 
 func storeMessageBodyAs(builder *cell.Builder, body *cell.Cell, choice eitherChoice) error {

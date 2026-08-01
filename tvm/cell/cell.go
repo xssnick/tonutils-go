@@ -77,6 +77,14 @@ func (c *Cell) BeginParseWithTrace(trace *Trace) (*Slice, error) {
 	return c.beginParseWithTrace(trace)
 }
 
+// BeginParseIntoWithTrace parses the cell into dst using trace instead of the
+// trace attached to the cell. It is the allocation-free form of
+// BeginParseWithTrace for traversal loops that keep trace context separately
+// from immutable cells.
+func (c *Cell) BeginParseIntoWithTrace(dst *Slice, trace *Trace) error {
+	return c.beginParseIntoWithTrace(dst, trace)
+}
+
 func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
 	s := new(Slice)
 	if err := c.beginParseIntoWithTrace(s, trace); err != nil {
@@ -168,18 +176,24 @@ func (c *Cell) withTraceCombined(trace *Trace) *Cell {
 }
 
 func (c *Cell) ToBuilder() *Builder {
+	b := new(Builder)
+	return c.ToBuilderInto(b)
+}
+
+// ToBuilderInto copies the cell into dst without allocating a Builder.
+func (c *Cell) ToBuilderInto(dst *Builder) *Builder {
 	refCnt := c.refsCount()
-	var b Builder
-	b.bitsSz = uint(c.bitsSz)
-	copy(b.data[:], c.data)
-	if rem := b.bitsSz % 8; rem != 0 {
-		b.data[b.bitsSz/8] &= byte(0xFF << (8 - rem))
+	*dst = Builder{}
+	dst.bitsSz = uint(c.bitsSz)
+	copy(dst.data[:], c.data)
+	if rem := dst.bitsSz % 8; rem != 0 {
+		dst.data[dst.bitsSz/8] &= byte(0xFF << (8 - rem))
 	}
 
-	b.refsNum = uint8(refCnt)
-	copy(b.refs[:], c.refs[:refCnt])
+	dst.refsNum = uint8(refCnt)
+	copy(dst.refs[:], c.refs[:refCnt])
 
-	return &b
+	return dst
 }
 
 func (c *Cell) BitsSize() uint {

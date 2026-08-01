@@ -1967,6 +1967,88 @@ func TestTransactionFailedActionTotalActionFeesV4Boundary(t *testing.T) {
 	}
 }
 
+func TestTransactionApplyActionsTotalMessageLimitsV15(t *testing.T) {
+	msg := buildTransactionOutboundInternalCell(t, 100_000_000)
+	unlimitedCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 15),
+		tlb.ConfigParamSizeLimits:    transactionTestSizeLimitsV3Cell(t, ^uint32(0), ^uint32(0)),
+	})
+	one := applyTransactionSendActionForTestWithParams(
+		t,
+		tlb.ActionSendMsg{Mode: 1, Msg: msg},
+		unlimitedCfg,
+		big.NewInt(2_000_000_000),
+		nil,
+		transactionZeroCurrencyBalance(),
+	)
+	if one.phase == nil || !one.phase.Success || one.phase.MessagesCreated != 1 {
+		t.Fatalf("failed to measure one outbound message: %+v", one.phase)
+	}
+	maxBits := uint32(one.phase.TotalMsgSize.Bits.Uint64())
+	maxCells := uint32(one.phase.TotalMsgSize.Cells.Uint64())
+
+	for _, tc := range []struct {
+		name         string
+		version      uint32
+		secondMode   uint8
+		wantSuccess  bool
+		wantCode     int32
+		wantSkipped  uint16
+		wantMessages uint16
+	}{
+		{name: "v14_not_enforced", version: 14, secondMode: 1, wantSuccess: true, wantMessages: 2},
+		{name: "v15_result_47", version: 15, secondMode: 1, wantCode: 47, wantMessages: 1},
+		{name: "v15_mode_2_skips", version: 15, secondMode: 3, wantSuccess: true, wantSkipped: 1, wantMessages: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, tc.version),
+				tlb.ConfigParamSizeLimits:    transactionTestSizeLimitsV3Cell(t, maxBits, maxCells),
+			})
+			out := applyTransactionActionsForTestWithParams(t, []any{
+				tlb.ActionSendMsg{Mode: 1, Msg: msg},
+				tlb.ActionSendMsg{Mode: tc.secondMode, Msg: msg},
+			}, cfg, big.NewInt(2_000_000_000), nil, transactionZeroCurrencyBalance())
+
+			if out.phase == nil {
+				t.Fatal("action phase is nil")
+			}
+			if out.phase.Success != tc.wantSuccess || !out.phase.Valid || out.phase.ResultCode != tc.wantCode {
+				t.Fatalf("action result = success:%t valid:%t code:%d, want success:%t valid:true code:%d", out.phase.Success, out.phase.Valid, out.phase.ResultCode, tc.wantSuccess, tc.wantCode)
+			}
+			if out.phase.SkippedActions != tc.wantSkipped || out.phase.MessagesCreated != tc.wantMessages {
+				t.Fatalf("action counts = skipped:%d messages:%d, want skipped:%d messages:%d", out.phase.SkippedActions, out.phase.MessagesCreated, tc.wantSkipped, tc.wantMessages)
+			}
+		})
+	}
+}
+
+func transactionTestSizeLimitsV3Cell(t *testing.T, maxTotalBits, maxTotalCells uint32) *cell.Cell {
+	t.Helper()
+
+	limits, err := tlb.ToCell(&tlb.SizeLimitsConfigV3{
+		MaxMsgBits:                  1 << 21,
+		MaxMsgCells:                 1 << 13,
+		MaxLibraryCells:             1_000,
+		MaxVMDataDepth:              512,
+		MaxExtMsgSize:               65_535,
+		MaxExtMsgDepth:              512,
+		MaxAccStateCells:            1 << 16,
+		MaxMCAccStateCells:          1 << 11,
+		MaxAccPublicLibraries:       256,
+		DeferOutQueueSizeLimit:      256,
+		MaxMsgExtraCurrencies:       2,
+		MaxAccFixedPrefixLength:     8,
+		AccStateCellsForStorageDict: 26,
+		MaxTotalMsgBits:             maxTotalBits,
+		MaxTotalMsgCells:            maxTotalCells,
+	})
+	if err != nil {
+		t.Fatalf("failed to build v3 size limits: %v", err)
+	}
+	return limits
+}
+
 func assertTransactionLibraryStored(t *testing.T, libs *cell.Dictionary, lib *cell.Cell, wantPublic bool) {
 	t.Helper()
 

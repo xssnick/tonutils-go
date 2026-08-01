@@ -2,6 +2,8 @@ package vm
 
 import (
 	"fmt"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -81,6 +83,7 @@ func (p continuationStackPlan) buildCallStack(s *State) (*Stack, error) {
 		// copy=-1 : pass whole stack, else pass top `cp` elements, drop next `skip` elements.
 		if p.hasCapturedStack() {
 			newStack := p.data.Stack.Copy()
+			newStack.SetTrace(cell.CombineTraces(newStack.trace, s.Cells.Trace()))
 			copyCount := p.cp
 			if copyCount < 0 {
 				copyCount = s.Stack.Len()
@@ -150,6 +153,7 @@ func (p continuationStackPlan) applyJumpStack(s *State) error {
 			}
 
 			newStack := p.data.Stack.Copy()
+			newStack.SetTrace(cell.CombineTraces(newStack.trace, s.Cells.Trace()))
 			if copyCount > 0 {
 				if err := newStack.MoveFrom(s.Stack, copyCount); err != nil {
 					return err
@@ -256,6 +260,16 @@ func (s *State) Jump(c Continuation) error {
 	return s.JumpTo(c)
 }
 
+// JumpToCode performs the common ordinary-continuation jump when there is no
+// control-data adjustment. It lets implicit/ref opcodes keep the parsed code
+// window in caller-owned scratch instead of allocating a one-shot
+// OrdinaryContinuation and Slice.
+func (s *State) JumpToCode(code *cell.Slice, cp int) error {
+	s.TraceStack("[JUMP]", s.Stack)
+	s.adoptCurrentCode(code)
+	return applyContinuationCodepage(s, cp)
+}
+
 func (s *State) JumpArgs(c Continuation, passArgs int) error {
 	c, err := s.adjustJumpCont(c, passArgs)
 	if err != nil {
@@ -331,6 +345,7 @@ func (s *State) ExtractCurrentContinuation(saveCR, stackCopy, ccArgs int) (*Ordi
 		}
 	} else {
 		newStack = NewStack()
+		newStack.trace = s.Stack.trace
 		capturedStack = s.Stack
 	}
 

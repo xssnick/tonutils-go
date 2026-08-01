@@ -274,7 +274,7 @@ func STSLICEQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
+			if err = dst.StoreSliceFromUncheckedDepth(sl); err != nil {
 				return err
 			}
 			if err = state.Stack.PushOwnedBuilder(dst); err != nil {
@@ -342,7 +342,7 @@ func STSLICER() *helpers.SimpleOP {
 			if !dst.CanExtendBy(sl.BitsLeft(), uint(sl.RefsNum())) {
 				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
+			if err = dst.StoreSliceFromUncheckedDepth(sl); err != nil {
 				return err
 			}
 			return state.Stack.PushOwnedBuilder(dst)
@@ -519,7 +519,7 @@ func STSLICERQ() *helpers.SimpleOP {
 				}
 				return pushStoreQuietStatus(state, true)
 			}
-			if err = dst.StoreBuilderUncheckedDepth(sl.ToBuilder()); err != nil {
+			if err = dst.StoreSliceFromUncheckedDepth(sl); err != nil {
 				return err
 			}
 			if err = state.Stack.PushOwnedBuilder(dst); err != nil {

@@ -3,6 +3,11 @@ package tvm
 import (
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
+	"runtime/debug"
+	"sync"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	_ "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	_ "github.com/xssnick/tonutils-go/tvm/op/dict"
@@ -14,10 +19,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
-	"os"
-	"runtime/debug"
-	"sync"
 )
 
 type trieNode struct {
@@ -64,7 +65,10 @@ func init() {
 }
 
 func NewTVM() *TVM {
-	return &TVM{dispatches: getSharedOpcodeDispatches()}
+	return newTVM(
+		vm.List,
+		frozenOpcodeRegistry,
+	)
 }
 
 func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
@@ -73,16 +77,16 @@ func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispat
 }
 
 func buildSharedOpcodeDispatches() {
-	sharedOpcodeDispatches = buildOpcodeDispatches()
+	sharedOpcodeDispatches = buildOpcodeDispatches(frozenOpcodeRegistry)
 }
 
-func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+func buildOpcodeDispatches(registry []vm.OPGetter) [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 	var dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
 	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 		dispatches[ver] = newOpcodeDispatch()
 	}
 
-	for _, opGetter := range frozenOpcodeRegistry {
+	for _, opGetter := range registry {
 		op := opGetter()
 		getter := opGetter
 		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
@@ -297,10 +301,6 @@ func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
 	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
 }
 
-func (dispatch *opcodeDispatch) match(code *cell.Slice) vm.OPGetter {
-	return matchOpcode(dispatch, code)
-}
-
 func matchOpcode(dispatch *opcodeDispatch, code *cell.Slice) vm.OPGetter {
 	available := code.BitsLeft()
 	if available == 0 {
@@ -366,10 +366,6 @@ func matchOpcodeFast(dispatch *opcodeDispatch, code *cell.Slice, available uint)
 	}
 
 	return matched
-}
-
-func (dispatch *opcodeDispatch) matchSlow(code *cell.Slice, available uint) vm.OPGetter {
-	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
 }
 
 func matchOpcodeSlow(root *trieNode, maxPrefixLen uint, code *cell.Slice, available uint) vm.OPGetter {
@@ -518,7 +514,7 @@ func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options exe
 	state.CurrentCode = currentCode
 	state.Reg.C[3] = &vm.OrdinaryContinuation{
 		Data: vm.ControlData{
-			CP:      vm.CP,
+			CP:      state.CP,
 			NumArgs: vm.ControlDataAllArgs,
 		},
 		Code: currentCode.Copy(),
@@ -713,10 +709,6 @@ func (tvm *TVM) dispatchForVersion(version int) *opcodeDispatch {
 	return tvm.dispatches[version]
 }
 
-func (tvm *TVM) stepAny(state *vm.State) error {
-	return tvm.stepAnyWithDispatch(tvm.dispatchForVersion(state.GlobalVersion), state)
-}
-
 func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) error {
 	if state.CurrentCode.BitsLeft() > 0 {
 		state.Steps++
@@ -730,8 +722,8 @@ func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) e
 			return err
 		}
 
-		cc, err := state.Cells.LoadRef(state.CurrentCode)
-		if err != nil {
+		var cc cell.Slice
+		if err := state.Cells.LoadRefInto(state.CurrentCode, &cc); err != nil {
 			return err
 		}
 		if state.GlobalVersion < 4 {
@@ -742,16 +734,8 @@ func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) e
 			}
 		}
 
-		c := &vm.OrdinaryContinuation{
-			Data: vm.ControlData{
-				CP:      vm.CP,
-				NumArgs: vm.ControlDataAllArgs,
-			},
-			Code: cc,
-		}
-
 		state.TraceOpcode("implicit JMPREF")
-		return state.Jump(c)
+		return state.JumpToCode(&cc, state.CP)
 	}
 
 	state.Steps++
@@ -831,6 +815,11 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 		}
 		return normalizeOpcodeDeserializeError(err, op)
 	}
+
+	return executeDecodedOpcode(state, op)
+}
+
+func executeDecodedOpcode(state *vm.State, op vm.OP) (err error) {
 	if err = consumeInstructionGas(state, op); err != nil {
 		return err
 	}
@@ -843,8 +832,7 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 		state.TraceOpcode(op.SerializeText())
 	}
 
-	err = op.Interpret(state)
-	if err != nil {
+	if err = op.Interpret(state); err != nil {
 		err = normalizeCellError(err)
 		return err
 	}
@@ -861,4 +849,15 @@ func consumeInstructionGas(state *vm.State, op vm.OP) error {
 		return nil
 	}
 	return state.ConsumeGas(vm.InstructionBaseGasPrice + gasOp.InstructionBits())
+}
+
+func newTVM(registry, frozenRegistry []vm.OPGetter) *TVM {
+	dispatches := getSharedOpcodeDispatches()
+	if len(registry) != len(frozenRegistry) {
+		// Keep supporting opcode packages registered after tvm initialization:
+		// their dispatch is built privately from the extended registry.
+		dispatches = buildOpcodeDispatches(append([]vm.OPGetter(nil), registry...))
+	}
+
+	return &TVM{dispatches: dispatches}
 }

@@ -573,10 +573,6 @@ func (idx bocCellIndex) cellEndAndCacheBit(i int) (int, bool) {
 	return end / 2, end&1 == 1
 }
 
-func (idx bocCellIndex) cacheBit(i int) bool {
-	return idx.rawEnd(i)%2 == 1
-}
-
 const (
 	bocCacheRefCountMask = 0x7F
 	bocCacheRefIndexBit  = 0x80

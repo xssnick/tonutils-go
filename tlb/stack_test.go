@@ -3,10 +3,14 @@ package tlb
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
+	"math"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -101,6 +105,35 @@ func TestStack_ToCell(t *testing.T) {
 	}
 }
 
+func TestParseStackValuePreservesEmptyTuple(t *testing.T) {
+	value, err := ParseStackValue(cell.BeginCell().
+		MustStoreUInt(0x07, 8).
+		MustStoreUInt(0, 16).
+		EndCell().MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse empty tuple: %v", err)
+	}
+
+	empty, ok := value.([]any)
+	if !ok {
+		t.Fatalf("empty tuple type = %T, want []any", value)
+	}
+	if empty == nil {
+		t.Fatal("empty tuple decoded as a nil slice")
+	}
+	if len(empty) != 0 {
+		t.Fatalf("empty tuple length = %d, want 0", len(empty))
+	}
+
+	null, err := ParseStackValue(cell.BeginCell().MustStoreUInt(0x00, 8).EndCell().MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse null: %v", err)
+	}
+	if null != nil {
+		t.Fatalf("null value = %#v, want nil", null)
+	}
+}
+
 func TestStack_Depth(t *testing.T) {
 	stack := NewStack()
 	stack.Push(struct{}{})
@@ -145,6 +178,249 @@ func TestParseStackValueBigInt257RoundTrip(t *testing.T) {
 		t.Run(value.String(), func(t *testing.T) {
 			checkStackBigIntRoundTrip(t, value)
 		})
+	}
+}
+
+func TestSerializeStackIntUsesCanonicalBoundaryTag(t *testing.T) {
+	minInt64 := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 63))
+	maxInt64 := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 63), big.NewInt(1))
+	tests := []struct {
+		name    string
+		value   *big.Int
+		tinyInt bool
+	}{
+		{name: "min int64", value: minInt64, tinyInt: true},
+		{name: "max int64", value: maxInt64, tinyInt: true},
+		{name: "below min int64", value: new(big.Int).Sub(new(big.Int).Set(minInt64), big.NewInt(1))},
+		{name: "above max int64", value: new(big.Int).Add(new(big.Int).Set(maxInt64), big.NewInt(1))},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := cell.BeginCell()
+			if err := SerializeStackValue(builder, test.value); err != nil {
+				t.Fatal(err)
+			}
+			encoded := builder.ToSlice()
+			if test.tinyInt {
+				if tag := encoded.MustLoadUInt(8); tag != 0x01 {
+					t.Fatalf("tag = %#x, want vm_stk_tinyint", tag)
+				}
+				return
+			}
+			if tag := encoded.MustLoadUInt(15); tag != 0x0200/2 {
+				t.Fatalf("tag = %#x, want vm_stk_int", tag)
+			}
+		})
+	}
+}
+
+func TestSerializeUnsignedStackIntUsesCanonicalTag(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   any
+		tinyInt bool
+	}{
+		{name: "uint zero", value: uint(0), tinyInt: true},
+		{name: "uint64 max int64", value: uint64(math.MaxInt64), tinyInt: true},
+		{name: "uint64 above max int64", value: uint64(math.MaxInt64) + 1},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := cell.BeginCell()
+			if err := SerializeStackValue(builder, test.value); err != nil {
+				t.Fatal(err)
+			}
+			encoded := builder.ToSlice()
+			if test.tinyInt {
+				if tag := encoded.MustLoadUInt(8); tag != 0x01 {
+					t.Fatalf("tag = %#x, want vm_stk_tinyint", tag)
+				}
+				return
+			}
+			if tag := encoded.MustLoadUInt(15); tag != 0x0200/2 {
+				t.Fatalf("tag = %#x, want vm_stk_int", tag)
+			}
+		})
+	}
+}
+
+func TestSerializeInvalidBigIntReturnsError(t *testing.T) {
+	var nilInt *big.Int
+	maxMagnitude := new(big.Int).Lsh(big.NewInt(1), 256)
+	tests := []struct {
+		name  string
+		value *big.Int
+	}{
+		{name: "typed nil", value: nilInt},
+		{name: "positive overflow", value: new(big.Int).Set(maxMagnitude)},
+		{name: "negative overflow", value: new(big.Int).Sub(new(big.Int).Neg(maxMagnitude), big.NewInt(1))},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := SerializeStackValue(cell.BeginCell(), test.value); err == nil {
+				t.Fatal("invalid integer serialized successfully")
+			}
+		})
+	}
+}
+
+func TestSerializeTypedNilSliceReturnsError(t *testing.T) {
+	var nilSlice *cell.Slice
+	if err := SerializeStackValue(cell.BeginCell(), nilSlice); err == nil {
+		t.Fatal("typed nil slice serialized successfully")
+	}
+	if err := SerializeStackValue(cell.BeginCell(), tuple.NewTupleValue(nilSlice)); err == nil {
+		t.Fatal("typed nil slice nested in tuple serialized successfully")
+	}
+
+	stack := vm.NewStack()
+	if err := stack.PushAny(nilSlice); err != nil {
+		t.Fatal(err)
+	}
+	converted, err := NewStackFromVM(stack)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = converted.ToCell(); err == nil {
+		t.Fatal("VM stack with typed nil slice serialized successfully")
+	}
+}
+
+func TestStackLoadRejectsNonEmptyListCells(t *testing.T) {
+	nilCell := cell.BeginCell().EndCell()
+	nullValue := func(builder *cell.Builder) *cell.Builder {
+		return builder.MustStoreUInt(0, 8)
+	}
+
+	t.Run("intermediate cons", func(t *testing.T) {
+		cons := nullValue(cell.BeginCell().MustStoreRef(nilCell)).MustStoreBoolBit(true).EndCell()
+		root := nullValue(cell.BeginCell().MustStoreUInt(2, 24).MustStoreRef(cons)).EndCell()
+		var stack Stack
+		if err := stack.LoadFromCell(root.MustBeginParse()); err == nil {
+			t.Fatal("stack with trailing intermediate data parsed successfully")
+		}
+	})
+
+	t.Run("terminal nil", func(t *testing.T) {
+		terminal := cell.BeginCell().MustStoreBoolBit(true).EndCell()
+		root := nullValue(cell.BeginCell().MustStoreUInt(1, 24).MustStoreRef(terminal)).EndCell()
+		var stack Stack
+		if err := stack.LoadFromCell(root.MustBeginParse()); err == nil {
+			t.Fatal("stack with non-empty terminal cell parsed successfully")
+		}
+	})
+
+	t.Run("outer trailing data remains allowed", func(t *testing.T) {
+		root := nullValue(cell.BeginCell().MustStoreUInt(1, 24).MustStoreRef(nilCell)).MustStoreBoolBit(true).EndCell()
+		var stack Stack
+		if err := stack.LoadFromCell(root.MustBeginParse()); err != nil {
+			t.Fatalf("outer trailing data rejected: %v", err)
+		}
+	})
+
+	t.Run("depth limit", func(t *testing.T) {
+		root := cell.BeginCell().MustStoreUInt(maxStackDepth+1, 24).EndCell()
+		var stack Stack
+		if err := stack.LoadFromCell(root.MustBeginParse()); err == nil {
+			t.Fatal("oversized stack parsed successfully")
+		}
+	})
+}
+
+func newIntStack(depth int) *Stack {
+	s := NewStack()
+	for i := 0; i < depth; i++ {
+		s.Push(int64(i))
+	}
+	return s
+}
+
+// C++ Stack::serialize applies no depth check of its own, it is bounded only by the
+// uint24 depth field and by the cell depth reached while building the list, so the
+// 1024 limit of Stack::deserialize must not leak into the serialization path.
+func TestStackSerializationHasNoOwnDepthLimit(t *testing.T) {
+	t.Run("at parse limit", func(t *testing.T) {
+		encoded, err := newIntStack(maxStackDepth).ToCell()
+		if err != nil {
+			t.Fatalf("stack of %d values not serialized: %v", maxStackDepth, err)
+		}
+
+		values := loadSerializedStackInts(t, encoded)
+		if len(values) != maxStackDepth {
+			t.Fatalf("serialized values = %d, want %d", len(values), maxStackDepth)
+		}
+		for i, val := range values {
+			if val != int64(i) {
+				t.Fatalf("serialized value %d = %d, want %d", i, val, i)
+			}
+		}
+
+		var parsed Stack
+		if err = parsed.LoadFromCell(encoded.MustBeginParse()); err != nil {
+			t.Fatalf("stack of %d values not parsed back: %v", maxStackDepth, err)
+		}
+		if parsed.Depth() != maxStackDepth {
+			t.Fatalf("parsed depth = %d, want %d", parsed.Depth(), maxStackDepth)
+		}
+	})
+
+	// One cons cell per value makes the cell depth limit, not maxStackDepth, the
+	// serialization ceiling. C++ hits it as CellBuilder::CellCreateError there.
+	t.Run("above cell depth limit", func(t *testing.T) {
+		_, err := newIntStack(maxStackDepth + 1).ToCell()
+		if err == nil {
+			t.Fatal("stack deeper than the cell depth limit serialized successfully")
+		}
+		if !errors.Is(err, cell.ErrCellDepthLimit) {
+			t.Fatalf("serialization error = %v, want %v", err, cell.ErrCellDepthLimit)
+		}
+	})
+
+	// The declared depth is rejected by the parser alone, before any cell is walked.
+	t.Run("declared depth above parse limit", func(t *testing.T) {
+		root := cell.BeginCell().MustStoreUInt(1<<24-1, 24).EndCell()
+		var parsed Stack
+		err := parsed.LoadFromCell(root.MustBeginParse())
+		if err == nil {
+			t.Fatal("oversized declared depth parsed successfully")
+		}
+		if !strings.Contains(err.Error(), "stack depth exceeds") {
+			t.Fatalf("parse error = %v, want stack depth rejection", err)
+		}
+	})
+}
+
+func TestParseStackTupleRejectsTrailingReferenceCells(t *testing.T) {
+	valueWithTrailingData := cell.BeginCell().
+		MustStoreUInt(0, 8).
+		MustStoreBoolBit(true).
+		EndCell()
+	encoded := cell.BeginCell().
+		MustStoreUInt(0x07, 8).
+		MustStoreUInt(1, 16).
+		MustStoreRef(valueWithTrailingData).
+		EndCell()
+	if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
+		t.Fatal("tuple element with trailing data parsed successfully")
+	}
+
+	value := cell.BeginCell().MustStoreUInt(0, 8).EndCell()
+	pair := cell.BeginCell().
+		MustStoreRef(value).
+		MustStoreRef(value).
+		MustStoreBoolBit(true).
+		EndCell()
+	encoded = cell.BeginCell().
+		MustStoreUInt(0x07, 8).
+		MustStoreUInt(3, 16).
+		MustStoreRef(pair).
+		MustStoreRef(value).
+		EndCell()
+	if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
+		t.Fatal("tuple pair with trailing data parsed successfully")
 	}
 }
 

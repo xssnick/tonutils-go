@@ -2,35 +2,50 @@ package cell
 
 import (
 	"errors"
+	"math/big"
 	"testing"
 )
 
 type testMetricAugmentation struct{}
+
+type retainingToCellAugmentation struct {
+	testMetricAugmentation
+	captured []*Cell
+}
+
+func (a *retainingToCellAugmentation) LeafExtra(value *Slice, dst *Builder) error {
+	owned, err := value.ToCell()
+	if err != nil {
+		return err
+	}
+	a.captured = append(a.captured, owned)
+	return a.testMetricAugmentation.LeafExtra(value, dst)
+}
 
 func (testMetricAugmentation) SkipExtra(loader *Slice) error {
 	_, err := loader.LoadUInt(16)
 	return err
 }
 
-func (testMetricAugmentation) EmptyExtra() (*Cell, error) {
-	return BeginCell().MustStoreUInt(0, 16).EndCell(), nil
+func (testMetricAugmentation) EmptyExtra(dst *Builder) error {
+	return dst.StoreUInt(0, 16)
 }
 
-func (testMetricAugmentation) LeafExtra(value *Slice) (*Cell, error) {
+func (testMetricAugmentation) LeafExtra(value *Slice, dst *Builder) error {
 	metric := uint64(value.BitsLeft()) + uint64(value.RefsNum())*257
-	return BeginCell().MustStoreUInt(metric, 16).EndCell(), nil
+	return dst.StoreUInt(metric, 16)
 }
 
-func (testMetricAugmentation) CombineExtra(leftExtra, rightExtra *Slice) (*Cell, error) {
+func (testMetricAugmentation) CombineExtra(leftExtra, rightExtra *Slice, dst *Builder) error {
 	left, err := leftExtra.LoadUInt(16)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	right, err := rightExtra.LoadUInt(16)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return BeginCell().MustStoreUInt(left+right, 16).EndCell(), nil
+	return dst.StoreUInt(left+right, 16)
 }
 
 func mustTestAugKey(t *testing.T, value uint64) *Cell {
@@ -65,6 +80,138 @@ func mustLoadTestValue(t *testing.T, value *Slice, bits uint) uint64 {
 		t.Fatalf("unexpected trailing value data: %d bits, %d refs", value.BitsLeft(), value.RefsNum())
 	}
 	return got
+}
+
+func TestAugmentedDictionaryLeafExtraToCellReturnsOwnedFinalizedCell(t *testing.T) {
+	aug := &retainingToCellAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	value := BeginCell().MustStoreUInt(0xaa, 8)
+	if err = dict.SetBuilder(mustTestAugKey(t, 1), value); err != nil {
+		t.Fatal(err)
+	}
+	if len(aug.captured) != 1 {
+		t.Fatalf("captured %d leaf values, want 1", len(aug.captured))
+	}
+	retained := aug.captured[0]
+	wantHash := retained.HashKey()
+	if retained.MustBeginParse().MustLoadUInt(8) != 0xaa {
+		t.Fatal("captured leaf has wrong value")
+	}
+
+	*value = Builder{}
+	value.MustStoreUInt(0xbb, 8)
+	if retained.HashKey() != wantHash || retained.MustBeginParse().MustLoadUInt(8) != 0xaa {
+		t.Fatal("captured leaf changed after source builder reuse")
+	}
+}
+
+// materializingAugmentation exercises both documented ways of turning the
+// borrowed LeafExtra input into an owned cell.
+type materializingAugmentation struct {
+	testMetricAugmentation
+	owned []*Cell
+	base  []*Cell
+}
+
+func (a *materializingAugmentation) LeafExtra(value *Slice, dst *Builder) error {
+	owned, err := value.ToCell()
+	if err != nil {
+		return err
+	}
+	a.owned = append(a.owned, owned)
+	a.base = append(a.base, value.BaseCell())
+	return a.testMetricAugmentation.LeafExtra(value, dst)
+}
+
+func TestAugmentedDictionaryLeafExtraMaterializesValueWithPrunedRef(t *testing.T) {
+	pruned, err := CreatePrunedBranch(BeginCell().MustStoreUInt(0x1234, 16).
+		MustStoreRef(BeginCell().MustStoreUInt(1, 8).EndCell()).EndCell(), 1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pruned.Level() == 0 {
+		t.Fatal("pruned branch must have a non-zero level for this regression")
+	}
+
+	value := BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(pruned)
+	want := value.EndCell()
+	if want.Level() != pruned.Level() {
+		t.Fatalf("finalized value level = %d, want %d", want.Level(), pruned.Level())
+	}
+
+	aug := &materializingAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = dict.SetBuilder(mustTestAugKey(t, 1), value); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(aug.owned) != 1 || len(aug.base) != 1 {
+		t.Fatalf("captured %d owned and %d base leaves, want 1 each", len(aug.owned), len(aug.base))
+	}
+	for name, got := range map[string]*Cell{"ToCell": aug.owned[0], "BaseCell": aug.base[0]} {
+		if got.HashKey() != want.HashKey() {
+			t.Fatalf("%s hash = %x, want %x", name, got.Hash(), want.Hash())
+		}
+		if got.Level() != want.Level() {
+			t.Fatalf("%s level = %d, want %d", name, got.Level(), want.Level())
+		}
+	}
+
+	loaded, extra, err := dict.LoadValueExtra(mustTestAugKey(t, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestMetricExtra(t, extra); got != 8+257 {
+		t.Fatalf("extra = %d, want %d", got, 8+257)
+	}
+	storedValue, err := loaded.ToCell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedValue.HashKey() != want.HashKey() {
+		t.Fatalf("stored value hash = %x, want %x", storedValue.Hash(), want.Hash())
+	}
+}
+
+func TestAugmentedDictionaryWideIntKeyRoundTrip(t *testing.T) {
+	for _, width := range []uint{258, 1023} {
+		t.Run(big.NewInt(int64(width)).String(), func(t *testing.T) {
+			dict, err := NewAugDict(width, testMetricAugmentation{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), width), big.NewInt(1))
+			value := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+			if err = dict.SetIntKey(key, value); err != nil {
+				t.Fatal(err)
+			}
+
+			loaded, extra, err := dict.LoadValueExtraByIntKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := mustLoadTestValue(t, loaded, 8); got != 0xAB {
+				t.Fatalf("value = %#x, want 0xab", got)
+			}
+			if got := mustLoadTestMetricExtra(t, extra); got != 8 {
+				t.Fatalf("extra = %d, want 8", got)
+			}
+
+			if err = dict.DeleteIntKey(key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = dict.LoadValueByIntKey(key); !errors.Is(err, ErrNoSuchKeyInDict) {
+				t.Fatalf("load after delete = %v, want missing key", err)
+			}
+		})
+	}
 }
 
 func TestAugmentedDictionary_SetLoadDelete(t *testing.T) {

@@ -5,13 +5,53 @@ import (
 	"math/big"
 )
 
-func initIntKeyCell(key *big.Int, bits uint, builder *Builder, cell *Cell) {
-	if err := builder.storeBigIntWrap(key, bits); err != nil {
-		panic(err)
+func initIntKeyBuilder(key *big.Int, bits uint, builder *Builder) {
+	if key == nil {
+		panic(ErrNilBigInt)
 	}
-	*cell = Cell{
-		data:   builder.data[:builder.usedBytes()],
-		bitsSz: uint16(builder.bitsSz),
+	if bits > 1023 {
+		panic(ErrTooBigSize)
+	}
+	if bits == 0 {
+		if key.Sign() != 0 {
+			panic(ErrTooBigValue)
+		}
+		*builder = Builder{}
+		return
+	}
+
+	bitLen := uint(key.BitLen())
+	if key.Sign() >= 0 {
+		if bitLen > bits {
+			panic(ErrTooBigValue)
+		}
+	} else if bitLen > bits || bitLen == bits && key.TrailingZeroBits() != bits-1 {
+		panic(ErrTooBigValue)
+	}
+
+	*builder = Builder{bitsSz: bits}
+	data := builder.data[:builder.usedBytes()]
+	key.FillBytes(data)
+	if key.Sign() < 0 {
+		carry := byte(1)
+		for i := len(data) - 1; i >= 0; i-- {
+			v := ^data[i] + carry
+			if carry != 0 && v != 0 {
+				carry = 0
+			}
+			data[i] = v
+		}
+	}
+
+	if rem := bits % 8; rem != 0 {
+		data[0] &= byte(1<<rem) - 1
+		shift := 8 - rem
+		var carry byte
+		for i := len(data) - 1; i >= 0; i-- {
+			nextCarry := data[i] >> rem
+			data[i] = data[i]<<shift | carry
+			carry = nextCarry
+		}
 	}
 }
 
@@ -122,8 +162,12 @@ func labelDataView(loader *Slice, ln uint) (uint, Slice, error) {
 }
 
 func parseFixedDictNode(branch *Cell, remaining uint) (fixedDictNode, error) {
+	return parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
+}
+
+func parseFixedDictNodeWithTrace(branch *Cell, remaining uint, trace *Trace) (fixedDictNode, error) {
 	var loader Slice
-	if err := branch.BeginParseInto(&loader); err != nil {
+	if err := branch.BeginParseIntoWithTrace(&loader, trace); err != nil {
 		return fixedDictNode{}, err
 	}
 	refView := newCellRefView(loader.cell)
@@ -166,6 +210,10 @@ func (n fixedDictNode) nextKeyBits(remaining uint) uint {
 
 func (n *fixedDictNode) ref(i int) (*Cell, error) {
 	return n.loader.peekRefCellAt(i)
+}
+
+func (n *fixedDictNode) refAndTrace(i int) (*Cell, *Trace, error) {
+	return n.loader.refAndTraceAt(i)
 }
 
 func (n *fixedDictNode) boundaryRef(i int) (*Cell, error) {

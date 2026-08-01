@@ -140,7 +140,7 @@ func TestDictHelperEdgeBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push signed prefix bits: %v", err)
 	}
-	if _, _, err := popSubdictPrefix(state, 8, dictKeySignedInt); err == nil {
+	if _, err := popSubdictPrefix(state, 8, dictKeySignedInt); err == nil {
 		t.Fatal("expected signed prefix overflow to fail")
 	} else {
 		var vmErr vmerr.VMError

@@ -12,6 +12,12 @@ const (
 	usageTreeChunkBits        = 8
 	usageTreeChunkSize        = 1 << usageTreeChunkBits
 	usageTreeChunkMask        = usageTreeChunkSize - 1
+	usageCellIndexMinSlots    = 8
+)
+
+const (
+	usageNodeLoaded uint32 = 1 << iota
+	usageNodeMarked
 )
 
 type usageTreeInitialChunk [usageTreeInitialChunkSize]usageTreeNode
@@ -25,22 +31,31 @@ type usageTreeNode struct {
 	// trace is the usage-tree trace of this node, embedded to avoid a
 	// per-node allocation. Its address is stable: chunks are never moved
 	// once allocated, only the chunk directory is copied on growth.
-	trace    Trace
-	parent   TraceNode
+	trace Trace
+	cell  atomic.Pointer[Cell]
+
 	children [4]atomic.Uint32
-	cell     atomic.Pointer[Cell]
-	loaded   atomic.Bool
-	// marked is only read/written by the single-threaded proof/update build
-	// phases (SetMark, MarkPath, IsLoaded with useMark), never during
-	// concurrent load tracking.
-	marked bool
+	parent   TraceNode
+	// state combines the concurrently updated loaded flag and the temporary
+	// proof-build mark without adding padding to every arena node.
+	state atomic.Uint32
+}
+
+// usageTreeCellIndex is built only if a proof/update needs to resolve a cell
+// by hash. Each open-addressed slot packs a 32-bit hash fingerprint and a
+// 32-bit arena node id; lookups verify the complete hash on the node's cell,
+// so fingerprint collisions cannot return a wrong cell.
+type usageTreeCellIndex struct {
+	tree  *CellUsageTree
+	slots []uint64
 }
 
 // CellUsageTree records which cells were loaded through traced wrappers so
 // that Merkle proofs and updates can later be built from the visited paths.
 //
 // Concurrent cell loads through traces of one tree are safe: node creation,
-// load marking and loaded-cell caching are lock-free or briefly locked.
+// load marking and loaded-cell caching use atomics. Hash lookup state is built
+// after tracking, only when a proof/update actually needs it.
 // The proof/update building phase (CreateUsageProof, CreateMerkleUpdate,
 // SetMark/MarkPath/SetUseMarkForIsLoaded) is not synchronized against
 // concurrent loads and must run after all traced readers are done.
@@ -50,24 +65,18 @@ type CellUsageTree struct {
 	nextNode atomic.Uint32
 	growMu   sync.Mutex
 
-	loadedMu    sync.Mutex
-	loadedCells map[Hash]*Cell
-
 	useMark     bool
 	ignoreLoads atomic.Int32
 	onLoadFn    func(*Cell)
 }
 
 func NewCellUsageTree() *CellUsageTree {
-	t := &CellUsageTree{
-		loadedCells: map[Hash]*Cell{},
-	}
+	t := new(CellUsageTree)
 	var chunks []*usageTreeChunk
 	t.chunks.Store(&chunks)
 	t.nextNode.Store(2)
 	root := t.node(1)
-	root.trace.usageTree = t
-	root.trace.usageNode = 1
+	root.trace.initUsage(t, 1)
 	return t
 }
 
@@ -84,9 +93,9 @@ func (t *CellUsageTree) RootNode() TraceNode {
 	return 1
 }
 
-// NodeCount returns the number of arena nodes allocated so far — an upper
-// bound on the distinct cells a proof built from this tree can include,
-// useful for presizing build state.
+// NodeCount returns the number of arena nodes allocated so far. It includes
+// unpublished slots lost to concurrent child-creation races, so it can be much
+// larger than the set of loaded cells used by a proof.
 func (t *CellUsageTree) NodeCount() int {
 	if t == nil {
 		return 0
@@ -152,8 +161,10 @@ func (t *CellUsageTree) OnLoad(node TraceNode, c *Cell) {
 	}
 
 	n := t.node(node)
-	t.storeLoadedCell(n, c)
-	if n.loaded.Load() || n.loaded.Swap(true) {
+	if c != nil && !c.IsLazy() && n.cell.Load() == nil {
+		n.cell.CompareAndSwap(nil, c)
+	}
+	if n.state.Load()&usageNodeLoaded != 0 || n.state.Or(usageNodeLoaded)&usageNodeLoaded != 0 {
 		return
 	}
 	if t.onLoadFn != nil {
@@ -169,29 +180,110 @@ func (t *CellUsageTree) loadedCell(node TraceNode) (*Cell, bool) {
 	return c, c != nil
 }
 
-func (t *CellUsageTree) loadedCellByHash(hash Hash) (*Cell, bool) {
-	if t == nil {
-		return nil, false
-	}
-	t.loadedMu.Lock()
-	c := t.loadedCells[hash]
-	t.loadedMu.Unlock()
-	return c, c != nil
+func newUsageTreeCellIndex(tree *CellUsageTree) usageTreeCellIndex {
+	return usageTreeCellIndex{tree: tree}
 }
 
-func (t *CellUsageTree) storeLoadedCell(n *usageTreeNode, c *Cell) {
-	if c == nil || c.IsLazy() || n.cell.Load() != nil {
-		return
+func (i *usageTreeCellIndex) loadedCellByHash(hash Hash) (*Cell, bool) {
+	if i == nil || i.tree == nil {
+		return nil, false
 	}
-	if !n.cell.CompareAndSwap(nil, c) {
-		return
+	if i.slots == nil {
+		i.build()
 	}
-	t.loadedMu.Lock()
-	if t.loadedCells == nil {
-		t.loadedCells = map[Hash]*Cell{}
+	if len(i.slots) == 0 {
+		return nil, false
 	}
-	t.loadedCells[c.HashKey()] = c
-	t.loadedMu.Unlock()
+
+	fingerprint := usageCellFingerprint(hash)
+	mask := len(i.slots) - 1
+	pos := int(fingerprint) & mask
+	for range i.slots {
+		entry := i.slots[pos]
+		if entry == 0 {
+			return nil, false
+		}
+		if uint32(entry>>32) == fingerprint {
+			node := TraceNode(uint32(entry))
+			if c := i.tree.node(node).cell.Load(); c != nil && c.HashKey() == hash {
+				return c, true
+			}
+		}
+		pos = (pos + 1) & mask
+	}
+	return nil, false
+}
+
+func (i *usageTreeCellIndex) build() {
+	total := TraceNode(i.tree.nextNode.Load())
+	used := 0
+	for node := TraceNode(1); node < total; node++ {
+		c := i.tree.node(node).cell.Load()
+		if c == nil {
+			continue
+		}
+		if i.slots == nil {
+			i.slots = make([]uint64, usageCellIndexMinSlots)
+		}
+
+		hash := c.HashKey()
+		fingerprint := usageCellFingerprint(hash)
+		mask := len(i.slots) - 1
+		pos := int(fingerprint) & mask
+		duplicate := false
+		for i.slots[pos] != 0 {
+			entry := i.slots[pos]
+			if uint32(entry>>32) == fingerprint {
+				existing := i.tree.node(TraceNode(uint32(entry))).cell.Load()
+				if existing.HashKey() == hash {
+					duplicate = true
+				}
+			}
+			if duplicate {
+				break
+			}
+			pos = (pos + 1) & mask
+		}
+		if duplicate {
+			continue
+		}
+		if used*2 >= len(i.slots) {
+			i.grow()
+			mask = len(i.slots) - 1
+			pos = int(fingerprint) & mask
+			for i.slots[pos] != 0 {
+				pos = (pos + 1) & mask
+			}
+		}
+		i.slots[pos] = uint64(fingerprint)<<32 | uint64(node)
+		used++
+	}
+	if i.slots == nil {
+		i.slots = []uint64{}
+	}
+}
+
+func (i *usageTreeCellIndex) grow() {
+	old := i.slots
+	i.slots = make([]uint64, len(old)*2)
+	mask := len(i.slots) - 1
+	for _, entry := range old {
+		if entry == 0 {
+			continue
+		}
+		pos := int(uint32(entry>>32)) & mask
+		for i.slots[pos] != 0 {
+			pos = (pos + 1) & mask
+		}
+		i.slots[pos] = entry
+	}
+}
+
+func usageCellFingerprint(hash Hash) uint32 {
+	return uint32(hash[0]) |
+		uint32(hash[1])<<8 |
+		uint32(hash[2])<<16 |
+		uint32(hash[3])<<24
 }
 
 func (t *CellUsageTree) IsLoaded(node TraceNode) bool {
@@ -199,52 +291,52 @@ func (t *CellUsageTree) IsLoaded(node TraceNode) bool {
 		return false
 	}
 	if t.useMark {
-		return t.node(node).marked
+		return t.node(node).state.Load()&usageNodeMarked != 0
 	}
-	return t.node(node).loaded.Load()
+	return t.node(node).state.Load()&usageNodeLoaded != 0
 }
 
 func (t *CellUsageTree) HasMark(node TraceNode) bool {
 	if t == nil || !t.validNode(node) {
 		return false
 	}
-	return t.node(node).marked
+	return t.node(node).state.Load()&usageNodeMarked != 0
 }
 
 func (t *CellUsageTree) SetMark(node TraceNode, mark bool) {
 	if t == nil || !t.validNode(node) {
 		return
 	}
-	t.node(node).marked = mark
+	if mark {
+		t.node(node).state.Or(usageNodeMarked)
+		return
+	}
+	t.node(node).state.And(^usageNodeMarked)
 }
 
 func (t *CellUsageTree) MarkPath(node TraceNode) bool {
+	return t.markPath(node, nil)
+}
+
+func (t *CellUsageTree) markPath(node TraceNode, journal *[]TraceNode) bool {
 	if t == nil || !t.validNode(node) {
 		return false
 	}
 	for cur := t.node(node).parent; cur != 0; cur = t.node(cur).parent {
 		n := t.node(cur)
-		if n.marked {
+		if n.state.Or(usageNodeMarked)&usageNodeMarked != 0 {
 			break
 		}
-		n.marked = true
+		if journal != nil {
+			*journal = append(*journal, cur)
+		}
 	}
 	return true
 }
 
-func (t *CellUsageTree) marksSnapshot() []bool {
-	total := t.nextNode.Load()
-	out := make([]bool, total)
-	for id := TraceNode(1); id < TraceNode(total); id++ {
-		out[id] = t.node(id).marked
-	}
-	return out
-}
-
-func (t *CellUsageTree) restoreMarks(prev []bool) {
-	total := t.nextNode.Load()
-	for id := TraceNode(1); id < TraceNode(total); id++ {
-		t.node(id).marked = int(id) < len(prev) && prev[id]
+func (t *CellUsageTree) clearMarkedJournal(journal []TraceNode) {
+	for _, node := range journal {
+		t.node(node).state.And(^usageNodeMarked)
 	}
 }
 
@@ -285,8 +377,7 @@ func (t *CellUsageTree) allocNode(parent TraceNode) TraceNode {
 	t.ensureChunk(id)
 	n := t.node(id)
 	n.parent = parent
-	n.trace.usageTree = t
-	n.trace.usageNode = id
+	n.trace.initUsage(t, id)
 	return id
 }
 

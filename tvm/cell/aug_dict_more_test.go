@@ -17,25 +17,25 @@ func (a failingAugmentation) SkipExtra(loader *Slice) error {
 	return err
 }
 
-func (a failingAugmentation) EmptyExtra() (*Cell, error) {
+func (a failingAugmentation) EmptyExtra(dst *Builder) error {
 	if a.emptyErr != nil {
-		return nil, a.emptyErr
+		return a.emptyErr
 	}
-	return BeginCell().MustStoreUInt(0, 16).EndCell(), nil
+	return testMetricAugmentation{}.EmptyExtra(dst)
 }
 
-func (a failingAugmentation) LeafExtra(value *Slice) (*Cell, error) {
+func (a failingAugmentation) LeafExtra(value *Slice, dst *Builder) error {
 	if a.leafErr != nil {
-		return nil, a.leafErr
+		return a.leafErr
 	}
-	return testMetricAugmentation{}.LeafExtra(value)
+	return testMetricAugmentation{}.LeafExtra(value, dst)
 }
 
-func (a failingAugmentation) CombineExtra(leftExtra, rightExtra *Slice) (*Cell, error) {
+func (a failingAugmentation) CombineExtra(leftExtra, rightExtra *Slice, dst *Builder) error {
 	if a.combineErr != nil {
-		return nil, a.combineErr
+		return a.combineErr
 	}
-	return testMetricAugmentation{}.CombineExtra(leftExtra, rightExtra)
+	return testMetricAugmentation{}.CombineExtra(leftExtra, rightExtra, dst)
 }
 
 func mustUIntFromCell(t *testing.T, c *Cell, bits uint) uint64 {
@@ -315,10 +315,11 @@ func TestAugmentedDictionary_DeleteFilterAndHelperErrorPaths(t *testing.T) {
 	if err := ro.SkipExtra(BeginCell().EndCell().MustBeginParse()); err == nil {
 		t.Fatal("readOnlyAugmentation without skipper should fail")
 	}
-	if _, err := ro.LeafExtra(BeginCell().EndCell().MustBeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
+	var computedExtra Builder
+	if err := ro.LeafExtra(BeginCell().EndCell().MustBeginParse(), &computedExtra); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
 		t.Fatalf("unexpected LeafExtra error: %v", err)
 	}
-	if _, err := ro.CombineExtra(BeginCell().EndCell().MustBeginParse(), BeginCell().EndCell().MustBeginParse()); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
+	if err := ro.CombineExtra(BeginCell().EndCell().MustBeginParse(), BeginCell().EndCell().MustBeginParse(), &computedExtra); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
 		t.Fatalf("unexpected CombineExtra error: %v", err)
 	}
 

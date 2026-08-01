@@ -75,8 +75,8 @@ func transactionTickTockGas(gasOverride vm.Gas, now uint32, blockchainCfg *Prepa
 	}
 
 	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
-	if prices != nil && prices.GasLimit > 0 {
-		if isSpecial && prices.SpecialGasLimit > 0 {
+	if prices != nil {
+		if isSpecial {
 			limit := prices.SpecialGasLimit
 			return transactionGasFromLimits(limit, limit, 0)
 		}
@@ -584,15 +584,6 @@ func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactio
 
 func transactionGetSizeLimits(cfg *PreparedBlockchainConfig) transactionSizeLimits {
 	return cfg.sizeLimits
-}
-
-func transactionCheckOutboundMessageSize(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, msgCell *cell.Cell, available *big.Int, isSpecial, actionFineEnabled bool) (int32, *big.Int, error) {
-	stats, err := transactionMessageStats(msgCell)
-	if err != nil {
-		return 0, nil, err
-	}
-	code, fine := transactionCheckOutboundMessageStatsSize(cfg, srcAddr, dstAddr, stats, available, isSpecial, actionFineEnabled)
-	return code, fine, nil
 }
 
 func transactionCheckOutboundMessageStatsSize(cfg *PreparedBlockchainConfig, srcAddr, dstAddr *address.Address, stats transactionMessageStatsResult, available *big.Int, isSpecial, actionFineEnabled bool) (int32, *big.Int) {

@@ -9,6 +9,14 @@ func (c *Slice) PeekRefCellAt(i int) (*Cell, error) {
 	return c.peekRefCellAt(i)
 }
 
+// PeekRefCellAtWithTrace returns the immutable referenced cell together with its
+// effective trace without allocating a traced Cell wrapper. The returned Cell
+// must be parsed with BeginParseIntoWithTrace when the trace is to be carried
+// into the next traversal step.
+func (c *Slice) PeekRefCellAtWithTrace(i int) (*Cell, *Trace, error) {
+	return c.refAndTraceAt(i)
+}
+
 func (c *Slice) bitAt(offset uint) byte {
 	abs := uint(c.bitStart) + offset
 	return (c.cell.data[abs/8] >> (7 - (abs % 8))) & 1
@@ -51,14 +59,25 @@ func (c *Slice) SkipLast(bits uint, refs int) bool {
 }
 
 func (c *Slice) Subslice(offsetBits uint, offsetRefs int, bits uint, refs int) (*Slice, error) {
-	cp := c.Copy()
-	if !cp.SkipFirst(offsetBits, offsetRefs) {
-		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(offsetBits+bits))
-	}
-	if !cp.OnlyFirst(bits, refs) {
-		return nil, ErrNotEnoughData(int(c.BitsLeft()), int(offsetBits+bits))
+	cp := new(Slice)
+	if err := c.SubsliceInto(cp, offsetBits, offsetRefs, bits, refs); err != nil {
+		return nil, err
 	}
 	return cp, nil
+}
+
+// SubsliceInto stores a bounded view of c in dst without allocating or
+// changing c.
+func (c *Slice) SubsliceInto(dst *Slice, offsetBits uint, offsetRefs int, bits uint, refs int) error {
+	next := *c
+	if !next.SkipFirst(offsetBits, offsetRefs) {
+		return ErrNotEnoughData(int(c.BitsLeft()), int(offsetBits+bits))
+	}
+	if !next.OnlyFirst(bits, refs) {
+		return ErrNotEnoughData(int(c.BitsLeft()), int(offsetBits+bits))
+	}
+	*dst = next
+	return nil
 }
 
 func (c *Slice) HasPrefix(prefix *Slice) bool {
