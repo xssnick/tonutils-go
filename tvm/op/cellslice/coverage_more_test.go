@@ -37,7 +37,7 @@ func TestRegisteredCellSliceOpsInstantiate(t *testing.T) {
 		t.Fatal("expected cellslice package to register op getters")
 	}
 
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {

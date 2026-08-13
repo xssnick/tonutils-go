@@ -377,7 +377,7 @@ func TestMarkExecutionProofStackMarksNestedTupleBuilderAndCellValues(t *testing.
 		t.Fatalf("push tuple stack value: %v", err)
 	}
 
-	if err = markExecutionProofStack(stack, proof.UsageTree(), nil); err != nil {
+	if err = markExecutionProofStack(stack, proof.ReadSet(), nil); err != nil {
 		t.Fatalf("mark proof stack: %v", err)
 	}
 
@@ -409,7 +409,7 @@ func TestMarkExecutionProofStackMarksNestedTupleBuilderAndCellValues(t *testing.
 }
 
 func TestMarkExecutionProofStackNoopsAndPrimitiveValues(t *testing.T) {
-	if err := markExecutionProofStack(nil, cell.NewCellUsageTree(), nil); err != nil {
+	if err := markExecutionProofStack(nil, markExecutionProofTestReadSet(), nil); err != nil {
 		t.Fatalf("nil stack should be ignored: %v", err)
 	}
 	stack := vm.NewStack()
@@ -417,53 +417,55 @@ func TestMarkExecutionProofStackNoopsAndPrimitiveValues(t *testing.T) {
 		t.Fatalf("push int: %v", err)
 	}
 	if err := markExecutionProofStack(stack, nil, nil); err != nil {
-		t.Fatalf("nil usage tree should be ignored: %v", err)
+		t.Fatalf("nil read set should be ignored: %v", err)
 	}
-	if err := markExecutionProofValue(nil, cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
+	if err := markExecutionProofValue(nil, markExecutionProofTestReadSet(), map[cell.Hash]struct{}{}); err != nil {
 		t.Fatalf("nil stack value should be ignored: %v", err)
 	}
-	if err := markExecutionProofValue(big.NewInt(1), cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
+	if err := markExecutionProofValue(big.NewInt(1), markExecutionProofTestReadSet(), map[cell.Hash]struct{}{}); err != nil {
 		t.Fatalf("primitive stack value should be ignored: %v", err)
 	}
-	if err := markExecutionProofValue(tuple.NewTupleValue(), cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
+	if err := markExecutionProofValue(tuple.NewTupleValue(), markExecutionProofTestReadSet(), map[cell.Hash]struct{}{}); err != nil {
 		t.Fatalf("empty tuple should be ignored: %v", err)
 	}
 	var nullSlice *cell.Slice
-	if err := markExecutionProofValue(nullSlice, cell.NewCellUsageTree(), map[cell.Hash]struct{}{}); err != nil {
+	if err := markExecutionProofValue(nullSlice, markExecutionProofTestReadSet(), map[cell.Hash]struct{}{}); err != nil {
 		t.Fatalf("null slice reference should be ignored: %v", err)
 	}
 	stack = vm.NewStack()
 	if err := stack.PushOwnedSlice(nullSlice); err != nil {
 		t.Fatalf("push null slice reference: %v", err)
 	}
-	if err := markExecutionProofStack(stack, cell.NewCellUsageTree(), nil); err != nil {
+	if err := markExecutionProofStack(stack, markExecutionProofTestReadSet(), nil); err != nil {
 		t.Fatalf("mark stack with null slice reference: %v", err)
 	}
 }
 
-func TestMarkExecutionProofSliceUsesBackingCellTraceFallback(t *testing.T) {
+func markExecutionProofTestReadSet() *cell.ReadSet {
+	return cell.NewReadSet(cell.BeginCell().EndCell())
+}
+
+func TestMarkExecutionProofSliceRecordsUntracedBackingCell(t *testing.T) {
 	leaf := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	root := cell.BeginCell().MustStoreRef(leaf).EndCell()
-	tree := cell.NewCellUsageTree()
+	read := cell.NewReadSet(root)
 
-	traced := root.WithTrace(tree.RootTrace())
-	slice, err := traced.BeginParseWithTrace(nil)
+	slice, err := read.Root().BeginParseWithTrace(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if slice.Trace() != nil || slice.RawCell().Trace() == nil {
-		t.Fatal("fixture does not have a slice-local nil trace over a traced backing cell")
+	if slice.Trace() != nil {
+		t.Fatal("fixture does not have a slice-local nil trace")
 	}
 
-	if err = markExecutionProofValue(slice, tree, map[cell.Hash]struct{}{}); err != nil {
+	if err = markExecutionProofValue(slice, read, map[cell.Hash]struct{}{}); err != nil {
 		t.Fatal(err)
 	}
-	if !tree.IsLoaded(tree.RootNode()) {
-		t.Fatal("backing-cell usage trace did not mark the root")
+	if _, ok := read.Contains(root.HashKey()); !ok {
+		t.Fatal("marking did not record the backing cell of an untraced slice")
 	}
-	child := tree.GetChild(tree.RootNode(), 0)
-	if child == 0 || !tree.IsLoaded(child) {
-		t.Fatal("backing-cell usage trace did not mark the referenced subtree")
+	if _, ok := read.Contains(leaf.HashKey()); !ok {
+		t.Fatal("marking did not record the referenced subtree")
 	}
 }
 
@@ -750,18 +752,49 @@ func FuzzExecuteDetailedWithAccountProofLibraryCodeCellStartupV9Boundary(f *test
 			t.Fatalf("missing v9 library exit = %d, want cell underflow", missing.ExitCode)
 		}
 
+		// The get-method flow registers its library collection only after
+		// code conversion, so the library root is wrapped and resolved during
+		// execution on every version: v8 and v9 behave identically here.
 		legacy := executeExecutionProofLibraryStartupTarget(t, 8, accountRoot, libraries)
 		direct := executeExecutionProofLibraryStartupTarget(t, 9, accountRoot, libraries)
 		assertLibraryStartupStack(t, legacy, values)
 		assertLibraryStartupStack(t, direct, values)
 
-		if legacy.Steps <= direct.Steps {
-			t.Fatalf("execution proof v8 steps = %d, v9 steps = %d; v8 should include an implicit jump through the code ref", legacy.Steps, direct.Steps)
+		if legacy.Steps != direct.Steps {
+			t.Fatalf("get-method proof v8 steps = %d, v9 steps = %d; both hosts wrap the library root", legacy.Steps, direct.Steps)
 		}
-		if legacy.GasUsed <= direct.GasUsed {
-			t.Fatalf("execution proof v8 gas = %d, v9 gas = %d; v8 should charge the implicit code ref jump", legacy.GasUsed, direct.GasUsed)
+		if legacy.GasUsed != direct.GasUsed {
+			t.Fatalf("get-method proof v8 gas = %d, v9 gas = %d; both hosts wrap the library root", legacy.GasUsed, direct.GasUsed)
+		}
+
+		// A transaction flow has the libraries up front, so since v9 the
+		// conversion resolves the root without the wrapper step; v8 keeps it.
+		txLegacy := executeTransactionLibraryStartupTarget(t, 8, code, libraries)
+		txDirect := executeTransactionLibraryStartupTarget(t, 9, code, libraries)
+		assertLibraryStartupStack(t, txLegacy, values)
+		assertLibraryStartupStack(t, txDirect, values)
+
+		if txLegacy.Steps <= txDirect.Steps {
+			t.Fatalf("transaction v8 steps = %d, v9 steps = %d; v8 should include an implicit jump through the code ref", txLegacy.Steps, txDirect.Steps)
+		}
+		if txLegacy.GasUsed <= txDirect.GasUsed {
+			t.Fatalf("transaction v8 gas = %d, v9 gas = %d; v8 should charge the implicit code ref jump", txLegacy.GasUsed, txDirect.GasUsed)
 		}
 	})
+}
+
+func executeTransactionLibraryStartupTarget(t *testing.T, version int, code *cell.Cell, libraries ...*cell.Cell) *ExecutionResult {
+	t.Helper()
+
+	machine := NewTVM()
+	res, err := machine.Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vm.GasWithLimit(10000), vm.NewStack(), ExecutionConfig{
+		Libraries: libraries,
+		Config:    testPreparedBlockchainConfigWithVersion(t, uint32(version)),
+	})
+	if err != nil {
+		t.Fatalf("Execute v%d: %v", version, err)
+	}
+	return res
 }
 
 func executeExecutionProofLibraryStartupTarget(t *testing.T, version int, accountRoot *cell.Cell, libraries ...*cell.Cell) *ExecutionResult {

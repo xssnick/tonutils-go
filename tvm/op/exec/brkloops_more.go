@@ -52,7 +52,7 @@ func UNTILENDBRK() *helpers.SimpleOP {
 			}
 
 			after := c1EnvelopeIf(state, true, state.Reg.C[0])
-			if cd := body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			if cd := body.GetControlData(); cd == nil || vm.IsNullContinuation(cd.Save.C[0]) {
 				state.Reg.C[0] = &vm.UntilContinuation{
 					Body:  body,
 					After: after,
@@ -80,7 +80,7 @@ func WHILEENDBRK() *helpers.SimpleOP {
 			}
 
 			after := c1EnvelopeIf(state, true, state.Reg.C[0])
-			if cd := cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			if cd := cond.GetControlData(); cd == nil || vm.IsNullContinuation(cd.Save.C[0]) {
 				state.Reg.C[0] = &vm.WhileContinuation{
 					CheckCond: true,
 					Body:      body,

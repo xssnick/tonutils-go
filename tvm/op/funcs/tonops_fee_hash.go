@@ -28,9 +28,10 @@ func init() {
 		func() vm.OP { return GETFORWARDFEESIMPLE() },
 		func() vm.OP { return GETEXTRABALANCE() },
 		func() vm.OP { return SHA256U() },
-		func() vm.OP { return HASHEXT(0) },
 		func() vm.OP { return HASHBU() },
 	)
+
+	vm.ArgList = append(vm.ArgList, hashExtOp)
 }
 
 func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
@@ -38,7 +39,7 @@ func unpackedConfigSlice(state *vm.State, idx int) (*cell.Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	v, err := cfg.Index(idx)
+	v, err := cfg.RawIndex(idx)
 	if err != nil {
 		return nil, err
 	}
@@ -113,11 +114,21 @@ func getTonMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForward
 }
 
 func getTonStoragePrices(state *vm.State) (*tlb.ConfigStoragePrices, error) {
-	sl, err := unpackedConfigSlice(state, 0)
+	cfg, err := state.GetUnpackedConfigTuple()
 	if err != nil {
 		return nil, err
 	}
-	return parseTonStoragePrices(sl)
+	v, err := cfg.Index(0)
+	if err != nil {
+		return nil, err
+	}
+	// the slot is read as a slice: any other value (null, int, cell, tuple)
+	// means there are no active storage prices
+	sl, ok := v.(*cell.Slice)
+	if !ok || sl == nil {
+		return nil, nil
+	}
+	return parseTonStoragePrices(sl.Copy())
 }
 
 func ceilShiftRight(x *big.Int, bits uint) *big.Int {
@@ -428,7 +439,8 @@ func GETEXTRABALANCE() *helpers.SimpleOP {
 				return err
 			}
 			balance, ok := balanceAny.(tuple.Tuple)
-			if !ok {
+			if !ok || balance.IsNull() || balance.Len() > 255 {
+				// the balance tuple is limited to 255 entries
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
 
@@ -600,6 +612,9 @@ func valueBitsForHashExt(val any) ([]byte, int, error) {
 		}
 		return data, int(x.BitsLeft()), nil
 	case *cell.Builder:
+		if x == nil {
+			return nil, 0, vmerr.Error(vmerr.CodeTypeCheck, "expected slice or builder")
+		}
 		sl := x.WithoutTrace().ToSlice()
 		data, err := sl.PreloadSlice(sl.BitsLeft())
 		if err != nil {
@@ -611,134 +626,128 @@ func valueBitsForHashExt(val any) ([]byte, int, error) {
 	}
 }
 
-func HASHEXT(args uint16) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			rev := (args>>8)&1 != 0
-			appendMode := (args>>9)&1 != 0
-			hashID := args & 0xFF
-			rendered := int(hashID)
-			if hashID == 255 {
-				rendered = -1
+// hashExtOp's operand is the 10-bit immediate as encoded: bits 0..7 the hash id
+// (255 selects it from the stack), bit 8 the reversed order, bit 9 the append
+// mode.
+var hashExtOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0x3E41, 14)),
+	ArgBits:    10,
+	MinVersion: 4,
+	Name: func(args uint64) string {
+		rev := (args>>8)&1 != 0
+		appendMode := (args>>9)&1 != 0
+		hashID := args & 0xFF
+		rendered := int(hashID)
+		if hashID == 255 {
+			rendered = -1
+		}
+		name := "HASHEXT"
+		if appendMode {
+			name += "A"
+		}
+		if rev {
+			name += "R"
+		}
+		return fmt.Sprintf("%s %d", name, rendered)
+	},
+	Action: func(state *vm.State, args uint64) error {
+		rev := (args>>8)&1 != 0
+		appendMode := (args>>9)&1 != 0
+		hashID := int(args & 0xFF)
+		if hashID == 255 {
+			if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
+				return vmerr.Error(vmerr.CodeStackUnderflow)
 			}
-			name := "HASHEXT"
-			if appendMode {
-				name += "A"
-			}
-			if rev {
-				name += "R"
-			}
-			return fmt.Sprintf("%s %d", name, rendered)
-		},
-		BitPrefix:     helpers.UIntPrefix(0x3E41, 14),
-		FixedSizeBits: 10,
-		MinVersion:    4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(args), 10)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(10)
+			v, err := state.Stack.PopIntRangeInt64(0, 254)
 			if err != nil {
 				return err
 			}
-			args = uint16(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			rev := (args>>8)&1 != 0
-			appendMode := (args>>9)&1 != 0
-			hashID := int(args & 0xFF)
-			if hashID == 255 {
-				if state.GlobalVersion >= 9 && state.Stack.Len() < 2 {
-					return vmerr.Error(vmerr.CodeStackUnderflow)
-				}
-				v, err := state.Stack.PopIntRangeInt64(0, 254)
-				if err != nil {
-					return err
-				}
-				hashID = int(v)
-			}
-			maxCnt := state.Stack.Len() - 1
-			if state.GlobalVersion >= 9 && appendMode {
-				maxCnt--
-			}
-			cntInt, err := state.Stack.PopIntRangeInt64(0, int64(maxCnt))
-			if err != nil {
-				return err
-			}
-			cnt := int(cntInt)
-			hasher, err := newHashExtHasher(hashID)
-			if err != nil {
-				return err
-			}
+			hashID = int(v)
+		}
+		maxCnt := state.Stack.Len() - 1
+		if state.GlobalVersion >= 9 && appendMode {
+			maxCnt--
+		}
+		cntInt, err := state.Stack.PopIntRangeInt64(0, int64(maxCnt))
+		if err != nil {
+			return err
+		}
+		cnt := int(cntInt)
+		hasher, err := newHashExtHasher(hashID)
+		if err != nil {
+			return err
+		}
 
-			var totalBits int
-			buf := make([]byte, 0, 64)
-			var gasConsumed int64
-			for i := 0; i < cnt; i++ {
-				idx := i
-				if !rev {
-					idx = cnt - 1 - i
-				}
-				item, getErr := state.Stack.Get(idx)
-				if getErr != nil {
-					return getErr
-				}
-				data, bits, bitsErr := valueBitsForHashExt(item)
-				if bitsErr != nil {
-					if dropErr := state.Stack.Drop(cnt); dropErr != nil {
-						return dropErr
-					}
-					return bitsErr
-				}
-				nextTotalBits := totalBits + bits
-				gasTotal := int64(i+1)*vm.HashExtEntryGasPrice + int64(nextTotalBits/8)/hasher.BytesPerGasUnit()
-				if err = state.ConsumeGas(gasTotal - gasConsumed); err != nil {
-					return err
-				}
-				gasConsumed = gasTotal
-				buf = appendBits(buf, &totalBits, data, bits)
+		var totalBits int
+		buf := make([]byte, 0, 64)
+		var gasConsumed int64
+		for i := 0; i < cnt; i++ {
+			idx := i
+			if !rev {
+				idx = cnt - 1 - i
 			}
-			if err = state.Stack.Drop(cnt); err != nil {
+			item, getErr := state.Stack.Get(idx)
+			if getErr != nil {
+				return getErr
+			}
+			data, bits, bitsErr := valueBitsForHashExt(item)
+			if bitsErr != nil {
+				if dropErr := state.Stack.Drop(cnt); dropErr != nil {
+					return dropErr
+				}
+				return bitsErr
+			}
+			nextTotalBits := totalBits + bits
+			gasTotal := int64(i+1)*vm.HashExtEntryGasPrice + int64(nextTotalBits/8)/hasher.BytesPerGasUnit()
+			if err = state.ConsumeGas(gasTotal - gasConsumed); err != nil {
 				return err
 			}
-			if totalBits%8 != 0 {
-				return vmerr.Error(vmerr.CodeCellUnderflow, "hash input does not consist of a whole number of bytes")
-			}
-			if err = hasher.Append(buf); err != nil {
+			gasConsumed = gasTotal
+			buf = appendBits(buf, &totalBits, data, bits)
+		}
+		if err = state.Stack.Drop(cnt); err != nil {
+			return err
+		}
+		if totalBits%8 != 0 {
+			return vmerr.Error(vmerr.CodeCellUnderflow, "hash input does not consist of a whole number of bytes")
+		}
+		if err = hasher.Append(buf); err != nil {
+			return err
+		}
+		hash := hasher.Finish()
+		if appendMode {
+			builder, err := state.Stack.PopBuilder()
+			if err != nil {
 				return err
 			}
-			hash := hasher.Finish()
-			if appendMode {
-				builder, err := state.Stack.PopBuilder()
-				if err != nil {
-					return err
-				}
-				if !builder.CanExtendBy(uint(len(hash)*8), 0) {
-					return vmerr.Error(vmerr.CodeCellOverflow)
-				}
-				if err = builder.StoreSlice(hash, uint(len(hash)*8)); err != nil {
-					return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
-				}
-				return state.Stack.PushOwnedBuilder(builder)
+			if !builder.CanExtendBy(uint(len(hash)*8), 0) {
+				return vmerr.Error(vmerr.CodeCellOverflow)
 			}
-			if len(hash) <= 32 {
-				return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash))
+			if err = builder.StoreSlice(hash, uint(len(hash)*8)); err != nil {
+				return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 			}
-			out := tuple.NewTupleSized((len(hash) + 31) / 32)
-			for i := 0; i < out.Len(); i++ {
-				start := i * 32
-				end := start + 32
-				if end > len(hash) {
-					end = len(hash)
-				}
-				if err = out.Set(i, new(big.Int).SetBytes(hash[start:end])); err != nil {
-					return err
-				}
+			return state.Stack.PushOwnedBuilder(builder)
+		}
+		if len(hash) <= 32 {
+			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash))
+		}
+		out := tuple.NewTupleSized((len(hash) + 31) / 32)
+		for i := 0; i < out.Len(); i++ {
+			start := i * 32
+			end := start + 32
+			if end > len(hash) {
+				end = len(hash)
 			}
-			return state.Stack.PushTuple(out)
-		},
-	}
+			if err = out.Set(i, new(big.Int).SetBytes(hash[start:end])); err != nil {
+				return err
+			}
+		}
+		return state.Stack.PushTuple(out)
+	},
+})
+
+func HASHEXT(args uint16) vm.OP {
+	return vm.Bind(hashExtOp, uint64(args))
 }
 
 func HASHBU() *helpers.SimpleOP {

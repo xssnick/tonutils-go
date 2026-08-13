@@ -11,10 +11,7 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return storeIntVarExtOp(0) },
-		func() vm.OP { return storeIntFixedExtOp(0, 1) },
-	)
+	vm.ArgList = append(vm.ArgList, storeIntVarExtSharedOp, storeIntFixedExtSharedOp)
 }
 
 func signedStoreFits(x *big.Int, bits uint) bool {
@@ -158,67 +155,50 @@ func storeIntExtName(mode uint8, bits *uint, variable bool) string {
 	return name
 }
 
-func storeIntVarExtOp(mode uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0xCF00>>3, 13),
-		FixedSizeBits: 3,
-		NameSerializer: func() string {
-			return storeIntExtName(mode, nil, true)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(mode), 3)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(3)
-			if err != nil {
-				return err
-			}
-			mode = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 3 {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
-			maxBits := int64(256)
-			if mode&1 == 0 {
-				maxBits = 257
-			}
-			bits, err := state.Stack.PopIntRangeInt64(0, maxBits)
-			if err != nil {
-				return err
-			}
-			return storeIntExtCommon(state, uint(bits), mode)
-		},
-	}
+var storeIntVarExtSharedOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xCF00>>3, 13)),
+	ArgBits:  3,
+	Name: func(args uint64) string {
+		return storeIntExtName(uint8(args), nil, true)
+	},
+	Action: func(state *vm.State, args uint64) error {
+		if state.Stack.Len() < 3 {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
+		mode := uint8(args)
+		maxBits := int64(256)
+		if mode&1 == 0 {
+			maxBits = 257
+		}
+		bits, err := state.Stack.PopIntRangeInt64(0, maxBits)
+		if err != nil {
+			return err
+		}
+		return storeIntExtCommon(state, uint(bits), mode)
+	},
+})
+
+// The 11-bit operand is the mode in bits 8..10 and the width minus one in the
+// low byte, exactly as the instruction encodes it.
+var storeIntFixedExtSharedOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xCF08>>3, 13)),
+	ArgBits:  11,
+	Name: func(args uint64) string {
+		bits := uint(args&0xff) + 1
+		return storeIntExtName(uint8((args>>8)&0x7), &bits, false)
+	},
+	Action: func(state *vm.State, args uint64) error {
+		if state.Stack.Len() < 2 {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
+		return storeIntExtCommon(state, uint(args&0xff)+1, uint8((args>>8)&0x7))
+	},
+})
+
+func storeIntVarExtOp(mode uint8) vm.OP {
+	return vm.Bind(storeIntVarExtSharedOp, uint64(mode))
 }
 
-func storeIntFixedExtOp(mode uint8, bits uint) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0xCF08>>3, 13),
-		FixedSizeBits: 11,
-		NameSerializer: func() string {
-			return storeIntExtName(mode, &bits, false)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().
-				MustStoreUInt(uint64(mode), 3).
-				MustStoreUInt(uint64(bits-1), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(11)
-			if err != nil {
-				return err
-			}
-			mode = uint8((v >> 8) & 0x7)
-			bits = uint(v&0xff) + 1
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
-			return storeIntExtCommon(state, bits, mode)
-		},
-	}
+func storeIntFixedExtOp(mode uint8, bits uint) vm.OP {
+	return vm.Bind(storeIntFixedExtSharedOp, uint64(mode)<<8|uint64(bits-1))
 }

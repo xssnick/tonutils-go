@@ -9,31 +9,29 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MODPOW2CCODE(1) })
+	vm.ArgList = append(vm.ArgList, modPow2CCodeOp)
 }
 
-func MODPOW2CCODE(value int) (op *helpers.AdvancedOP) {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			x, err := popIntFinite(state)
-			if err != nil {
-				return err
-			}
+var modPow2CCodeOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA9, 0x3A)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		x, err := popIntFinite(state)
+		if err != nil {
+			return err
+		}
 
-			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
-			q := helpers.DivCeil(x, divider)
-			r := x.Sub(x, q.Mul(q, divider))
+		divider := new(big.Int).Lsh(bigIntOne, uint(bytePlusOneValue(args)))
+		q := helpers.DivCeil(x, divider)
+		r := x.Sub(x, q.Mul(q, divider))
 
-			return state.Stack.PushInt(r)
-		},
-		BitPrefix:       helpers.BytesPrefix(0xA9, 0x3A),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d MODPOW2C#", imm())
-		},
-		DeserializeSuffix: deserializeImmediate,
-	}
-	return op
+		return state.Stack.PushInt(r)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d MODPOW2C#", bytePlusOneValue(args))
+	},
+})
+
+func MODPOW2CCODE(value int) vm.OP {
+	return vm.Bind(modPow2CCodeOp, bytePlusOneArg(value))
 }

@@ -13,15 +13,13 @@ const invalidContinuationArgs = 0x40000000
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return SETCONTARGS(0, -1) },
-		func() vm.OP { return RETURNARGS(0) },
 		func() vm.OP { return RETURNVARARGS() },
 		func() vm.OP { return SETCONTVARARGS() },
 		func() vm.OP { return SETNUMVARARGS() },
 		func() vm.OP { return BLESS() },
 		func() vm.OP { return BLESSVARARGS() },
-		func() vm.OP { return BLESSARGS(0, -1) },
 	)
+	vm.ArgList = append(vm.ArgList, setContArgsOp, returnArgsOp, blessArgsOp)
 }
 
 func closureStackOverflow() error {
@@ -86,7 +84,7 @@ func setContinuationArgsCommon(state *vm.State, copyCount, more int) error {
 		}
 	}
 
-	return state.Stack.PushContinuation(cont)
+	return state.Stack.PushOwnedContinuation(cont)
 }
 
 func returnArgsCommon(state *vm.State, count int) error {
@@ -150,7 +148,7 @@ func blessArgsCommon(state *vm.State, copyCount, more int) error {
 		return err
 	}
 
-	return state.Stack.PushContinuation(&vm.OrdinaryContinuation{
+	return state.Stack.PushOwnedContinuation(&vm.OrdinaryContinuation{
 		Data: vm.ControlData{
 			Stack:   stack,
 			NumArgs: more,
@@ -160,52 +158,64 @@ func blessArgsCommon(state *vm.State, copyCount, more int) error {
 	})
 }
 
-func SETCONTARGS(copyCount, more int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			return setContinuationArgsCommon(state, copyCount, more)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("SETCONTARGS %d,%d", copyCount, more)
-		},
-		BitPrefix: helpers.BytesPrefix(0xEC),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(encodeCopyMore(copyCount, more), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			raw, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			copyCount, more = parseCopyMore(raw)
-			return nil
-		},
+// decodeCopyMore reads the packed copy/more byte that SETCONTARGS, BLESSARGS
+// and CALLCCARGS share.
+func decodeCopyMore(prefixBits uint) func(*vm.State, *cell.Slice) (uint64, error) {
+	return func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(prefixBits); err != nil {
+			return 0, err
+		}
+		raw, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, err
+		}
+		return packArgPair(parseCopyMore(raw)), nil
 	}
 }
 
-func RETURNARGS(count int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			return returnArgsCommon(state, count)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("RETURNARGS %d", count)
-		},
-		BitPrefix: helpers.SlicePrefix(12, []byte{0xED, 0x00}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(count), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			count = int(val)
-			return nil
-		},
+func serializeCopyMore(prefix helpers.BitPrefix) func(uint64) *cell.Builder {
+	return func(args uint64) *cell.Builder {
+		copyCount, more := unpackArgPair(args)
+		return cell.BeginCell().
+			MustStoreSlice(prefix.Data, prefix.Bits).
+			MustStoreUInt(encodeCopyMore(copyCount, more), 8)
 	}
+}
+
+var setContArgsPrefix = helpers.BytesPrefix(0xEC)
+
+var setContArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(setContArgsPrefix),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		copyCount, more := unpackArgPair(args)
+		return setContinuationArgsCommon(state, copyCount, more)
+	},
+	Decode:     decodeCopyMore(setContArgsPrefix.Bits),
+	Serializer: serializeCopyMore(setContArgsPrefix),
+	Name: func(args uint64) string {
+		copyCount, more := unpackArgPair(args)
+		return fmt.Sprintf("SETCONTARGS %d,%d", copyCount, more)
+	},
+})
+
+var returnArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(12, []byte{0xED, 0x00})),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		return returnArgsCommon(state, int(int32(args)))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("RETURNARGS %d", int32(args))
+	},
+})
+
+func SETCONTARGS(copyCount, more int) vm.OP {
+	return vm.Bind(setContArgsOp, packArgPair(copyCount, more))
+}
+
+func RETURNARGS(count int) vm.OP {
+	return vm.Bind(returnArgsOp, uint64(uint32(count)))
 }
 
 func RETURNVARARGS() *helpers.SimpleOP {
@@ -269,7 +279,7 @@ func BLESS() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return state.Stack.PushContinuation(&vm.OrdinaryContinuation{
+			return state.Stack.PushOwnedContinuation(&vm.OrdinaryContinuation{
 				Data: vm.ControlData{
 					NumArgs: vm.ControlDataAllArgs,
 					CP:      state.CP,
@@ -304,26 +314,23 @@ func BLESSVARARGS() *helpers.SimpleOP {
 	}
 }
 
-func BLESSARGS(copyCount, more int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			return blessArgsCommon(state, copyCount, more)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("BLESSARGS %d,%d", copyCount, more)
-		},
-		BitPrefix: helpers.BytesPrefix(0xEE),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(encodeCopyMore(copyCount, more), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			raw, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			copyCount, more = parseCopyMore(raw)
-			return nil
-		},
-	}
+var blessArgsPrefix = helpers.BytesPrefix(0xEE)
+
+var blessArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(blessArgsPrefix),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		copyCount, more := unpackArgPair(args)
+		return blessArgsCommon(state, copyCount, more)
+	},
+	Decode:     decodeCopyMore(blessArgsPrefix.Bits),
+	Serializer: serializeCopyMore(blessArgsPrefix),
+	Name: func(args uint64) string {
+		copyCount, more := unpackArgPair(args)
+		return fmt.Sprintf("BLESSARGS %d,%d", copyCount, more)
+	},
+})
+
+func BLESSARGS(copyCount, more int) vm.OP {
+	return vm.Bind(blessArgsOp, packArgPair(copyCount, more))
 }

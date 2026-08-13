@@ -51,13 +51,14 @@ func init() {
 		func() vm.OP { return INMSG_VALUE() },
 		func() vm.OP { return INMSG_VALUEEXTRA() },
 		func() vm.OP { return INMSG_STATEINIT() },
-		func() vm.OP { return INMSGPARAM(0) },
 		func() vm.OP { return GETPRECOMPILEDGAS() },
 		func() vm.OP { return RANDU256() },
 		func() vm.OP { return RAND() },
 		func() vm.OP { return SETRAND() },
 		func() vm.OP { return ADDRAND() },
 	)
+
+	vm.ArgList = append(vm.ArgList, inMsgParamOp)
 }
 
 func PREVBLOCKSINFOTUPLE() *helpers.SimpleOP {
@@ -136,29 +137,30 @@ func INMSG_STATEINIT() *helpers.SimpleOP {
 	return inMsgParamAlias("INMSG_STATEINIT", 0x99, inMsgParamStateInit)
 }
 
-func INMSGPARAM(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("INMSGPARAM %d", idx&15)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xF89, 12),
-		FixedSizeBits: 4,
-		MinVersion:    11,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx&15), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			idx = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return pushInMsgParam(state, int(idx&15))
-		},
-	}
+var inMsgParamPrefix = helpers.UIntPrefix(0xF89, 12)
+
+// The operand is masked everywhere it is used, so a constructor called with an
+// index wider than the 4 encoded bits behaves like the instruction it would
+// assemble to.
+var inMsgParamOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(inMsgParamPrefix),
+	ArgBits:    4,
+	MinVersion: 11,
+	Action: func(state *vm.State, args uint64) error {
+		return pushInMsgParam(state, int(args&15))
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().
+			MustStoreSlice(inMsgParamPrefix.Data, inMsgParamPrefix.Bits).
+			MustStoreUInt(args&15, 4)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("INMSGPARAM %d", args&15)
+	},
+})
+
+func INMSGPARAM(idx uint8) vm.OP {
+	return vm.Bind(inMsgParamOp, uint64(idx))
 }
 
 func GETPRECOMPILEDGAS() *helpers.SimpleOP {
@@ -182,7 +184,7 @@ func getPrevBlocksTuple(state *vm.State) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	tup, ok := v.(tuple.Tuple)
-	if !ok || tup.Len() > 255 {
+	if !ok || tup.IsNull() || tup.Len() > 255 {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return tup, nil
@@ -194,7 +196,7 @@ func getInMsgParamsTuple(state *vm.State) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	tup, ok := v.(tuple.Tuple)
-	if !ok {
+	if !ok || tup.IsNull() {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return tup, nil
@@ -241,7 +243,7 @@ func setRandSeed(state *vm.State, seed *big.Int) error {
 		return err
 	}
 	inner, ok := innerVal.(tuple.Tuple)
-	if !ok {
+	if !ok || inner.IsNull() {
 		return vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
 	}
 	if inner.Len() > 255 {

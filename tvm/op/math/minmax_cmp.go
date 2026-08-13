@@ -27,11 +27,8 @@ func init() {
 		func() vm.OP { return QNEQ() },
 		func() vm.OP { return QGEQ() },
 		func() vm.OP { return QCMP() },
-		func() vm.OP { return QEQINT(0) },
-		func() vm.OP { return QLESSINT(0) },
-		func() vm.OP { return QGTINT(0) },
-		func() vm.OP { return QNEQINT(0) },
 	)
+	vm.ArgList = append(vm.ArgList, qEqIntOp, qLessIntOp, qGtIntOp, qNeqIntOp)
 }
 
 func minMaxOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
@@ -116,10 +113,11 @@ func compareOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *hel
 	}
 }
 
-func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, quiet bool) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
+func compareIntOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(prefix),
+		ArgBits:  8,
+		Action: func(state *vm.State, args uint64) error {
 			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
@@ -127,24 +125,17 @@ func compareIntOp(name string, prefix helpers.BitPrefix, mode int, value int8, q
 			if x == nil {
 				return pushNaNOrOverflow(state, quiet)
 			}
-			return pushSmallInt(state, compareModeValue(mode, compareBigIntInt64(x, int64(value))))
+			return pushSmallInt(state, compareModeValue(mode, compareBigIntInt64(x, int64(int8(args)))))
 		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%s %d", name, value)
+		Serializer: func(args uint64) *cell.Builder {
+			return cell.BeginCell().
+				MustStoreSlice(prefix.Data, prefix.Bits).
+				MustStoreInt(int64(int8(args)), 8)
 		},
-		BitPrefix: helpers.BytesPrefix(prefix.Data...),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%s %d", name, int8(args))
 		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(v)
-			return nil
-		},
-	}
+	})
 }
 
 func signOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *helpers.SimpleOP {
@@ -252,18 +243,25 @@ func QCMP() *helpers.SimpleOP {
 	return compareOp("QCMP", helpers.BytesPrefix(0xB7, 0xBF), 0x987, true)
 }
 
-func QEQINT(value int8) *helpers.AdvancedOP {
-	return compareIntOp("QEQINT", helpers.BytesPrefix(0xB7, 0xC0), 0x878, value, true)
+var (
+	qEqIntOp   = compareIntOp("QEQINT", helpers.BytesPrefix(0xB7, 0xC0), 0x878, true)
+	qLessIntOp = compareIntOp("QLESSINT", helpers.BytesPrefix(0xB7, 0xC1), 0x887, true)
+	qGtIntOp   = compareIntOp("QGTINT", helpers.BytesPrefix(0xB7, 0xC2), 0x788, true)
+	qNeqIntOp  = compareIntOp("QNEQINT", helpers.BytesPrefix(0xB7, 0xC3), 0x787, true)
+)
+
+func QEQINT(value int8) vm.OP {
+	return vm.Bind(qEqIntOp, uint64(uint8(value)))
 }
 
-func QLESSINT(value int8) *helpers.AdvancedOP {
-	return compareIntOp("QLESSINT", helpers.BytesPrefix(0xB7, 0xC1), 0x887, value, true)
+func QLESSINT(value int8) vm.OP {
+	return vm.Bind(qLessIntOp, uint64(uint8(value)))
 }
 
-func QGTINT(value int8) *helpers.AdvancedOP {
-	return compareIntOp("QGTINT", helpers.BytesPrefix(0xB7, 0xC2), 0x788, value, true)
+func QGTINT(value int8) vm.OP {
+	return vm.Bind(qGtIntOp, uint64(uint8(value)))
 }
 
-func QNEQINT(value int8) *helpers.AdvancedOP {
-	return compareIntOp("QNEQINT", helpers.BytesPrefix(0xB7, 0xC3), 0x787, value, true)
+func QNEQINT(value int8) vm.OP {
+	return vm.Bind(qNeqIntOp, uint64(uint8(value)))
 }

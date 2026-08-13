@@ -11,43 +11,48 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return ADDCONST(0) })
+	vm.ArgList = append(vm.ArgList, addConstOp)
 }
 
-func ADDCONST(value int8) (op *helpers.AdvancedOP) {
-	arg := big.NewInt(int64(value))
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
+// addConstOp is registered once and shared by every execution. The constant it
+// adds arrives as an argument, so nothing is written back into it and executing
+// the instruction allocates nothing.
+var addConstOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA6)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		i0, err := state.Stack.PopInt()
+		if err != nil {
+			return err
+		}
 
-			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Add(x, arg)
-			})
-		},
-		BitPrefix: helpers.BytesPrefix(0xA6),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("ADDINT %d", value)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadInt(8)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-			}
-			value = int8(val)
-			arg.SetInt64(int64(value))
-			return nil
-		},
-	}
-	return op
+		arg := big.NewInt(int64(int8(args)))
+		return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
+			return x.Add(x, arg)
+		})
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(8); err != nil {
+			return 0, err
+		}
+		val, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
+		}
+		return val, nil
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().MustStoreUInt(0xA6, 8).MustStoreInt(int64(int8(args)), 8)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("ADDINT %d", int8(args))
+	},
+})
+
+func ADDCONST(value int8) vm.OP {
+	return vm.Bind(addConstOp, uint64(uint8(value)))
 }
 
-func ADDINT(value int8) *helpers.AdvancedOP {
+func ADDINT(value int8) vm.OP {
 	return ADDCONST(value)
 }

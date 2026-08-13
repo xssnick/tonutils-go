@@ -34,36 +34,36 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/math/rshiftrcode.go":               1,
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
-	"transaction_account.go":               14,
-	"transaction_actions.go":               38,
+	"transaction_account.go":               17,
+	"transaction_actions.go":               40,
 	"transaction_bounce.go":                3,
 	"transaction_config.go":                1,
-	"transaction_emulation.go":             4,
+	"transaction_emulation.go":             5,
 	"transaction_fees.go":                  4,
 	"vm/cell_manager.go":                   1,
 	"vm/child_vm.go":                       2,
 	"vm/exec.go":                           2,
-	"vm/libraries.go":                      1,
-	"vm.go":                                5,
+	"vm/libraries.go":                      3,
+	"vm.go":                                6,
 	"vm/state.go":                          1,
 }
 
-var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 var expectedTransactionGlobalVersionGateCounts = map[string]int{
-	"transaction_account.go":   14,
-	"transaction_actions.go":   38,
+	"transaction_account.go":   17,
+	"transaction_actions.go":   40,
 	"transaction_bounce.go":    3,
 	"transaction_config.go":    1,
-	"transaction_emulation.go": 4,
+	"transaction_emulation.go": 5,
 	"transaction_fees.go":      4,
 }
 
-var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 4
-	expectedRuntimeGlobalVersionDynamicGateHash  = "632b9449aa6f588c10bbd140a7b65f7c435698a224380f5d4efaa33f590eb59d"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "3a8f759bc824031d5599dfa654a7275a82bfe9e5ee8525cdbb075f5f5c604c36"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )
@@ -128,6 +128,7 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	"transaction_account.go": {
 		"FuzzTransactionFinalizeAccountStatusBoundaries",
 		"FuzzTransactionVersionedAccountStateLimitBoundaries",
+		"FuzzTransactionVersionedComputeStateInitBoundaries",
 	},
 	"transaction_actions.go": {
 		"FuzzTransactionVersionedReserveActionBoundaries",
@@ -283,6 +284,7 @@ var expectedTransactionGlobalVersionGateLocalAnchors = map[string][]string{
 	"transaction_account.go": {
 		"FuzzTransactionFinalizeAccountStatusBoundaries",
 		"FuzzTransactionVersionedAccountStateLimitBoundaries",
+		"FuzzTransactionVersionedComputeStateInitBoundaries",
 	},
 	"transaction_actions.go": {
 		"FuzzTransactionVersionedReserveActionBoundaries",

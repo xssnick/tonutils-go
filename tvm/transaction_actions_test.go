@@ -278,6 +278,14 @@ func buildTransactionResult39WorkchainsConfig(t *testing.T) *cell.Cell {
 		MustStoreUInt(511, 12).
 		MustStoreUInt(1, 12).
 		MustStoreUInt(1, 32).
+		// workchain_v2#a7 tail: split_merge_timings:WcSplitMergeTimings
+		// persistent_state_split_depth:(## 8)
+		MustStoreUInt(0, 4).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(10, 32).
+		MustStoreUInt(1000, 32).
+		MustStoreUInt(5, 8).
 		EndCell()
 	if err := workchains.SetIntKey(big.NewInt(0), basechain); err != nil {
 		t.Fatalf("store basechain descriptor: %v", err)
@@ -561,6 +569,24 @@ func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 			t.Fatalf("expected extra currency trailing data error, got %v", err)
 		}
 	})
+
+	for _, malformed := range []struct {
+		name     string
+		extraBit bool
+		extraRef bool
+	}{
+		{name: "fork payload bit", extraBit: true},
+		{name: "third fork ref", extraRef: true},
+	} {
+		t.Run("rejects extra currency "+malformed.name, func(t *testing.T) {
+			extra := transactionMalformedExtraCurrencyFork(t, malformed.extraBit, malformed.extraRef)
+			msg := transactionTestRelaxedInternalMessageWithExtra(extra, false)
+
+			if _, err := transactionValidateRelaxedActionMessageCurrencies(msg); !errors.Is(err, errTransactionInvalidRelaxedActionMessage) {
+				t.Fatalf("malformed extra-currency fork error = %v, want invalid relaxed message", err)
+			}
+		})
+	}
 
 	t.Run("reports trailing data after body ref", func(t *testing.T) {
 		msg := transactionTestRelaxedInternalMessageWithExtra(nil, true)
@@ -2126,7 +2152,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *
 		data:    data,
 		balance: new(big.Int).Set(balance),
 	}
-	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0))
+	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2218,6 +2244,36 @@ func transactionTestRelaxedInternalMessageWithExtra(extra *cell.Dictionary, trai
 		builder.MustStoreBoolBit(true)
 	}
 	return builder.EndCell()
+}
+
+func transactionMalformedExtraCurrencyFork(t *testing.T, extraBit, extraRef bool) *cell.Dictionary {
+	t.Helper()
+
+	dict := cell.NewDict(32)
+	for i, key := range []uint64{0, 1 << 31} {
+		value := cell.BeginCell().MustStoreBigVarUInt(big.NewInt(int64(i+1)), 32).EndCell()
+		if err := dict.SetIntKey(new(big.Int).SetUint64(key), value); err != nil {
+			t.Fatalf("store extra currency %d: %v", key, err)
+		}
+	}
+
+	root := dict.AsCell()
+	rootSlice := root.MustBeginParse()
+	malformed := cell.BeginCell().MustStoreSlice(rootSlice.MustLoadSlice(root.BitsSize()), root.BitsSize())
+	if extraBit {
+		malformed.MustStoreBoolBit(true)
+	}
+	for rootSlice.RefsNum() > 0 {
+		ref, err := rootSlice.LoadRefCell()
+		if err != nil {
+			t.Fatalf("load extra-currency fork ref: %v", err)
+		}
+		malformed.MustStoreRef(ref)
+	}
+	if extraRef {
+		malformed.MustStoreRef(cell.BeginCell().EndCell())
+	}
+	return malformed.EndCell().AsDict(32)
 }
 
 func transactionTestMessageWithReferencedStateInit(stateInit *cell.Cell, external bool) *cell.Cell {
@@ -2336,4 +2392,16 @@ func lazyTransactionTestRoot(t *testing.T, root *cell.Cell) *cell.Cell {
 		t.Fatalf("lazy parse returned %d roots, want 1", len(roots))
 	}
 	return roots[0]
+}
+
+// preV9TestOriginalBalance builds the RAWRESERVE base used below global
+// version 9 for direct action-phase calls: these fixtures collect no fees, so
+// the base is simply the account balance the fixture starts with.
+func preV9TestOriginalBalance(t *testing.T, balance *big.Int, extra *cell.Dictionary) *transactionCurrencyBalance {
+	t.Helper()
+	base, err := transactionCurrencyFromParts(balance, extra)
+	if err != nil {
+		t.Fatalf("build pre-v9 original balance: %v", err)
+	}
+	return base
 }

@@ -592,10 +592,14 @@ func TestAugmentedDictionary_ValidationAndNilAPICoverage(t *testing.T) {
 	if err := validateAugmentedDictNode(pruned, 8, aug.SkipExtra); err != nil {
 		t.Fatalf("pruned augmented node should be accepted: %v", err)
 	}
-	if _, err := computeAugmentedNodeExtra(pruned, 8, aug); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
+	prunedWalk := augValidateWalk{aug: aug}
+	var prunedExtra Slice
+	if err := prunedWalk.node(pruned, 8, 0, &prunedExtra); !errors.Is(err, ErrAugmentationSemanticsUnavailable) {
 		t.Fatalf("expected pruned extra computation to report unavailable semantics, got %v", err)
 	}
-	if _, err := computeAugmentedNodeExtra(nil, 8, aug); err != nil {
+	emptyWalk := augValidateWalk{aug: aug}
+	var emptyExtra Slice
+	if err := emptyWalk.node(nil, 8, 0, &emptyExtra); err != nil {
 		t.Fatalf("nil extra computation should use EmptyExtra, got %v", err)
 	}
 	if _, err := extractAugmentedNodeExtra(nil, 8, aug.SkipExtra); err == nil {

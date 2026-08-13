@@ -49,7 +49,7 @@ func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 		return &panicTestOP{}
 	}
 	dispatch := newOpcodeDispatch()
-	dispatch.addPrefix((&panicTestOP{}).GetPrefixes()[0], getter)
+	dispatch.addPrefix((&panicTestOP{}).GetPrefixes()[0], &dispatchEntry{get: getter})
 	dispatch.buildFastTable()
 
 	machine := NewTVM()
@@ -73,9 +73,9 @@ func TestVMRecoversOpcodePanicsAsFatalError(t *testing.T) {
 func TestStepUsesReferencePreflightContractWithoutRollback(t *testing.T) {
 	op := &lateUnderflowTestOP{}
 	dispatch := newOpcodeDispatch()
-	dispatch.addPrefix(op.GetPrefixes()[0], func() vmcore.OP {
+	dispatch.addPrefix(op.GetPrefixes()[0], &dispatchEntry{get: func() vmcore.OP {
 		return &lateUnderflowTestOP{}
-	})
+	}})
 	dispatch.buildFastTable()
 
 	stack := vmcore.NewStack()

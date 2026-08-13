@@ -8,30 +8,30 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return LSHIFTCODE(1) })
+	vm.ArgList = append(vm.ArgList, lshiftCodeOp)
 }
 
-func LSHIFTCODE(value int) (op *helpers.AdvancedOP) {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			x, err := popIntRead(state)
-			if err != nil {
-				return err
-			}
-			if x == nil {
-				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), false), false)
-			}
+var lshiftCodeOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xAA)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		x, err := popIntRead(state)
+		if err != nil {
+			return err
+		}
 
-			return pushMaybeInt(state, leftShiftResult(x, uint64(imm())), false)
-		},
-		BitPrefix:       helpers.BytesPrefix(0xAA),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d LSHIFT#", imm())
-		},
-		DeserializeSuffix: deserializeImmediate,
-	}
-	return op
+		shift := uint64(bytePlusOneValue(args))
+		if x == nil {
+			return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, shift, false), false)
+		}
+
+		return pushMaybeInt(state, leftShiftResult(x, shift), false)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d LSHIFT#", bytePlusOneValue(args))
+	},
+})
+
+func LSHIFTCODE(value int) vm.OP {
+	return vm.Bind(lshiftCodeOp, bytePlusOneArg(value))
 }

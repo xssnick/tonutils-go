@@ -61,14 +61,18 @@ func pushCommittedResultCell(parent *Stack, committed bool, value *cell.Cell) er
 	return pushMaybeCell(parent, value)
 }
 
-func childResultRegisterValue(child *State, committedValue, currentValue *cell.Cell) *cell.Cell {
+// pushChildResultRegister returns a child VM's result register: a committed
+// child returns its committed c4/c5; a non-committed one returns null at
+// global version >= 11 and the degenerate committed-state cell (an entry
+// holding a null cell reference) below it.
+func pushChildResultRegister(parent *Stack, child *State, committedValue *cell.Cell, trace *cell.Trace) error {
 	if child.Committed.Committed {
-		return committedValue
+		return pushMaybeCell(parent, unbindCellTrace(committedValue, trace))
 	}
-	if child.effectiveGlobalVersion() < 11 {
-		return currentValue
+	if child.effectiveGlobalVersion() >= 11 {
+		return parent.PushAny(nil)
 	}
-	return nil
+	return parent.PushCell(nil)
 }
 
 func (s *State) RunChildVM(cfg ChildVMConfig) error {
@@ -153,7 +157,10 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		if !vmErrOk && !IsHandledException(childErr) {
 			return childErr
 		}
-		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
+		// Only a genuine unhandled out-of-gas flips the sign; an exception
+		// with code 13 caught by c2 is a regular handled exit and stays
+		// positive.
+		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 && !IsHandledException(childErr) {
 			exitCode = ^exitCode
 		}
 	}
@@ -198,17 +205,13 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	}
 
 	if cfg.ReturnData {
-		data := childResultRegisterValue(child, child.Committed.Data, child.Reg.D[0])
-		data = unbindCellTrace(data, childTrace)
-		if err := pushMaybeCell(s.Stack, data); err != nil {
+		if err := pushChildResultRegister(s.Stack, child, child.Committed.Data, childTrace); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnActions {
-		actions := childResultRegisterValue(child, child.Committed.Actions, child.Reg.D[1])
-		actions = unbindCellTrace(actions, childTrace)
-		if err := pushMaybeCell(s.Stack, actions); err != nil {
+		if err := pushChildResultRegister(s.Stack, child, child.Committed.Actions, childTrace); err != nil {
 			return err
 		}
 	}

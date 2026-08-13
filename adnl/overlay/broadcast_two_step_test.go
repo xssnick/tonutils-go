@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,6 +14,25 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/tl"
 )
+
+type broadcastTwoStepTestSigner struct {
+	key   ed25519.PrivateKey
+	err   error
+	calls atomic.Int32
+}
+
+func (s *broadcastTwoStepTestSigner) PublicKey() ed25519.PublicKey {
+	return s.key.Public().(ed25519.PublicKey)
+}
+
+func (s *broadcastTwoStepTestSigner) Sign(payload []byte) ([]byte, error) {
+	s.calls.Add(1)
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return ed25519.Sign(s.key, payload), nil
+}
 
 func TestBroadcastTwoStepSignAndIDHelpers(t *testing.T) {
 	_, priv := keyPairFromSeed(71)
@@ -153,6 +173,285 @@ func TestSendBroadcastTwoStepSimple(t *testing.T) {
 		if !bytes.Equal(id, res.BroadcastID) {
 			t.Fatalf("result id differs from wire id")
 		}
+	}
+}
+
+func TestSendBroadcastTwoStepFanoutDoesNotWaitForSlowPeer(t *testing.T) {
+	_, priv := keyPairFromSeed(89)
+	firstStarted := make(chan struct{})
+	firstRelease := make(chan struct{})
+	secondSent := make(chan struct{})
+	firstPeer := &mockBroadcastPeer{
+		id: bytes.Repeat([]byte{0x31}, 32),
+		sendFunc: func(ctx context.Context, _ tl.Serializable) error {
+			close(firstStarted)
+			select {
+			case <-firstRelease:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	secondPeer := &mockBroadcastPeer{
+		id: bytes.Repeat([]byte{0x32}, 32),
+		sendFunc: func(context.Context, tl.Serializable) error {
+			close(secondSent)
+			return nil
+		},
+	}
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+			Key:         priv,
+			Certificate: CertificateEmpty{},
+			LocalADNLID: bytes.Repeat([]byte{0x30}, 32),
+			Payload:     []byte("small"),
+			PeerSet: mockBroadcastPeerSet{peers: []BroadcastPeer{
+				firstPeer,
+				secondPeer,
+			}},
+		}, WithBroadcastTwoStepDate(111))
+		done <- err
+	}()
+
+	select {
+	case <-firstStarted:
+	case <-time.After(time.Second):
+		close(firstRelease)
+		t.Fatal("first peer was not called")
+	}
+
+	select {
+	case <-secondSent:
+	case <-time.After(time.Second):
+		close(firstRelease)
+		t.Fatal("second peer waited for the first peer")
+	}
+
+	close(firstRelease)
+	if err := <-done; err != nil {
+		t.Fatalf("parallel fanout failed: %v", err)
+	}
+}
+
+func TestSendBroadcastTwoStepBoundedFanout(t *testing.T) {
+	const concurrency = 4
+
+	_, priv := keyPairFromSeed(90)
+	localID := bytes.Repeat([]byte{0x40}, 32)
+
+	var running, peakRunning atomic.Int32
+	peers := mockBroadcastPeerSet{peers: make([]BroadcastPeer, 12)}
+	arrived := make(chan struct{}, len(peers.peers))
+	release := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(release) })
+	defer releaseAll()
+
+	for i := range peers.peers {
+		peers.peers[i] = &mockBroadcastPeer{
+			id: bytes.Repeat([]byte{byte(0x41 + i)}, 32),
+			sendFunc: func(context.Context, tl.Serializable) error {
+				inFlight := running.Add(1)
+				for {
+					peak := peakRunning.Load()
+					if inFlight <= peak || peakRunning.CompareAndSwap(peak, inFlight) {
+						break
+					}
+				}
+
+				arrived <- struct{}{}
+				<-release
+				running.Add(-1)
+
+				return nil
+			},
+		}
+	}
+
+	type sendOutcome struct {
+		res BroadcastTwoStepSendResult
+		err error
+	}
+	done := make(chan sendOutcome, 1)
+	go func() {
+		res, err := SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+			Key:         priv,
+			Certificate: CertificateEmpty{},
+			LocalADNLID: localID,
+			Payload:     bytes.Repeat([]byte{0xB7}, 1024),
+			PeerSet:     peers,
+		},
+			WithBroadcastTwoStepDate(230),
+			WithBroadcastTwoStepSendConcurrency(concurrency),
+		)
+		done <- sendOutcome{res: res, err: err}
+	}()
+
+	for i := 0; i < concurrency; i++ {
+		select {
+		case <-arrived:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("only %d of %d peers were dispatched in parallel", i, concurrency)
+		}
+	}
+
+	// The bound must hold the rest back while the first batch is still stuck.
+	select {
+	case <-arrived:
+		t.Fatal("dispatched more peers than the configured bound")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	releaseAll()
+	outcome := <-done
+	if outcome.err != nil {
+		t.Fatalf("bounded fanout failed: %v", outcome.err)
+	}
+	if peak := peakRunning.Load(); peak > concurrency {
+		t.Fatalf("peak parallel sends %d, want at most %d", peak, concurrency)
+	}
+	if outcome.res.Mode != BroadcastTwoStepModeFEC {
+		t.Fatalf("unexpected send mode %d", outcome.res.Mode)
+	}
+	if outcome.res.Attempted != len(peers.peers) || outcome.res.Sent != len(peers.peers) {
+		t.Fatalf("unexpected send counters: %#v", outcome.res)
+	}
+	if outcome.res.Failed != nil {
+		t.Fatalf("Failed must stay nil when every peer succeeds, got %#v", outcome.res.Failed)
+	}
+
+	for index, p := range peers.peers {
+		peer := p.(*mockBroadcastPeer)
+		if len(peer.sent) != 1 {
+			t.Fatalf("peer %d got %d messages", index, len(peer.sent))
+		}
+		message, ok := peer.sent[0].(*BroadcastTwoStepFEC)
+		if !ok {
+			t.Fatalf("peer %d received %T, want FEC part", index, peer.sent[0])
+		}
+		if message.Seqno != uint32(index) {
+			t.Fatalf("peer %d got seqno %d", index, message.Seqno)
+		}
+		if err := message.VerifySignature(); err != nil {
+			t.Fatalf("peer %d signature: %v", index, err)
+		}
+	}
+}
+
+func TestSendBroadcastTwoStepBoundedFanoutIsolatesFailedPeer(t *testing.T) {
+	_, priv := keyPairFromSeed(91)
+	localID := bytes.Repeat([]byte{0x50}, 32)
+	sendErr := errors.New("send failed")
+
+	peers := mockBroadcastPeerSet{peers: make([]BroadcastPeer, 9)}
+	for i := range peers.peers {
+		peers.peers[i] = &mockBroadcastPeer{id: bytes.Repeat([]byte{byte(0x51 + i)}, 32)}
+	}
+	badPeer := peers.peers[5].(*mockBroadcastPeer)
+	badPeer.sendErr = sendErr
+
+	res, err := SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+		Key:         priv,
+		Certificate: CertificateEmpty{},
+		LocalADNLID: localID,
+		Payload:     bytes.Repeat([]byte{0xB8}, 1024),
+		PeerSet:     peers,
+	},
+		WithBroadcastTwoStepDate(231),
+		WithBroadcastTwoStepSendConcurrency(2),
+	)
+	if !errors.Is(err, sendErr) {
+		t.Fatalf("send error = %v, want peer send error", err)
+	}
+	if res.Attempted != len(peers.peers) || res.Sent != len(peers.peers)-1 || len(res.Failed) != 1 {
+		t.Fatalf("unexpected send counters: %#v", res)
+	}
+	if !bytes.Equal(res.Failed[0].PeerID, badPeer.id) || res.Failed[0].Err != sendErr {
+		t.Fatalf("unexpected failed peer: %#v", res.Failed[0])
+	}
+
+	for index, p := range peers.peers {
+		peer := p.(*mockBroadcastPeer)
+		message, ok := peer.sent[0].(*BroadcastTwoStepFEC)
+		if !ok {
+			t.Fatalf("peer %d received %T, want FEC part", index, peer.sent[0])
+		}
+		if message.Seqno != uint32(index) {
+			t.Fatalf("peer %d got seqno %d", index, message.Seqno)
+		}
+	}
+}
+
+func TestSendBroadcastTwoStepUsesSigner(t *testing.T) {
+	_, privateKey := keyPairFromSeed(84)
+	signer := &broadcastTwoStepTestSigner{key: privateKey}
+	localID := bytes.Repeat([]byte{0x5A}, 32)
+	peers := mockBroadcastPeerSet{peers: make([]BroadcastPeer, 5)}
+	for i := range peers.peers {
+		peers.peers[i] = &mockBroadcastPeer{id: bytes.Repeat([]byte{byte(0x60 + i)}, 32)}
+	}
+
+	result, err := SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+		Signer:      signer,
+		Certificate: CertificateEmpty{},
+		LocalADNLID: localID,
+		Payload:     bytes.Repeat([]byte{0xE1}, 1024),
+		PeerSet:     peers,
+	}, WithBroadcastTwoStepDate(226))
+	if err != nil {
+		t.Fatalf("send with signer failed: %v", err)
+	}
+	if result.Mode != BroadcastTwoStepModeFEC {
+		t.Fatalf("unexpected send mode %d", result.Mode)
+	}
+	if signer.calls.Load() != int32(len(peers.peers)) {
+		t.Fatalf("signer calls = %d, want %d", signer.calls.Load(), len(peers.peers))
+	}
+
+	for index, peer := range peers.peers {
+		message, ok := peer.(*mockBroadcastPeer).sent[0].(*BroadcastTwoStepFEC)
+		if !ok {
+			t.Fatalf("peer %d received %T, want FEC part", index, peer.(*mockBroadcastPeer).sent[0])
+		}
+		if err = message.VerifySignature(); err != nil {
+			t.Fatalf("peer %d signature: %v", index, err)
+		}
+		if !bytes.Equal(message.Source.(keys.PublicKeyED25519).Key, signer.PublicKey()) {
+			t.Fatalf("peer %d source key differs from signer", index)
+		}
+	}
+}
+
+func TestSendBroadcastTwoStepSignerErrors(t *testing.T) {
+	_, privateKey := keyPairFromSeed(85)
+	signErr := errors.New("sign failed")
+	signer := &broadcastTwoStepTestSigner{key: privateKey, err: signErr}
+	peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{0x71}, 32)}
+
+	_, err := SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+		Signer:      signer,
+		LocalADNLID: bytes.Repeat([]byte{0x70}, 32),
+		Payload:     []byte("payload"),
+		PeerSet:     mockBroadcastPeerSet{peers: []BroadcastPeer{peer}},
+	})
+	if !errors.Is(err, signErr) {
+		t.Fatalf("send error = %v, want signer error", err)
+	}
+	if len(peer.sent) != 0 {
+		t.Fatalf("sent %d messages after signer failure", len(peer.sent))
+	}
+
+	_, err = SendBroadcastTwoStep(context.Background(), BroadcastTwoStepSendRequest{
+		Key:         privateKey,
+		Signer:      signer,
+		LocalADNLID: bytes.Repeat([]byte{0x70}, 32),
+		Payload:     []byte("payload"),
+		PeerSet:     mockBroadcastPeerSet{peers: []BroadcastPeer{peer}},
+	})
+	if err == nil {
+		t.Fatal("expected mutually exclusive key and signer error")
 	}
 }
 
@@ -380,7 +679,7 @@ func TestProcessBroadcastTwoStepSimple(t *testing.T) {
 	var prechecks []bool
 	o.SetBroadcastPrecheckHandler(func(info BroadcastPrecheckInfo) error {
 		prechecks = append(prechecks, info.SignatureChecked)
-		if !bytes.Equal(info.Extra, []byte("extra")) {
+		if !bytes.Equal(info.Extra, []byte("extra")) || !bytes.Equal(info.SourceADNL, sourceADNL) {
 			t.Fatalf("unexpected precheck extra")
 		}
 		return nil
@@ -404,7 +703,7 @@ func TestProcessBroadcastTwoStepSimple(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected one delivery, got %d", handled)
 	}
-	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepSimple || !bytes.Equal(gotInfo.Extra, []byte("extra")) || len(gotInfo.BroadcastID) != 32 {
+	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepSimple || !bytes.Equal(gotInfo.Extra, []byte("extra")) || !bytes.Equal(gotInfo.SourceADNL, sourceADNL) || len(gotInfo.BroadcastID) != 32 {
 		t.Fatalf("unexpected delivered info: %#v", gotInfo)
 	}
 	if len(prechecks) != 2 || prechecks[0] || !prechecks[1] {
@@ -548,7 +847,7 @@ func TestProcessBroadcastTwoStepFEC(t *testing.T) {
 	if handled != 1 {
 		t.Fatalf("expected decoded delivery, got %d", handled)
 	}
-	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepFEC || !bytes.Equal(gotInfo.Extra, []byte("fec-extra")) || !bytes.Equal(gotInfo.BroadcastID, sendRes.BroadcastID) {
+	if !gotInfo.Trusted || gotInfo.Delivery != BroadcastDeliveryTwoStepFEC || !bytes.Equal(gotInfo.Extra, []byte("fec-extra")) || !bytes.Equal(gotInfo.SourceADNL, sourceADNL) || !bytes.Equal(gotInfo.BroadcastID, sendRes.BroadcastID) {
 		t.Fatalf("unexpected fec info: %#v", gotInfo)
 	}
 

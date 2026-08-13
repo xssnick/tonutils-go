@@ -131,10 +131,11 @@ func TestSendMsgTupleAmountVersionedExtraSemantics(t *testing.T) {
 			wantCode: vmerr.CodeTypeCheck,
 		},
 		{
-			name:    "missing amount",
-			version: 9,
-			param:   tuple.Tuple{},
-			wantErr: true,
+			name:     "typed null balance",
+			version:  9,
+			param:    tuple.Tuple{},
+			wantErr:  true,
+			wantCode: vmerr.CodeTypeCheck,
 		},
 		{
 			name:    "legacy requires extra slot",
@@ -1060,11 +1061,7 @@ func TestMiscMessageMoreStoreAndSendMsgBranches(t *testing.T) {
 	t.Run("sendmsg caps statistics at the size limit", func(t *testing.T) {
 		myAddr := address.NewAddress(0, 0, bytes.Repeat([]byte{0x33}, 32))
 		dest := address.NewAddress(0, 0, bytes.Repeat([]byte{0x44}, 32))
-		sizeLimit := cell.BeginCell().
-			MustStoreUInt(0x01, 8).
-			MustStoreUInt(0, 32).
-			MustStoreUInt(0, 32).
-			ToSlice()
+		sizeLimit := sizeLimitsV1Slice(0, 0)
 		st := makeSendMsgEdgeState(t, myAddr, nil, makeMsgPricesSlice(1, 0, 0), sizeLimit)
 
 		body := cell.BeginCell().MustStoreSlice(bytes.Repeat([]byte{0xAA}, 125), 1000).EndCell()

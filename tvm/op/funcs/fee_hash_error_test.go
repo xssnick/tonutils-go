@@ -328,6 +328,21 @@ func TestFeeHashAdditionalPaths(t *testing.T) {
 		if _, err := st.Stack.PopBuilder(); err != nil {
 			t.Fatalf("HASHEXTA byte-alignment error left unexpected stack item: %v", err)
 		}
+
+		st = newFuncTestState(t, nil)
+		if err := st.Stack.PushOwnedBuilder(nil); err != nil {
+			t.Fatalf("PushOwnedBuilder(nil) failed: %v", err)
+		}
+		if err := st.Stack.PushInt(big.NewInt(1)); err != nil {
+			t.Fatalf("PushInt failed: %v", err)
+		}
+		err = HASHEXT(0).Interpret(st)
+		if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeTypeCheck {
+			t.Fatalf("HASHEXT typed-null builder error = %v (code %d), want type check", err, code)
+		}
+		if st.Stack.Len() != 0 {
+			t.Fatalf("HASHEXT typed-null builder should pop all hash items, got depth %d", st.Stack.Len())
+		}
 	})
 
 	t.Run("FeeOpErrors", func(t *testing.T) {

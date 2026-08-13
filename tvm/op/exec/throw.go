@@ -26,16 +26,18 @@ var (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwShortCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwIfShortCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwIfNotShortCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwLongCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwArgCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwIfLongCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwArgIfCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwIfNotLongCfg} })
-	vm.List = append(vm.List, func() vm.OP { return &opThrowFixed{cfg: throwArgIfNotCfg} })
-	vm.List = append(vm.List, func() vm.OP { return newThrowAny() })
+	vm.ArgList = append(vm.ArgList,
+		newThrowFixedOp(throwShortCfg),
+		newThrowFixedOp(throwIfShortCfg),
+		newThrowFixedOp(throwIfNotShortCfg),
+		newThrowFixedOp(throwLongCfg),
+		newThrowFixedOp(throwArgCfg),
+		newThrowFixedOp(throwIfLongCfg),
+		newThrowFixedOp(throwArgIfCfg),
+		newThrowFixedOp(throwIfNotLongCfg),
+		newThrowFixedOp(throwArgIfNotCfg),
+		throwAnyOp,
+	)
 }
 
 func throwAnyPrefixes() []helpers.BitPrefix {
@@ -95,46 +97,20 @@ func newThrowFixedCfg(name string, prefix []byte, prefixBits, immBits uint, mode
 	}
 }
 
-// opThrowFixed is a struct-based opcode: one allocation per executed
-// instruction instead of an AdvancedOP carrying per-instance closures.
-type opThrowFixed struct {
-	cfg *throwFixedCfg
-	exc uint64
+func newThrowFixedOp(cfg *throwFixedCfg) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(cfg.prefix),
+		ArgBits:  cfg.immBits,
+		Action: func(state *vm.State, args uint64) error {
+			return throwFixed(state, cfg, args)
+		},
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%s %d", cfg.name, args)
+		},
+	})
 }
 
-func (op *opThrowFixed) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(op.cfg.prefix)
-}
-
-func (op *opThrowFixed) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(op.cfg.prefix.Bits); err != nil {
-		return err
-	}
-	val, err := code.LoadUInt(op.cfg.immBits)
-	if err != nil {
-		return err
-	}
-	op.exc = val
-	return nil
-}
-
-func (op *opThrowFixed) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(op.cfg.prefix.Data, op.cfg.prefix.Bits).
-		MustStoreUInt(op.exc, op.cfg.immBits)
-}
-
-func (op *opThrowFixed) SerializeText() string {
-	return fmt.Sprintf("%s %d", op.cfg.name, op.exc)
-}
-
-func (op *opThrowFixed) InstructionBits() int64 {
-	return int64(op.cfg.prefix.Bits) + int64(op.cfg.immBits)
-}
-
-func (op *opThrowFixed) Interpret(state *vm.State) error {
-	cfg := op.cfg
-
+func throwFixed(state *vm.State, cfg *throwFixedCfg, exc uint64) error {
 	if cfg.need > 0 {
 		if state.Stack.Len() < cfg.need {
 			return vmerr.Error(vmerr.CodeStackUnderflow)
@@ -157,14 +133,14 @@ func (op *opThrowFixed) Interpret(state *vm.State) error {
 				return nil
 			}
 
-			return state.ThrowException(big.NewInt(int64(op.exc)), arg)
+			return state.ThrowException(big.NewInt(int64(exc)), arg)
 		}
 
 		if cond != cfg.expected {
 			return nil
 		}
 
-		return state.ThrowException(big.NewInt(int64(op.exc)))
+		return state.ThrowException(big.NewInt(int64(exc)))
 	}
 
 	if cfg.withArg {
@@ -173,50 +149,18 @@ func (op *opThrowFixed) Interpret(state *vm.State) error {
 			return err
 		}
 
-		return state.ThrowException(big.NewInt(int64(op.exc)), arg)
+		return state.ThrowException(big.NewInt(int64(exc)), arg)
 	}
 
-	return state.ThrowException(big.NewInt(int64(op.exc)))
+	return state.ThrowException(big.NewInt(int64(exc)))
 }
 
-func newThrowAny() *helpers.AdvancedOP {
-	var args uint64
-	op := &helpers.AdvancedOP{
-		BitPrefix:     throwAnyBitPrefix,
-		Prefixes:      throwAnyPrefixesConst,
-		FixedSizeBits: 3,
-		NameSerializer: func() string {
-			name := "THROW"
-			if args&1 != 0 {
-				name += "ARG"
-			}
-			name += "ANY"
-			if args&6 != 0 {
-				if args&2 != 0 {
-					name += "IF"
-				} else {
-					name += "IFNOT"
-				}
-			}
-			return name
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(args, 3)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(3)
-			if err != nil {
-				return err
-			}
-			if val > 5 {
-				return vm.ErrCorruptedOpcode
-			}
-			args = val
-			return nil
-		},
-	}
-
-	op.Action = func(state *vm.State) error {
+// throwAnyOp is dispatched on 16-bit prefixes that already carry the 3-bit mode
+// — the six defined modes are the only ones that reach it — while the
+// instruction is a 13-bit opcode plus that mode.
+var throwAnyOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.NewPrefixed(throwAnyPrefixesConst...),
+	Action: func(state *vm.State, args uint64) error {
 		hasParam := args&1 != 0
 		hasCond := args&6 != 0
 		throwCond := args&2 != 0
@@ -268,7 +212,38 @@ func newThrowAny() *helpers.AdvancedOP {
 		}
 
 		return state.ThrowException(big.NewInt(exc))
-	}
-
-	return op
-}
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(throwAnyBitPrefix.Bits); err != nil {
+			return 0, err
+		}
+		val, err := code.LoadUInt(3)
+		if err != nil {
+			return 0, err
+		}
+		if val > 5 {
+			return 0, vm.ErrCorruptedOpcode
+		}
+		return val, nil
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().
+			MustStoreSlice(throwAnyBitPrefix.Data, throwAnyBitPrefix.Bits).
+			MustStoreUInt(args, 3)
+	},
+	Name: func(args uint64) string {
+		name := "THROW"
+		if args&1 != 0 {
+			name += "ARG"
+		}
+		name += "ANY"
+		if args&6 != 0 {
+			if args&2 != 0 {
+				name += "IF"
+			} else {
+				name += "IFNOT"
+			}
+		}
+		return name
+	},
+})

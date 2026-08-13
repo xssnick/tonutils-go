@@ -10,27 +10,27 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMOD#", 0xD0, 0, 0, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODR#", 0xD1, 0, 1, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTADDDIVMODC#", 0xD2, 0, 2, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIV#", 0xD4, 1, 0, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVR#", 0xD5, 1, 1, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVC#", 0xD6, 1, 2, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMOD#", 0xD8, 2, 0, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODR#", 0xD9, 2, 1, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTMODC#", 0xDA, 2, 2, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMOD#", 0xDC, 3, 0, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODR#", 0xDD, 3, 1, 1) },
-		func() vm.OP { return lshiftDivCodeOp("LSHIFTDIVMODC#", 0xDE, 3, 2, 1) },
+	vm.ArgList = append(vm.ArgList,
+		newLshiftDivCodeOp("LSHIFTADDDIVMOD#", 0xD0, 0, 0),
+		newLshiftDivCodeOp("LSHIFTADDDIVMODR#", 0xD1, 0, 1),
+		newLshiftDivCodeOp("LSHIFTADDDIVMODC#", 0xD2, 0, 2),
+		newLshiftDivCodeOp("LSHIFTDIV#", 0xD4, 1, 0),
+		newLshiftDivCodeOp("LSHIFTDIVR#", 0xD5, 1, 1),
+		newLshiftDivCodeOp("LSHIFTDIVC#", 0xD6, 1, 2),
+		newLshiftDivCodeOp("LSHIFTMOD#", 0xD8, 2, 0),
+		newLshiftDivCodeOp("LSHIFTMODR#", 0xD9, 2, 1),
+		newLshiftDivCodeOp("LSHIFTMODC#", 0xDA, 2, 2),
+		newLshiftDivCodeOp("LSHIFTDIVMOD#", 0xDC, 3, 0),
+		newLshiftDivCodeOp("LSHIFTDIVMODR#", 0xDD, 3, 1),
+		newLshiftDivCodeOp("LSHIFTDIVMODC#", 0xDE, 3, 2),
 	)
 }
 
-func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) *helpers.AdvancedOP {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	out := &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
+func newLshiftDivCodeOp(name string, op byte, d int, roundMode int) *helpers.ArgOP {
+	out := &helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA9, op)),
+		ArgBits:  8,
+		Action: func(state *vm.State, args uint64) error {
 			required := 2
 			if d == 0 {
 				required = 3
@@ -56,7 +56,8 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) *hel
 			if err != nil {
 				return err
 			}
-			x = legacyLeftShiftOperand(state.GlobalVersion, x, uint64(imm()))
+			shift := uint64(bytePlusOneValue(args))
+			x = legacyLeftShiftOperand(state.GlobalVersion, x, shift)
 			if d == 0 {
 				if err = requireFiniteInts(z, w, x); err != nil {
 					return err
@@ -68,7 +69,7 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) *hel
 				return vmerr.Error(vmerr.CodeIntOverflow, "division by zero")
 			}
 
-			dividend := new(big.Int).Lsh(new(big.Int).Set(x), uint(imm()))
+			dividend := new(big.Int).Lsh(new(big.Int).Set(x), uint(shift))
 			if d == 0 {
 				dividend.Add(dividend, w)
 			}
@@ -85,17 +86,18 @@ func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) *hel
 			}
 			return state.Stack.PushInt(r)
 		},
-		BitPrefix:       helpers.BytesPrefix(0xA9, op),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d %s", imm(), name)
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%d %s", bytePlusOneValue(args), name)
 		},
-		DeserializeSuffix: deserializeImmediate,
 	}
 	if d == 0 {
 		out.MinVersion = 4
 	}
-	return out
+	return helpers.NewArgOP(out)
+}
+
+func lshiftDivCodeOp(name string, op byte, d int, roundMode int, value int) vm.OP {
+	return vm.Bind(newLshiftDivCodeOp(name, op, d, roundMode), bytePlusOneArg(value))
 }
 
 func roundDivMod(x, y *big.Int, roundMode int) (*big.Int, *big.Int) {

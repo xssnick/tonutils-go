@@ -111,13 +111,22 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 	}
 
 	nilCases := []struct {
-		name          string
-		value         any
-		wantNullSlice bool
+		name  string
+		value any
+		check func(any) bool
 	}{
-		{name: "nil cell", value: (*cell.Cell)(nil)},
-		{name: "nil slice", value: (*cell.Slice)(nil), wantNullSlice: true},
-		{name: "nil builder", value: (*cell.Builder)(nil)},
+		{name: "nil cell", value: (*cell.Cell)(nil), check: func(v any) bool {
+			cl, ok := v.(*cell.Cell)
+			return ok && cl == nil
+		}},
+		{name: "nil slice", value: (*cell.Slice)(nil), check: func(v any) bool {
+			sl, ok := v.(*cell.Slice)
+			return ok && sl == nil
+		}},
+		{name: "nil builder", value: (*cell.Builder)(nil), check: func(v any) bool {
+			b, ok := v.(*cell.Builder)
+			return ok && b == nil
+		}},
 	}
 	for _, tc := range nilCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,15 +138,8 @@ func TestPushHostValueAndSmallInt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PopAny failed: %v", err)
 			}
-			if tc.wantNullSlice {
-				sl, ok := val.(*cell.Slice)
-				if !ok || sl != nil {
-					t.Fatalf("expected null slice reference, got %T %v", val, val)
-				}
-				return
-			}
-			if val != nil {
-				t.Fatalf("expected nil, got %T", val)
+			if !tc.check(val) {
+				t.Fatalf("expected typed null %T, got %T %v", tc.value, val, val)
 			}
 		})
 	}

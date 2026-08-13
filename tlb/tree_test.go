@@ -120,6 +120,41 @@ func TestBinTreePrunedLeafCompatibility(t *testing.T) {
 	}
 }
 
+func TestBinTreeWalkMaterializesLazyLeaves(t *testing.T) {
+	leftValue := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
+	rightValue := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
+	root := makeBinTreeFork(makeBinTreeLeaf(leftValue), makeBinTreeLeaf(rightValue))
+
+	lazyRoot, err := cell.FromBOCWithOptions(root.ToBOC(), cell.BOCParseOptions{Lazy: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree BinTree
+	if err = tree.LoadFromCell(lazyRoot.MustBeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	seen := make(map[cell.Hash]cell.Hash)
+	err = tree.Walk(func(key *cell.Cell, value *cell.Cell) error {
+		seen[key.HashKey()] = value.HashKey()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftKey := cell.BeginCell().MustStoreUInt(0, 1).EndCell()
+	rightKey := cell.BeginCell().MustStoreUInt(1, 1).EndCell()
+	if seen[leftKey.HashKey()] != leftValue.HashKey() {
+		t.Fatal("left lazy leaf was exposed with its BinTree tag")
+	}
+	if seen[rightKey.HashKey()] != rightValue.HashKey() {
+		t.Fatal("right lazy leaf was exposed with its BinTree tag")
+	}
+	if got := tree.Get(leftKey); got == nil || got.HashKey() != leftValue.HashKey() {
+		t.Fatal("Get did not materialize the left lazy leaf")
+	}
+}
+
 func TestBinTreeMalformedForkDoesNotPanic(t *testing.T) {
 	malformed := cell.BeginCell().
 		MustStoreUInt(1, 1).

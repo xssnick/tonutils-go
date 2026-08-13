@@ -7,7 +7,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-func TestStorageStatRawTraversalPreservesGasAndUsageTrace(t *testing.T) {
+func TestStorageStatRawTraversalPreservesGasAndReadRecord(t *testing.T) {
 	shared := cell.BeginCell().MustStoreUInt(0x11, 8).EndCell()
 	unique := cell.BeginCell().MustStoreUInt(0x22, 8).EndCell()
 	root := cell.BeginCell().
@@ -16,12 +16,12 @@ func TestStorageStatRawTraversalPreservesGasAndUsageTrace(t *testing.T) {
 		MustStoreRef(shared).
 		MustStoreRef(unique).
 		EndCell()
-	usage := cell.NewCellUsageTree()
+	read := cell.NewReadSet(root)
 
 	state := vm.State{Gas: vm.GasWithLimit(10_000)}
 	state.Cells.Init(&state)
 	stat := newStorageStat(10, &state)
-	ok, err := stat.addCell(root.WithTrace(usage.RootTrace()))
+	ok, err := stat.addCell(read.Root())
 	if err != nil || !ok {
 		t.Fatalf("traversal failed: ok=%v err=%v", ok, err)
 	}
@@ -32,14 +32,15 @@ func TestStorageStatRawTraversalPreservesGasAndUsageTrace(t *testing.T) {
 		t.Fatalf("gas used = %d, want %d", got, 3*vm.CellLoadGasPrice)
 	}
 
-	rootNode := usage.RootNode()
-	firstShared := usage.GetChild(rootNode, 0)
-	duplicateShared := usage.GetChild(rootNode, 1)
-	uniqueNode := usage.GetChild(rootNode, 2)
-	if !usage.IsLoaded(rootNode) || !usage.IsLoaded(firstShared) || !usage.IsLoaded(uniqueNode) {
-		t.Fatal("raw traversal did not mark visited usage-tree nodes")
+	for _, visited := range []*cell.Cell{root, shared, unique} {
+		if _, recorded := read.Contains(visited.HashKey()); !recorded {
+			t.Fatalf("raw traversal did not record visited cell %x", visited.Hash())
+		}
 	}
-	if duplicateShared == 0 || usage.IsLoaded(duplicateShared) {
-		t.Fatal("duplicate hash should create traversal context but must not be loaded twice")
+	// The record is keyed by cell, not by reference, so the duplicated reference
+	// cannot appear as a second entry. That the shared cell is counted once is the
+	// same fact the gas assertion above pins: three loads for three distinct cells.
+	if read.Size() != 3 {
+		t.Fatalf("recorded %d cells, want the root, the shared cell once and the unique cell", read.Size())
 	}
 }

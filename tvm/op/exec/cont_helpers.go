@@ -11,6 +11,19 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+// packArgPair carries two signed operand fields in a single uint64 — the first
+// in the high half, the second in the low half, each a 32-bit two's complement
+// word. The pair survives values outside the nibbles the wire format holds,
+// which is what lets a constructor keep behaving like the old per-instruction
+// object when it is handed an out-of-range argument.
+func packArgPair(first, second int) uint64 {
+	return uint64(uint32(first))<<32 | uint64(uint32(second))
+}
+
+func unpackArgPair(args uint64) (first, second int) {
+	return int(int32(args >> 32)), int(int32(args))
+}
+
 func loadContinuationFromCodeCell(state *vm.State, code *cell.Cell, trace *cell.Trace) (vm.Continuation, error) {
 	sl := new(cell.Slice)
 	if err := state.Cells.BeginParseIntoWithTrace(code, trace, sl); err != nil {
@@ -48,7 +61,7 @@ func checkStackDepth(state *vm.State, depth int) error {
 }
 
 func defineSavedContinuation(reg *vm.Register, idx int, cont vm.Continuation) {
-	if reg.C[idx] == nil {
+	if vm.IsNullContinuation(reg.C[idx]) {
 		reg.C[idx] = cloneContinuation(cont)
 	}
 }
@@ -211,6 +224,13 @@ func sameStackValueType(x, y any) bool {
 	case vm.Continuation:
 		_, ok := y.(vm.Continuation)
 		return ok
+	case *cell.Cell:
+		switch y.(type) {
+		case *cell.Cell:
+			return true
+		default:
+			return false
+		}
 	default:
 		return reflect.TypeOf(x) == reflect.TypeOf(y)
 	}

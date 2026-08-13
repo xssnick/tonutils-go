@@ -117,7 +117,7 @@ func TestLShiftDivSingleRoundingAndModuloEdges(t *testing.T) {
 func TestLShiftDivCodeErrorAndBoundaryEdges(t *testing.T) {
 	t.Run("AddDivModMinVersionAndText", func(t *testing.T) {
 		op := lshiftDivCodeOp("LSHIFTADDDIVMOD#", 0xD0, 0, 0, 2)
-		if got := op.MinGlobalVersion(); got != 4 {
+		if got := mathOpMinVersion(op); got != 4 {
 			t.Fatalf("min version = %d, want 4", got)
 		}
 		if got := op.SerializeText(); got != "2 LSHIFTADDDIVMOD#" {

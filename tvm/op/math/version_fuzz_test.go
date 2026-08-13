@@ -456,13 +456,7 @@ func FuzzTVMRShiftFloorRelations(f *testing.F) {
 		var err error
 		if immediate {
 			encoded := uint64(uint8(rawShift))
-			op := RSHIFTCODEFLOOR(1)
-			if op.DeserializeSuffix == nil {
-				t.Fatal("RSHIFT# floor must have a suffix decoder")
-			}
-			if err := op.DeserializeSuffix(vmCellWithByte(t, encoded)); err != nil {
-				t.Fatalf("decode immediate floor shift: %v", err)
-			}
+			op := RSHIFTCODEFLOOR(bytePlusOneValue(encoded))
 			shift = uint(encoded + 1)
 			err = op.Interpret(st)
 		} else {
@@ -527,18 +521,10 @@ func FuzzTVMRoundedRightShiftNaNRules(f *testing.F) {
 			err = RSHIFTC().Interpret(st)
 			expectRoundedDynamicNaNShift(t, err, st, shift)
 		case 2:
-			op := RSHIFTRCODE(1)
-			if err := op.DeserializeSuffix(vmCellWithByte(t, uint64(uint8(rawShift)))); err != nil {
-				t.Fatalf("decode RSHIFTR# suffix: %v", err)
-			}
-			err = op.Interpret(st)
+			err = RSHIFTRCODE(bytePlusOneValue(uint64(uint8(rawShift)))).Interpret(st)
 			expectRoundedImmediateNaNShift(t, err, st)
 		default:
-			op := RSHIFTCCODE(1)
-			if err := op.DeserializeSuffix(vmCellWithByte(t, uint64(uint8(rawShift)))); err != nil {
-				t.Fatalf("decode RSHIFTC# suffix: %v", err)
-			}
-			err = op.Interpret(st)
+			err = RSHIFTCCODE(bytePlusOneValue(uint64(uint8(rawShift)))).Interpret(st)
 			expectRoundedImmediateNaNShift(t, err, st)
 		}
 	})
@@ -919,7 +905,7 @@ func FuzzTVMQuietCompoundRelations(f *testing.F) {
 	})
 }
 
-func quietCompoundFuzzOpAndInputs(t *testing.T, st *vm.State, family, d, args uint8, x, y, w, z int64, shift uint) (*helpers.AdvancedOP, *big.Int, *big.Int) {
+func quietCompoundFuzzOpAndInputs(t *testing.T, st *vm.State, family, d, args uint8, x, y, w, z int64, shift uint) (vm.OP, *big.Int, *big.Int) {
 	t.Helper()
 
 	xi := big.NewInt(x)

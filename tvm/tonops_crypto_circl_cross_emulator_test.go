@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"

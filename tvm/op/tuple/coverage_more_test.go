@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -26,7 +25,7 @@ func mustPopTupleValue(t *testing.T, state *vm.State) tuplepkg.Tuple {
 	return tup
 }
 
-func mustDeserializeAdvanced(t *testing.T, op *helpers.AdvancedOP, code *cell.Builder) {
+func mustDeserializeAdvanced(t *testing.T, op vm.OP, code *cell.Builder) {
 	t.Helper()
 	if err := op.Deserialize(code.EndCell().MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
@@ -36,8 +35,8 @@ func mustDeserializeAdvanced(t *testing.T, op *helpers.AdvancedOP, code *cell.Bu
 func TestTupleAdvancedOpSerializationRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
-		src  *helpers.AdvancedOP
-		dst  *helpers.AdvancedOP
+		src  vm.OP
+		dst  vm.OP
 		text string
 	}{
 		{name: "TUPLE", src: TUPLE(5), dst: TUPLE(0), text: "5 TUPLE"},
@@ -58,7 +57,11 @@ func TestTupleAdvancedOpSerializationRoundTrip(t *testing.T) {
 			if got := tt.dst.SerializeText(); got != tt.text {
 				t.Fatalf("unexpected text: got %q want %q", got, tt.text)
 			}
-			if got := tt.dst.InstructionBits(); got != 16 {
+			gasPriced, ok := tt.dst.(vm.GasPricedOp)
+			if !ok {
+				t.Fatalf("%T does not report instruction bits", tt.dst)
+			}
+			if got := gasPriced.InstructionBits(); got != 16 {
 				t.Fatalf("unexpected instruction bits: %d", got)
 			}
 		})

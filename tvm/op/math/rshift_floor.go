@@ -10,8 +10,8 @@ import (
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return RSHIFTFLOOR() },
-		func() vm.OP { return RSHIFTCODEFLOOR(1) },
 	)
+	vm.ArgList = append(vm.ArgList, rshiftCodeFloorOp)
 }
 
 func RSHIFTFLOOR() *helpers.SimpleOP {
@@ -39,26 +39,27 @@ func RSHIFTFLOOR() *helpers.SimpleOP {
 	}
 }
 
-func RSHIFTCODEFLOOR(value int) *helpers.AdvancedOP {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			x, err := popInt(state)
-			if err != nil {
-				return err
-			}
-			if x == nil {
-				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), true), false)
-			}
+var rshiftCodeFloorOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA9, 0x34)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		x, err := popInt(state)
+		if err != nil {
+			return err
+		}
 
-			return state.Stack.PushInt(x.Rsh(x, uint(imm())))
-		},
-		BitPrefix:       helpers.BytesPrefix(0xA9, 0x34),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d RSHIFT#", imm())
-		},
-		DeserializeSuffix: deserializeImmediate,
-	}
+		shift := bytePlusOneValue(args)
+		if x == nil {
+			return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(shift), true), false)
+		}
+
+		return state.Stack.PushInt(x.Rsh(x, uint(shift)))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d RSHIFT#", bytePlusOneValue(args))
+	},
+})
+
+func RSHIFTCODEFLOOR(value int) vm.OP {
+	return vm.Bind(rshiftCodeFloorOp, bytePlusOneArg(value))
 }

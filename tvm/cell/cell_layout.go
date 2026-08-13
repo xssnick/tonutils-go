@@ -64,6 +64,38 @@ func cloneCellMeta(meta *cellMeta) *cellMeta {
 	return &cp
 }
 
+// metaViewOf, metaViewLevel, metaExtraHashes and metaExtraDepths read the
+// virtualization and extra-hash metadata of a cell that may have none. A view
+// mints copies of arbitrary cells, including virtualized ones, and has to carry
+// those fields over without asserting that a metadata block exists.
+func (c *Cell) metaViewOf() *Cell {
+	if c.meta == nil {
+		return nil
+	}
+	return c.meta.viewOf
+}
+
+func (c *Cell) metaViewLevel() uint8 {
+	if c.meta == nil {
+		return 0
+	}
+	return c.meta.viewLevel
+}
+
+func (c *Cell) metaExtraHashes() *[3]Hash {
+	if c.meta == nil {
+		return nil
+	}
+	return c.meta.extraHashes
+}
+
+func (c *Cell) metaExtraDepths() [3]uint16 {
+	if c.meta == nil {
+		return [3]uint16{}
+	}
+	return c.meta.extraDepths
+}
+
 func (c *Cell) IsSpecial() bool {
 	return c.flags&cellFlagSpecial != 0
 }
@@ -156,7 +188,8 @@ func (c *Cell) clearMetaIfEmpty() {
 	if c.meta == nil {
 		return
 	}
-	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil || c.meta.trace != nil || c.meta.viewLevel != 0 {
+	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil ||
+		c.meta.trace != nil || c.meta.viewLevel != 0 {
 		return
 	}
 	c.meta = nil

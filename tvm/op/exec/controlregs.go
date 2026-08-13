@@ -12,16 +12,18 @@ import (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return PUSHCTR(0) },
-		func() vm.OP { return POPCTR(0) },
-		func() vm.OP { return SETRETCTR(0) },
-		func() vm.OP { return SETALTCTR(0) },
-		func() vm.OP { return POPSAVECTR(0) },
-		func() vm.OP { return SAVEALTCTR(0) },
-		func() vm.OP { return SAVEBOTHCTR(0) },
 		func() vm.OP { return PUSHCTRX() },
 		func() vm.OP { return POPCTRX() },
 		func() vm.OP { return SETCONTCTRX() },
+	)
+	vm.ArgList = append(vm.ArgList,
+		pushCtrOp,
+		popCtrOp,
+		setRetCtrOp,
+		setAltCtrOp,
+		popSaveCtrOp,
+		saveAltCtrOp,
+		saveBothCtrOp,
 	)
 }
 
@@ -74,22 +76,40 @@ func loadControlRegisterIndex(code *cell.Slice) (int, error) {
 	return idx, nil
 }
 
-func deserializeControlRegisterIndex(dst *int) func(*cell.Slice) error {
-	return func(code *cell.Slice) error {
-		idx, err := loadControlRegisterIndex(code)
-		if err != nil {
-			return err
-		}
-
-		*dst = idx
-		return nil
-	}
-}
-
-func serializeControlRegisterIndex(src *int) func() *cell.Builder {
-	return func() *cell.Builder {
-		return cell.BeginCell().MustStoreUInt(uint64(*src), 4)
-	}
+// newControlRegisterOp builds one of the ED4x..EDCx opcodes. Their registered
+// prefixes are 16 bits wide because the register index is part of them — only
+// the seven defined indexes are dispatched at all — while the instruction
+// itself is a 12-bit opcode followed by that index as a 4-bit operand.
+func newControlRegisterOp(
+	prefix helpers.BitPrefix,
+	prefixes []helpers.BitPrefix,
+	name string,
+	action func(state *vm.State, i int) error,
+) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.NewPrefixed(prefixes...),
+		Action: func(state *vm.State, args uint64) error {
+			return action(state, int(args))
+		},
+		Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+			if err := code.SkipBits(prefix.Bits); err != nil {
+				return 0, err
+			}
+			idx, err := loadControlRegisterIndex(code)
+			if err != nil {
+				return 0, err
+			}
+			return uint64(idx), nil
+		},
+		Serializer: func(args uint64) *cell.Builder {
+			return cell.BeginCell().
+				MustStoreSlice(prefix.Data, prefix.Bits).
+				MustStoreUInt(args, 4)
+		},
+		Name: func(args uint64) string {
+			return fmt.Sprintf("c%d %s", args, name)
+		},
+	})
 }
 
 func cloneControlRegisterValue(v any) any {
@@ -119,7 +139,7 @@ func controlRegisterValueHasType(idx int, val any) bool {
 	}
 	if idx < 4 {
 		c, ok := val.(vm.Continuation)
-		return ok && c != nil
+		return ok && !vm.IsNullContinuation(c)
 	}
 	if idx < 6 {
 		c, ok := val.(*cell.Cell)
@@ -137,7 +157,7 @@ func controlRegisterSlotFilled(r *vm.Register, idx int) bool {
 		return false
 	}
 	if idx < 4 {
-		return r.C[idx] != nil
+		return !vm.IsNullContinuation(r.C[idx])
 	}
 	if idx < 6 {
 		return r.D[idx-4] != nil
@@ -155,246 +175,127 @@ func defineControlRegister(state *vm.State, r *vm.Register, idx int, val any) bo
 	return state.GlobalVersion >= 14 && controlRegisterSlotFilled(r, idx) && controlRegisterValueHasType(idx, val)
 }
 
-// OpPUSHCTR is a struct-based opcode: one allocation per executed instruction
-// instead of an AdvancedOP carrying per-instance closures.
-type OpPUSHCTR struct {
-	i int
-}
-
-func PUSHCTR(i int) *OpPUSHCTR {
-	return &OpPUSHCTR{i: i}
-}
-
-func (op *OpPUSHCTR) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(pushCtrPrefixes...)
-}
-
-func (op *OpPUSHCTR) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(pushCtrBitPrefix.Bits); err != nil {
-		return err
+var pushCtrOp = newControlRegisterOp(pushCtrBitPrefix, pushCtrPrefixes, "PUSH", func(state *vm.State, i int) error {
+	if i == 4 || i == 5 {
+		return state.Stack.PushCell(state.Reg.D[i-4])
 	}
 
-	idx, err := loadControlRegisterIndex(code)
-	if err != nil {
-		return err
-	}
-	op.i = idx
-	return nil
-}
+	return state.Stack.PushAny(cloneControlRegisterValue(state.Reg.Get(i)))
+})
 
-func (op *OpPUSHCTR) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(pushCtrBitPrefix.Data, pushCtrBitPrefix.Bits).
-		MustStoreUInt(uint64(op.i), 4)
-}
-
-func (op *OpPUSHCTR) SerializeText() string {
-	return fmt.Sprintf("c%d PUSH", op.i)
-}
-
-func (op *OpPUSHCTR) InstructionBits() int64 {
-	return int64(pushCtrBitPrefix.Bits) + 4
-}
-
-func (op *OpPUSHCTR) Interpret(state *vm.State) error {
-	if op.i == 4 || op.i == 5 {
-		return state.Stack.PushCell(state.Reg.D[op.i-4])
-	}
-
-	return state.Stack.PushAny(cloneControlRegisterValue(state.Reg.Get(op.i)))
-}
-
-// OpPOPCTR is a struct-based opcode: one allocation per executed instruction
-// instead of an AdvancedOP carrying per-instance closures.
-type OpPOPCTR struct {
-	i int
-}
-
-func POPCTR(i int) *OpPOPCTR {
-	return &OpPOPCTR{i: i}
-}
-
-func (op *OpPOPCTR) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(popCtrPrefixes...)
-}
-
-func (op *OpPOPCTR) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(popCtrBitPrefix.Bits); err != nil {
-		return err
-	}
-
-	idx, err := loadControlRegisterIndex(code)
-	if err != nil {
-		return err
-	}
-	op.i = idx
-	return nil
-}
-
-func (op *OpPOPCTR) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(popCtrBitPrefix.Data, popCtrBitPrefix.Bits).
-		MustStoreUInt(uint64(op.i), 4)
-}
-
-func (op *OpPOPCTR) SerializeText() string {
-	return fmt.Sprintf("c%d POP", op.i)
-}
-
-func (op *OpPOPCTR) InstructionBits() int64 {
-	return int64(popCtrBitPrefix.Bits) + 4
-}
-
-func (op *OpPOPCTR) Interpret(state *vm.State) error {
+var popCtrOp = newControlRegisterOp(popCtrBitPrefix, popCtrPrefixes, "POP", func(state *vm.State, i int) error {
 	val, err := state.Stack.PopAny()
 	if err != nil {
 		return err
 	}
-	return setControlRegister(state, op.i, val)
+	return setControlRegister(state, i, val)
+})
+
+var setRetCtrOp = newControlRegisterOp(setRetCtrBitPrefix, setRetCtrPrefixes, "SETRETCTR", func(state *vm.State, i int) error {
+	val, err := state.Stack.PopAny()
+	if err != nil {
+		return err
+	}
+
+	c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+	data := c0.GetControlData()
+	if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
+		return vmerr.Error(vmerr.CodeTypeCheck)
+	}
+	state.Reg.C[0] = c0
+	return nil
+})
+
+var setAltCtrOp = newControlRegisterOp(setAltCtrBitPrefix, setAltCtrPrefixes, "SETALTCTR", func(state *vm.State, i int) error {
+	val, err := state.Stack.PopAny()
+	if err != nil {
+		return err
+	}
+
+	c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
+	data := c1.GetControlData()
+	if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
+		return vmerr.Error(vmerr.CodeTypeCheck)
+	}
+	state.Reg.C[1] = c1
+	return nil
+})
+
+var popSaveCtrOp = newControlRegisterOp(popSaveCtrBitPrefix, popSaveCtrPrefixes, "POPSAVE", func(state *vm.State, i int) error {
+	val, err := state.Stack.PopAny()
+	if err != nil {
+		return err
+	}
+	if i == 0 {
+		if _, ok := val.(vm.Continuation); !ok {
+			return vmerr.Error(vmerr.CodeTypeCheck)
+		}
+	}
+
+	c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+	c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i)))
+
+	if i == 0 {
+		state.Reg.C[0] = c0
+		return setControlRegister(state, i, val)
+	}
+
+	if err = setControlRegister(state, i, val); err != nil {
+		return err
+	}
+	state.Reg.C[0] = c0
+	return nil
+})
+
+var saveAltCtrOp = newControlRegisterOp(saveAltCtrBitPrefix, saveAltCtrPrefixes, "SAVEALTCTR", func(state *vm.State, i int) error {
+	c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
+	data := c1.GetControlData()
+	if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
+		return vmerr.Error(vmerr.CodeTypeCheck)
+	}
+	state.Reg.C[1] = c1
+	return nil
+})
+
+var saveBothCtrOp = newControlRegisterOp(saveBothCtrBitPrefix, saveBothCtrPrefixes, "SAVEBOTHCTR", func(state *vm.State, i int) error {
+	c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
+	c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
+	val := state.Reg.Get(i)
+
+	c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
+	c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
+
+	state.Reg.C[0] = c0
+	state.Reg.C[1] = c1
+	return nil
+})
+
+func PUSHCTR(i int) vm.OP {
+	return vm.Bind(pushCtrOp, uint64(i))
 }
 
-func SETRETCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			val, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-
-			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
-			data := c0.GetControlData()
-			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
-			state.Reg.C[0] = c0
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d SETRETCTR", i)
-		},
-		BitPrefix:         setRetCtrBitPrefix,
-		Prefixes:          setRetCtrPrefixes,
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+func POPCTR(i int) vm.OP {
+	return vm.Bind(popCtrOp, uint64(i))
 }
 
-func SETALTCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			val, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-
-			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
-			data := c1.GetControlData()
-			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
-			state.Reg.C[1] = c1
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d SETALTCTR", i)
-		},
-		BitPrefix:         setAltCtrBitPrefix,
-		Prefixes:          setAltCtrPrefixes,
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+func SETRETCTR(i int) vm.OP {
+	return vm.Bind(setRetCtrOp, uint64(i))
 }
 
-func POPSAVECTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			val, err := state.Stack.PopAny()
-			if err != nil {
-				return err
-			}
-			if i == 0 {
-				if _, ok := val.(vm.Continuation); !ok {
-					return vmerr.Error(vmerr.CodeTypeCheck)
-				}
-			}
-
-			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
-			c0.GetControlData().Save.Define(i, cloneControlRegisterValue(state.Reg.Get(i)))
-
-			if i == 0 {
-				state.Reg.C[0] = c0
-				return setControlRegister(state, i, val)
-			}
-
-			if err = setControlRegister(state, i, val); err != nil {
-				return err
-			}
-			state.Reg.C[0] = c0
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d POPSAVE", i)
-		},
-		BitPrefix:         popSaveCtrBitPrefix,
-		Prefixes:          popSaveCtrPrefixes,
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+func SETALTCTR(i int) vm.OP {
+	return vm.Bind(setAltCtrOp, uint64(i))
 }
 
-func SAVEALTCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
-			data := c1.GetControlData()
-			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(state.Reg.Get(i))) {
-				return vmerr.Error(vmerr.CodeTypeCheck)
-			}
-			state.Reg.C[1] = c1
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d SAVEALTCTR", i)
-		},
-		BitPrefix:         saveAltCtrBitPrefix,
-		Prefixes:          saveAltCtrPrefixes,
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+func POPSAVECTR(i int) vm.OP {
+	return vm.Bind(popSaveCtrOp, uint64(i))
 }
 
-func SAVEBOTHCTR(i int) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			c0 := vm.ForceControlData(cloneContinuation(state.Reg.C[0]))
-			c1 := vm.ForceControlData(cloneContinuation(state.Reg.C[1]))
-			val := state.Reg.Get(i)
+func SAVEALTCTR(i int) vm.OP {
+	return vm.Bind(saveAltCtrOp, uint64(i))
+}
 
-			c0.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
-			c1.GetControlData().Save.Define(i, cloneControlRegisterValue(val))
-
-			state.Reg.C[0] = c0
-			state.Reg.C[1] = c1
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("c%d SAVEBOTHCTR", i)
-		},
-		BitPrefix:         saveBothCtrBitPrefix,
-		Prefixes:          saveBothCtrPrefixes,
-		SerializeSuffix:   serializeControlRegisterIndex(&i),
-		DeserializeSuffix: deserializeControlRegisterIndex(&i),
-	}
-	return op
+func SAVEBOTHCTR(i int) vm.OP {
+	return vm.Bind(saveBothCtrOp, uint64(i))
 }
 
 func PUSHCTRX() *helpers.SimpleOP {
@@ -472,7 +373,7 @@ func SETCONTCTRX() *helpers.SimpleOP {
 			if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(val)) {
 				return vmerr.Error(vmerr.CodeTypeCheck)
 			}
-			return state.Stack.PushContinuation(cont)
+			return state.Stack.PushOwnedContinuation(cont)
 		},
 		BitPrefix: helpers.BytesPrefix(0xED, 0xE2),
 	}

@@ -3,13 +3,13 @@ package math
 import (
 	"testing"
 
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func TestImmediateShiftConstructorsCoverByteRange(t *testing.T) {
 	constructors := []struct {
 		name string
-		new  func(int) *helpers.AdvancedOP
+		new  func(int) vm.OP
 	}{
 		{name: "LSHIFT#", new: LSHIFTCODE},
 		{name: "RSHIFT#", new: RSHIFTCODE},

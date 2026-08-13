@@ -19,19 +19,19 @@ import (
 )
 
 const (
-	expectedCrossEmulatorVersionTestAnchorCount = 132
-	expectedCrossEmulatorVersionTestAnchorHash  = "08db2ea889ce52248665cc038377abb4fec278bf30fcc656d6923f1dc0840b90"
+	expectedCrossEmulatorVersionTestAnchorCount = 135
+	expectedCrossEmulatorVersionTestAnchorHash  = "25d803b54ce6252b4edd79a47d783ec66497680e122725095ff2ed25631d4d00"
 	expectedCrossEmulatorVersionFuzzerCount     = 136
 	expectedCrossEmulatorVersionFuzzerHash      = "37618805cde6d3fe4b572d4210a13e25059cf7165e8d52438fb4468666da26c7"
 
 	expectedCrossEmulatorFullRangeVersionFuzzerCount = 130
 	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "b3eb80a34606257611af0070116dfa8c365ab0ed500de04b400205222c30a338"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 16
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "2f61204dbd657f7eba2c830a9435c479b57b18e6c4e57617089ec33529cf3765"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 35
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "a9b8321a85fc76172c2357f4755fadc3388ccaf8fe715a27bafa6ec2dc2c71b3"
 
-	expectedCrossEmulatorTransactionVersionTestCount = 52
-	expectedCrossEmulatorTransactionVersionTestHash  = "186b499794fe37daa7cd168d36841be196fb87573709de728c48506620279298"
+	expectedCrossEmulatorTransactionVersionTestCount = 79
+	expectedCrossEmulatorTransactionVersionTestHash  = "a7a2774d77fa330ab171edffbf40b00da2a0bac2ebab710a5f4f40fee585f12a"
 	expectedCrossEmulatorTransactionVersionFuzzCount = 48
 	expectedCrossEmulatorTransactionVersionFuzzHash  = "2bbcff7f27693d609863afd367a66292d7d07036419640531b3fdc1d9dd4460c"
 
@@ -130,16 +130,16 @@ const (
 	expectedCrossEmulatorCoreConfigVersionFuzzCount = 7
 	expectedCrossEmulatorCoreConfigVersionFuzzHash  = "e7fa33303d41912a131fd3e3eff7733096cd077dcc5ef155920760e7c35cdad7"
 
-	expectedCrossEmulatorDifferentialMatrixVersionTestCount = 10
-	expectedCrossEmulatorDifferentialMatrixVersionTestHash  = "232e63c7cd211af1c8fcaf32eac44f634410d8ed3c99a1c7925e733164d1d845"
+	expectedCrossEmulatorDifferentialMatrixVersionTestCount = 11
+	expectedCrossEmulatorDifferentialMatrixVersionTestHash  = "ce1e5672b61ced981060f0706cf489463585c87a0ac8936806067fe767d646ee"
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzCount = 1
 	expectedCrossEmulatorDifferentialMatrixVersionFuzzHash  = "eb1af974ef27c8111bbdf1062c58671a61d2c76ed60290b1e0da5b0b2d9b900e"
 
-	expectedCrossEmulatorReferenceMismatchUseCount = 23
-	expectedCrossEmulatorReferenceMismatchUseHash  = "943cfd6a3532f91841ef012818350e782c30ddb53cf30ed60a9a0a6d065ceada"
+	expectedCrossEmulatorReferenceMismatchUseCount = 14
+	expectedCrossEmulatorReferenceMismatchUseHash  = "6f9792a658813f88cd86da96d36105bd4257eec98eaffc0a27d36c58f13ffc5e"
 
-	expectedCrossEmulatorDirectKnownReferenceSkipCount = 15
-	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "f81c698b542bb00fbbf20e071d88b7f8b12f8050d78aef6e35129c874b242add"
+	expectedCrossEmulatorDirectKnownReferenceSkipCount = 7
+	expectedCrossEmulatorDirectKnownReferenceSkipHash  = "029333185f1fd7e13c74fbd2f27eb67f60af41475766aa1e5c5ffeed1482d5d8"
 
 	expectedCrossEmulatorSkipReferenceUseCount = 21
 	expectedCrossEmulatorSkipReferenceUseHash  = "358db66918077d580bb131338492c1482c2f886953f3b452db827fdedc992834"
@@ -164,8 +164,7 @@ var expectedCrossEmulatorReferenceMismatchReasons = map[string]int{
 	"bundled reference emulator predates upstream SENDMSG v14 user fwd fee handling":                      1,
 	"bundled reference emulator predates upstream control-register v14 silent duplicate save-list writes": 2,
 	"bundled reference emulator predates upstream transaction v14 failed-action message-balance restore":  2,
-	"bundled reference emulator predates upstream transaction v15 library action restrictions":            1,
-	"bundled reference emulator predates upstream v9 direct startup library code loading":                 13,
+	"bundled reference emulator predates upstream v9 direct startup library code loading":                 5,
 }
 
 type crossEmulatorUnclassifiedExplicitVersionUser struct {
@@ -174,6 +173,25 @@ type crossEmulatorUnclassifiedExplicitVersionUser struct {
 }
 
 var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmulatorUnclassifiedExplicitVersionUser{
+	"cellslice_special_levels_cross_emulator_test.go:TestTVMCrossEmulatorCellSliceSpecialLevels": {
+		reason: "focused sparse pruned-level-mask parity pins global version 13 for version-independent cell hash, depth, and storage semantics; the advanced cell-op fuzzer owns version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorAdvancedCellOpsGlobalVersion",
+		},
+	},
+	"library_parity_cross_emulator_test.go:TestTVMCrossEmulatorMissingLibraryResultParity": {
+		reason: "focused terminal-result parity pins the latest supported version because the JSON get-method ABI is required to expose missing_library; the advanced cell-op fuzzer owns XLOADQ missing-library behavior across every global version",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorAdvancedCellOpsGlobalVersion",
+		},
+	},
+	"continuation_codepage_cross_emulator_test.go:TestTVMCrossEmulatorOrdinaryContinuationAbsentCodepage": {
+		reason: "serialized ordinary-continuation codepage parity pins global version 13 for a version-independent deserialization boundary; continuation global-version fuzzers own version-sensitive execution coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorContOpsGlobalVersion",
+			"FuzzTVMCrossEmulatorContExecScenariosGlobalVersion",
+		},
+	},
 	"transaction_anycast_identity_cross_emulator_test.go:TestTVMCrossEmulatorTransactionAnycastIdentityV7V8V9V10": {
 		reason: "focused account-identity parity enumerates the v7-v10 anycast rewrite transition; the outbound-anycast global-version fuzzer owns broader anycast version coverage",
 		versionAnchors: []string{
@@ -191,6 +209,45 @@ var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmul
 		versionAnchors: []string{
 			"FuzzTVMCrossEmulatorTransactionOutboundAnycastDestinationGlobalVersion",
 			"FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion",
+		},
+	},
+	"transaction_bounce_counter_width_cross_emulator_test.go:TestTVMCrossEmulatorTransactionNewBounceGasCounterTruncatesToUint32": {
+		reason: "focused new-bounce counter-width parity pins global version 14 to exercise the precompiled path with counters above uint32; the bounce-format and precompiled global-version fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionBounceFormatGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionPrecompiledNoGasGlobalVersion",
+		},
+	},
+	"transaction_frozen_prefix_cross_emulator_test.go:TestTVMCrossEmulatorTransactionFrozenPrefixUsesAddressRewriteBeforeV10": {
+		reason: "focused frozen-state prefix parity enumerates the v9/v10 address-rewrite boundary; the frozen-address global-version fuzzer owns broader lifecycle coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion",
+		},
+	},
+	"transaction_malformed_library_cross_emulator_test.go:TestTVMCrossEmulatorTransactionChangedMalformedAccountLibrary": {
+		reason: "focused malformed-library traversal parity pins global version 14 to isolate the CHANGELIB state-limit fatal path; the change-library and public-library-limit fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionChangeLibraryActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionMasterchainPublicLibraryLimitGlobalVersion",
+		},
+	},
+	"transaction_malformed_extra_currency_cross_emulator_test.go:TestTVMCrossEmulatorTransactionMalformedOutboundExtraCurrencyFork": {
+		reason: "focused malformed outbound extra-currency dictionary parity pins global version 15 for a version-independent strict Hashmap shape check; the send-extra-currency fuzzer owns broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion",
+		},
+	},
+	"transaction_public_library_key_cross_emulator_test.go:TestTVMCrossEmulatorTransactionMasterchainPublicLibraryRequiresMatchingKey": {
+		reason: "focused public-library key parity pins versions around the account-state and state-limit rules; the masterchain public-library-limit fuzzer owns broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionMasterchainPublicLibraryLimitGlobalVersion",
+		},
+	},
+	"transaction_storage_used_underflow_cross_emulator_test.go:TestTVMCrossEmulatorTransactionStorageUsedRootShrinkWrapRejectsSerialization": {
+		reason: "focused storage-stat wrap parity pins global version 14 for a version-independent unsigned update and serialization boundary; the storage deletion and extra-dictionary fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionStorageDeletionDestroyedGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionStorageExtraDictHashGlobalVersion",
 		},
 	},
 	"transaction_total_message_cross_emulator_test.go:TestTVMCrossEmulatorTransactionTotalMessageLimits": {
@@ -233,6 +290,73 @@ var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmul
 		reason: "mixed differential smoke covers default and version-matrix families; dedicated version matrix fuzzers own exhaustive version seeding",
 		versionAnchors: []string{
 			"FuzzTVMDifferentialVersionMatrixPrograms",
+		},
+	},
+	"transaction_state_init_normalize_cross_emulator_test.go:TestTVMCrossEmulatorTransactionStateInitMaybeNormalization": {
+		reason: "focused state-init normalization parity pins the versions around the account-state rewrite; versioned account-state fuzzers own broader coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionStorageDeletionDestroyedGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion",
+		},
+	},
+	"transaction_ext_out_mode_order_cross_emulator_test.go:TestTVMCrossEmulatorTransactionExtOutModeCheckOrder": {
+		reason: "focused outbound-external mode ordering parity pins the versions that changed the skip semantics; the versioned send fuzzers own broader action coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionSendMsgCustomFwdFeeGlobalVersion",
+		},
+	},
+	"transaction_precompiled_gas_report_cross_emulator_test.go:TestTVMCrossEmulatorTransactionPrecompiledFallbackGasReport": {
+		reason: "focused precompiled fallback reporting parity pins the versions that expose param 45; the versioned gas-limit fuzzers own broader compute-phase coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionHistoricalGasLimitOverrideGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionSpecialGasFullGlobalVersion",
+		},
+	},
+	"transaction_reserve_original_balance_cross_emulator_test.go:TestTVMCrossEmulatorTransactionReserveOriginalBalanceVersions": {
+		reason: "focused RAWRESERVE base parity sweeps the versions that straddle the v9 rule change explicitly; the versioned reserve fuzzers own broader action-phase coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionRawReserveActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionReserveOriginalBalanceGlobalVersion",
+		},
+	},
+	"transaction_reserve_original_balance_cross_emulator_test.go:TestTVMCrossEmulatorTransactionReserveOriginalBalanceStorageDebt": {
+		reason: "focused RAWRESERVE base parity sweeps the versions that straddle the v9 rule change explicitly; the versioned reserve fuzzers own broader action-phase coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionRawReserveActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionReserveOriginalBalanceGlobalVersion",
+		},
+	},
+	"transaction_ticktock_reserve_original_balance_cross_emulator_test.go:TestTVMCrossEmulatorTickTockReserveOriginalBalanceVersions": {
+		reason: "focused tick/tock RAWRESERVE base parity pins the v9 transition; full-range tick/tock and reserve fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTickTockGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionRawReserveActionsGlobalVersion",
+		},
+	},
+	"tonops_config_shape_parity_cross_emulator_test.go:TestTVMCrossEmulatorBLSPairingEmptyAggregateParity": {
+		reason: "empty-aggregate BLS pairing parity pins global version 13 for a version-independent blst property (PAIRING_FinalVerify without AGGR_GT_SET); dedicated crypto global-version fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsCryptoCirclVersionedRuntimeEdges",
+		},
+	},
+	"tonops_config_shape_parity_cross_emulator_test.go:TestTVMCrossEmulatorUnpackedConfigSlotShapeParity": {
+		reason: "unpacked-config slot shape parity pins global version 13 because the as_slice()/as_tuple_range() reads are version-independent; versioned fee-hash fuzzers own version-sensitive coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsUnderflowPrecheckGlobalVersion",
+			"FuzzTVMCrossEmulatorTonOpsEdgeGlobalVersion",
+		},
+	},
+	"runvm_flow_parity_cross_emulator_test.go:TestTVMCrossEmulatorAutoCommitGetMethodParity": {
+		reason: "get-method final try_commit parity pins global version 13 for a version-independent property (run_inner's automatic commit predates all version gates); the execution-config override fuzzer owns version-sensitive entrypoint coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorExecutionConfigGlobalVersionOverride",
+		},
+	},
+	"gas_cross_emulator_test.go:TestTVMCrossEmulatorExecutionResultTraceFinalizationParity": {
+		reason: "execution-result trace detachment pins the raw reference version for a version-independent host-boundary property; the gas global-version fuzzer owns version-sensitive execution coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorGasGlobalVersion",
 		},
 	},
 	"runvm_cross_emulator_test.go:TestTVMCrossEmulatorRunVM": {
@@ -3236,6 +3360,10 @@ func crossEmulatorVersionFuzzAliases() map[string][]string {
 		"AdvancedCellOpsVersionedEdges": {
 			"AdvancedCellOpsGenerated",
 		},
+		"TransactionComputedFeeSignedCastBoundary": {
+			"TransactionSendMsgCustomFwdFee",
+			"TransactionInboundIHRFee",
+		},
 		"TransactionFailedActionTotalActionFeesV4Boundary": {
 			"TransactionFailedActionMessageBalance",
 		},
@@ -3267,6 +3395,9 @@ func crossEmulatorVersionFuzzAliases() map[string][]string {
 		"TVMDifferentialFuzzVersionMatrixSeedsSelectRequestedVersion": {
 			"TVMDifferentialVersionMatrixPrograms",
 		},
+		"TVMDifferentialLowGasBoundaryAudit": {
+			"TVMDifferentialVersionMatrixPrograms",
+		},
 		"TVMDifferentialFuzzVersionedMsgAddressC7ParamRegression": {
 			"TVMDifferentialVersionMatrixPrograms",
 		},
@@ -3281,6 +3412,10 @@ func crossEmulatorVersionFuzzAliases() map[string][]string {
 		},
 		"TransactionInvalidSourceMode2": {
 			"TransactionInvalidSourceDestinationMode2",
+		},
+		"TransactionAnycastWorkchainBoundary": {
+			"TransactionOutboundAnycastDestination",
+			"TransactionFrozenHashEqualsAddress",
 		},
 		"TransactionNonComputePhaseExternalParity": {
 			"TransactionNonComputePhaseExternal",

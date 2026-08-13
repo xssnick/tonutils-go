@@ -18,12 +18,12 @@ const (
 	expectedOpcodeMinGlobalVersionBoundaryCases               = expectedOpcodeMinGlobalVersionBaseCases + expectedOpcodeMinGlobalVersionGetParamLongCases + expectedOpcodeMinGlobalVersionInMsgParamAliasCases
 	expectedOpcodeMinGlobalVersionRepresentativeCases         = 34
 	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedCount       = 1950
-	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedCount = 544
+	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedCount = 578
 	expectedOpcodeMinGlobalVersionBaseHash                    = "42caf868cd1412ee24ed83beea2d073563c58c4d693ce88febf097eb86918fb5"
 	expectedOpcodeMinGlobalVersionBoundaryHash                = "c9918390911ab415ee3f85fc4b1568ee49fb679bf23bc41c914dd0409e39dea5"
 	expectedOpcodeMinGlobalVersionRepresentativeHash          = "4c266821ed0219dd68b8d9df618a9b950dba2ebc669fea2eaf31febdc2e3d170"
-	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash        = "61054b96b59fca7d05f62aa52157e09488a33368529431b504caad1519e31974"
-	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedHash  = "40f3b3908d08b94e5febeb8753e0c7799aaf12a458f80054cc50e3906a81da63"
+	expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash        = "e3c8410b7d723b0315301a82f5c7cfb2ff2e85784853a029f415e624e72434fa"
+	expectedOpcodeMinGlobalVersionRepresentativeFuzzSeedHash  = "0cd4d0fdc890f12f7af10e2611022cdfcaecd33b298ee5f0e1aaa44357423bf6"
 )
 
 type opcodeMinGlobalVersionCase struct {
@@ -521,7 +521,7 @@ func TestOpcodeMinGlobalVersionsMatchUpstream(t *testing.T) {
 func TestOpcodeMinGlobalVersionRegistryCoversRegisteredVersionedOps(t *testing.T) {
 	expected := opcodeMinGlobalVersionCaseMap(t)
 
-	for _, opGetter := range vm.List {
+	for _, opGetter := range vm.AllOps() {
 		op := opGetter()
 		versioned, ok := op.(vm.VersionedOp)
 		if !ok || versioned.MinGlobalVersion() == 0 {
@@ -617,7 +617,7 @@ func assertOpcodeMinGlobalVersion(t *testing.T, machine *TVM, opcode uint64, bit
 	}
 
 	got := 0
-	if versioned, ok := getter().(vm.VersionedOp); ok {
+	if versioned, ok := getter.instance().(vm.VersionedOp); ok {
 		got = versioned.MinGlobalVersion()
 	}
 	if got != want {

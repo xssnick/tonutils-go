@@ -413,10 +413,10 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	parent := NewStack()
 	refCell := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 
-	if err := pushMaybeCell(parent, nil); err != nil {
+	if err := parent.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push maybe nil cell: %v", err)
 	}
-	if err := pushMaybeCell(parent, refCell); err != nil {
+	if err := parent.PushMaybeCell(refCell); err != nil {
 		t.Fatalf("push maybe cell: %v", err)
 	}
 	gotCell, err := parent.PopCell()
@@ -723,24 +723,39 @@ func FuzzChildResultRegisterValueVersionBoundary(f *testing.F) {
 		if hasCommittedValue {
 			committedValue = cell.BeginCell().MustStoreUInt(0xC0, 8).EndCell()
 		}
-		var currentValue *cell.Cell
-		if hasCurrentValue {
-			currentValue = cell.BeginCell().MustStoreUInt(0xD0, 8).EndCell()
-		}
 
 		child := NewExecutionState(version, NewGas(), nil, tuple.Tuple{}, NewStack())
 		child.Committed.Committed = committed
 
-		got := childResultRegisterValue(child, committedValue, currentValue)
-		var want *cell.Cell
-		if committed {
-			want = committedValue
-		} else if version < 11 {
-			want = currentValue
+		parent := NewStack()
+		if err := pushChildResultRegister(parent, child, committedValue, nil); err != nil {
+			t.Fatalf("push child result register: %v", err)
+		}
+		got, err := parent.PopAny()
+		if err != nil {
+			t.Fatalf("pop pushed result: %v", err)
 		}
 
-		if got != want {
-			t.Fatalf("v%d committed=%v hasCommitted=%v hasCurrent=%v result = %p, want %p", version, committed, hasCommittedValue, hasCurrentValue, got, want)
+		// a committed child returns its committed
+		// register; a non-committed one returns null at v11+ and the
+		// degenerate null-reference cell entry below v11.
+		switch {
+		case committed && hasCommittedValue:
+			if got != committedValue {
+				t.Fatalf("v%d committed result = %v, want committed value", version, got)
+			}
+		case committed:
+			if got != nil {
+				t.Fatalf("v%d committed nil result = %v, want null", version, got)
+			}
+		case version >= 11:
+			if got != nil {
+				t.Fatalf("v%d non-committed result = %v, want null", version, got)
+			}
+		default:
+			if value, ok := got.(*cell.Cell); !ok || value != nil {
+				t.Fatalf("v%d non-committed result = %T %v, want typed null cell", version, got, got)
+			}
 		}
 	})
 }

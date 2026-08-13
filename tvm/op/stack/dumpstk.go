@@ -14,11 +14,10 @@ import (
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return DUMPSTK() },
-		func() vm.OP { return DUMP(0) },
-		func() vm.OP { return DEBUG(1) },
 		func() vm.OP { return DEBUGSTR(nil) },
 		func() vm.OP { return STRDUMP() },
 	)
+	vm.ArgList = append(vm.ArgList, dumpOp, debugOp)
 }
 
 func DUMPSTK() *helpers.SimpleOP {
@@ -36,72 +35,54 @@ func DUMPSTK() *helpers.SimpleOP {
 	}
 }
 
-func DUMP(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			if !state.TraceEnabled() {
-				return nil
-			}
-
-			if int(idx) >= state.Stack.Len() {
-				state.Tracef("#DEBUG#: s%d is absent", idx)
-				return nil
-			}
-
-			val, err := state.Stack.Get(int(idx))
-			if err != nil {
-				return nil
-			}
-
-			state.Tracef("#DEBUG#: s%d = %s", idx, debugValueString(val))
+var dumpOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xFE2, 12)),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		if !state.TraceEnabled() {
 			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("DUMP s%d", idx)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xFE2, 12),
-		FixedSizeBits: 4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			idx = uint8(v)
+		}
+
+		if int(args) >= state.Stack.Len() {
+			state.Tracef("#DEBUG#: s%d is absent", args)
 			return nil
-		},
-	}
+		}
+
+		val, err := state.Stack.Get(int(args))
+		if err != nil {
+			return nil
+		}
+
+		state.Tracef("#DEBUG#: s%d = %s", args, debugValueString(val))
+		return nil
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("DUMP s%d", args)
+	},
+})
+
+func DUMP(idx uint8) vm.OP {
+	return vm.Bind(dumpOp, uint64(idx))
 }
 
-func DEBUG(arg uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			if !state.TraceEnabled() {
-				return nil
-			}
+var debugOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xFE)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		if !state.TraceEnabled() {
+			return nil
+		}
 
-			state.Tracef("DEBUG %d", arg)
-			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("DEBUG %d", arg)
-		},
-		BitPrefix:     helpers.BytesPrefix(0xFE),
-		FixedSizeBits: 8,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(arg), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			arg = uint8(v)
-			return nil
-		},
-	}
+		state.Tracef("DEBUG %d", args)
+		return nil
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("DEBUG %d", args)
+	},
+})
+
+func DEBUG(arg uint8) vm.OP {
+	return vm.Bind(debugOp, uint64(arg))
 }
 
 func STRDUMP() *helpers.SimpleOP {
@@ -232,8 +213,14 @@ func debugValueString(v any) string {
 		}
 		return x.WithoutTrace().MustToCell().Dump() + " [slice]"
 	case *cell.Builder:
+		if x == nil {
+			return "null [builder]"
+		}
 		return x.WithoutTrace().EndCell().Dump() + " [builder]"
 	case *cell.Cell:
+		if x == nil {
+			return "null [cell]"
+		}
 		return x.Dump() + " [cell]"
 	default:
 		return fmt.Sprintf("%v [%T]", x, x)

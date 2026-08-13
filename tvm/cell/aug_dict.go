@@ -65,6 +65,11 @@ type augmentedMutationState struct {
 	valueCell             Cell
 	value                 Slice
 	leftExtra, rightExtra Slice
+	// skipScratch backs the sibling-extra reads of the walk. The skipper is an
+	// opaque function value, so a slice whose address reaches it is forced to
+	// the heap; keeping one per mutation instead of one per visited fork turns
+	// a per-node allocation into a per-operation one.
+	skipScratch Slice
 }
 
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -93,10 +98,21 @@ func (c *Cell) AsAugDict(keySz uint, aug Augmentation) *AugmentedDictionary {
 	}
 }
 
+// ErrNotInlineAugDictNode reports that the slice does not hold an inline
+// HashmapAug root node. The most common cause is feeding the HashmapAugE form
+// produced by (*AugmentedDictionary).ToCell back into a ToAugDict* loader:
+// that form is `1 root:^HashmapAug extra:Y` (or `0 extra:Y` when empty), not a
+// node, and must be read with Slice.LoadAugDict instead.
+var ErrNotInlineAugDictNode = errors.New("slice is not an inline HashmapAug root node, use LoadAugDict for the HashmapAugE form returned by AugmentedDictionary.ToCell")
+
 func (c *Slice) ToAugDict(keySz uint, skipExtra AugmentedExtraSkipper) (*AugmentedDictionary, error) {
 	return c.ToAugDictWithValue(keySz, skipExtra, nil)
 }
 
+// ToAugDictWithAugmentation reads an inline HashmapAug whose root node starts
+// at the slice position and occupies the rest of the slice. It is the inverse
+// of (*AugmentedDictionary).RootCell, not of ToCell: the wrapped HashmapAugE
+// cell that ToCell returns is read back with LoadAugDict.
 func (c *Slice) ToAugDictWithAugmentation(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
 	return c.ToAugDictWithValueAndAugmentation(keySz, aug, nil)
 }
@@ -113,45 +129,45 @@ func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, 
 		return nil, fmt.Errorf("augmentation is nil")
 	}
 
+	if err := validateDictKeySize(keySz); err != nil {
+		return nil, fmt.Errorf("failed to validate augmented dict: %w", err)
+	}
+
 	var (
 		root *Cell
 		err  error
 	)
 
 	if skipValue == nil {
+		// The dict owns the rest of the slice, so the remainder is the root node
+		// verbatim and nothing has to be measured. Parse it anyway on a throwaway
+		// copy: a slice that is not a node at all still captures cleanly here and
+		// would only blow up later, inside an unrelated trie walk. A pruned root
+		// carries no node to check, exactly as in validateAugmentedDictNode.
+		if raw := c.RawCell(); raw == nil || !raw.IsSpecial() {
+			probe := c.WithoutTrace()
+			isLeaf, perr := parseAugDictRootNode(keySz, probe, aug, nil)
+			if perr != nil {
+				return nil, perr
+			}
+			if !isLeaf && (probe.BitsLeft() != 0 || probe.RefsNum() != 0) {
+				return nil, fmt.Errorf("%w: %d bits and %d refs left after the root fork node",
+					ErrNotInlineAugDictNode, probe.BitsLeft(), probe.RefsNum())
+			}
+		}
+
 		root, err = c.ToCell()
 		if err != nil {
 			return nil, err
 		}
 	} else {
 		root, err = captureConsumedPrefix(c, func(loader *Slice) error {
-			labelLen, _, err := loadLabel(keySz, loader, BeginCell())
-			if err != nil {
-				return err
-			}
-
-			if labelLen == keySz {
-				if err = aug.SkipExtra(loader); err != nil {
-					return err
-				}
-				return skipValue(loader)
-			}
-
-			if _, err = loader.LoadRefCell(); err != nil {
-				return err
-			}
-			if _, err = loader.LoadRefCell(); err != nil {
-				return err
-			}
-			return aug.SkipExtra(loader)
+			_, err := parseAugDictRootNode(keySz, loader, aug, skipValue)
+			return err
 		})
 		if err != nil {
 			return nil, err
 		}
-	}
-
-	if err = validateDictKeySize(keySz); err != nil {
-		return nil, fmt.Errorf("failed to validate augmented dict: %w", err)
 	}
 
 	return &AugmentedDictionary{
@@ -159,6 +175,40 @@ func (c *Slice) ToAugDictWithValueAndAugmentation(keySz uint, aug Augmentation, 
 		root:  root,
 		aug:   aug,
 	}, nil
+}
+
+// parseAugDictRootNode consumes one HashmapAug node from loader and reports
+// whether it was a leaf. skipValue may be nil when the leaf value occupies the
+// rest of the slice; the node is then left unconsumed past its extra.
+func parseAugDictRootNode(keySz uint, loader *Slice, aug Augmentation, skipValue AugmentedExtraSkipper) (bool, error) {
+	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
+	if err != nil {
+		return false, fmt.Errorf("%w: failed to parse root label: %w", ErrNotInlineAugDictNode, err)
+	}
+
+	if labelLen == keySz {
+		if err = aug.SkipExtra(loader); err != nil {
+			return true, fmt.Errorf("%w: failed to skip root leaf extra: %w", ErrNotInlineAugDictNode, err)
+		}
+		if skipValue == nil {
+			return true, nil
+		}
+		if err = skipValue(loader); err != nil {
+			return true, fmt.Errorf("%w: failed to skip root leaf value: %w", ErrNotInlineAugDictNode, err)
+		}
+		return true, nil
+	}
+
+	if _, err = loader.LoadRefCell(); err != nil {
+		return false, fmt.Errorf("%w: failed to load root fork left ref: %w", ErrNotInlineAugDictNode, err)
+	}
+	if _, err = loader.LoadRefCell(); err != nil {
+		return false, fmt.Errorf("%w: failed to load root fork right ref: %w", ErrNotInlineAugDictNode, err)
+	}
+	if err = aug.SkipExtra(loader); err != nil {
+		return false, fmt.Errorf("%w: failed to skip root fork extra: %w", ErrNotInlineAugDictNode, err)
+	}
+	return false, nil
 }
 
 func (c *Slice) LoadAugDict(keySz uint, aug Augmentation, asProof bool) (*AugmentedDictionary, error) {
@@ -259,7 +309,7 @@ func newAugDictIteratorInline(loader *Slice, keySz uint, aug Augmentation, skipV
 		return nil, nil, err
 	}
 
-	it := &DictIterator{keySz: keySz, rev: rev, invertFirst: invertFirst}
+	it := &DictIterator{keySz: keySz, rev: rev, invertFirst: invertFirst, lenientForkShape: true}
 	it.stack = make([]dictIteratorFrame, 0, min(int(keySz)+1, dictIteratorInitialStackDepth))
 	if err = it.pushNode(node, keySz, true); err != nil {
 		return nil, nil, err
@@ -521,7 +571,7 @@ func (d *AugmentedDictionary) LoadValueWithExtraByIntKeyInto(key *big.Int, value
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
 	plain := Dictionary{keySz: d.keySz, root: d.root, trace: d.trace}
-	return plain.findKeySliceInto(&keySlice, valueExtra)
+	return plain.findKeySliceInto(&keySlice, valueExtra, dictWalk{lenient: true})
 }
 
 // LoadValueByIntKeyInto is LoadValueByIntKey with caller-owned result storage.
@@ -551,7 +601,15 @@ func (d *AugmentedDictionary) LoadValueWithExtraInto(key *Cell, valueExtra *Slic
 		root:  d.root,
 		trace: d.trace,
 	}
-	return plain.LoadValueInto(key, valueExtra)
+	if key == nil || key.BitsSize() != d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return fmt.Errorf("failed to load lookup key: %w", err)
+	}
+	return plain.findKeySliceInto(&keySlice, valueExtra, dictWalk{lenient: true})
 }
 
 func (d *AugmentedDictionary) LoadValue(key *Cell) (*Slice, error) {
@@ -855,6 +913,17 @@ func (d *AugmentedDictionary) decomposeValueExtraInto(valueExtra, value, extra *
 }
 
 func augmentedNodeExtraView(node fixedDictNode, remaining uint, skipExtra AugmentedExtraSkipper) (Slice, error) {
+	var after Slice
+	return augmentedNodeExtraViewScratch(node, remaining, skipExtra, &after)
+}
+
+// augmentedNodeExtraViewScratch is augmentedNodeExtraView with the boundary
+// probe backed by caller-owned scratch. The skipper is an opaque function
+// value, so a slice whose address reaches it escapes to the heap; a walk that
+// visits thousands of nodes passes one scratch from its state instead of
+// paying that allocation per node. The scratch holds no result — it is free
+// for reuse the moment the call returns.
+func augmentedNodeExtraViewScratch(node fixedDictNode, remaining uint, skipExtra AugmentedExtraSkipper, after *Slice) (Slice, error) {
 	extra := node.loader
 	if !node.isLeaf(remaining) {
 		if err := extra.SkipBitsAndRefs(0, 2); err != nil {
@@ -862,8 +931,8 @@ func augmentedNodeExtraView(node fixedDictNode, remaining uint, skipExtra Augmen
 		}
 	}
 
-	after := extra
-	if err := skipExtra(&after); err != nil {
+	*after = extra
+	if err := skipExtra(after); err != nil {
 		return Slice{}, err
 	}
 	extra.bitEnd = after.bitStart
@@ -871,15 +940,27 @@ func augmentedNodeExtraView(node fixedDictNode, remaining uint, skipExtra Augmen
 	return extra, nil
 }
 
-func extractAugmentedNodeExtraView(c *Cell, keySz uint, skipExtra AugmentedExtraSkipper) (Slice, error) {
-	node, err := parseFixedDictNode(c, keySz)
+// extractAugmentedNodeExtraViewScratch parses the node of c and returns a view
+// of its extra, with the boundary probe backed by caller-owned scratch; see
+// augmentedNodeExtraViewScratch.
+func extractAugmentedNodeExtraViewScratch(c *Cell, keySz uint, skipExtra AugmentedExtraSkipper, after *Slice) (Slice, error) {
+	return extractAugmentedNodeExtraViewWithTraceScratch(c, c.Trace(), keySz, skipExtra, after)
+}
+
+// extractAugmentedNodeExtraViewWithTraceScratch is the form that takes the
+// trace beside the cell rather than attached to it. A child reached through a
+// fork carries its trace on the parent's Slice, and materializing that trace
+// onto the cell costs a whole cell copy per visited node; passing it as an
+// argument notifies exactly the same loads without one.
+func extractAugmentedNodeExtraViewWithTraceScratch(c *Cell, trace *Trace, keySz uint, skipExtra AugmentedExtraSkipper, after *Slice) (Slice, error) {
+	node, err := parseFixedDictNodeWithTrace(c, keySz, trace)
 	if err != nil {
 		return Slice{}, fmt.Errorf("failed to load augmented dict node: %w", err)
 	}
 	if err = node.rejectSpecial("augmented dict"); err != nil {
 		return Slice{}, err
 	}
-	return augmentedNodeExtraView(node, keySz, skipExtra)
+	return augmentedNodeExtraViewScratch(node, keySz, skipExtra, after)
 }
 
 func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, error) {
@@ -923,6 +1004,7 @@ func (d *AugmentedDictionary) lookupDeleteWithExtraSlice(keySlice *Slice) (*Slic
 }
 
 func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {
+	root = root.withTraceCombined(d.trace)
 	d.root = root
 	if !d.wrapped {
 		d.rootExtra = rootExtra
@@ -970,6 +1052,9 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return nil, Slice{}, false, fmt.Errorf("failed to load branch: %w", err)
 	}
 	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return nil, Slice{}, false, err
+	}
+	if err = node.validateForkShape(keyOffset, true); err != nil {
 		return nil, Slice{}, false, err
 	}
 	sz, kPart := node.labelLen, node.label
@@ -1020,7 +1105,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		if err != nil {
 			return nil, Slice{}, false, err
 		}
-		otherExtra, err := extractAugmentedNodeExtraView(other, nextKeyOffset, d.aug.SkipExtra)
+		otherExtra, err := extractAugmentedNodeExtraViewScratch(other, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 		if err != nil {
 			return nil, Slice{}, false, err
 		}
@@ -1047,7 +1132,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return nil, Slice{}, false, fmt.Errorf("failed to split old child label: %w", err)
 	}
 
-	oldChild := BeginCell()
+	oldChild := BeginCell().SetTrace(d.trace)
 	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
@@ -1055,7 +1140,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 	if err = oldChild.StoreBuilderUncheckedDepth(&state.extra); err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
-	oldExtra, err := augmentedNodeExtraView(node, keyOffset, d.aug.SkipExtra)
+	oldExtra, err := augmentedNodeExtraViewScratch(node, keyOffset, d.aug.SkipExtra, &state.skipScratch)
 	if err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to extract old child extra: %w", err)
 	}
@@ -1087,6 +1172,9 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, s
 		return nil, Slice{}, nil, false, fmt.Errorf("failed to load branch: %w", err)
 	}
 	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return nil, Slice{}, nil, false, err
+	}
+	if err = node.validateForkShape(keyOffset, true); err != nil {
 		return nil, Slice{}, nil, false, err
 	}
 	sz, kPart := node.labelLen, node.label
@@ -1137,7 +1225,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, s
 		if err = otherNode.rejectSpecial("augmented dict"); err != nil {
 			return nil, Slice{}, nil, false, err
 		}
-		otherExtra, err := augmentedNodeExtraView(otherNode, nextKeyOffset, d.aug.SkipExtra)
+		otherExtra, err := augmentedNodeExtraViewScratch(otherNode, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 		if err != nil {
 			return nil, Slice{}, nil, false, fmt.Errorf("failed to extract neighbour extra: %w", err)
 		}
@@ -1173,7 +1261,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, s
 	if err != nil {
 		return nil, Slice{}, nil, false, err
 	}
-	otherExtra, err := extractAugmentedNodeExtraView(otherRef, nextKeyOffset, d.aug.SkipExtra)
+	otherExtra, err := extractAugmentedNodeExtraViewScratch(otherRef, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 	if err != nil {
 		return nil, Slice{}, nil, false, err
 	}
@@ -1329,13 +1417,19 @@ func (d *AugmentedDictionary) storeNode(label *Slice, payload *Builder, keyOffse
 }
 
 func validateAugmentedDictRoot(root *Cell, keySz uint, aug Augmentation) error {
+	return validateAugmentedDictRootWithTrace(root, keySz, aug, false)
+}
+
+func validateAugmentedDictRootWithTrace(root *Cell, keySz uint, aug Augmentation, preserveTrace bool) error {
 	if root == nil {
 		return validateDictKeySize(keySz)
 	}
 	if err := validateDictKeySize(keySz); err != nil {
 		return err
 	}
-	root = root.WithTrace(nil)
+	if !preserveTrace {
+		root = root.WithTrace(nil)
+	}
 
 	if err := validateAugmentedDictNode(root, keySz, aug.SkipExtra); err != nil {
 		return err
@@ -1346,7 +1440,9 @@ func validateAugmentedDictRoot(root *Cell, keySz uint, aug Augmentation) error {
 		return err
 	}
 	if hasSemantics {
-		if _, err = computeAugmentedNodeExtra(root, keySz, aug); err != nil {
+		walk := augValidateWalk{aug: aug}
+		var rootExtra Slice
+		if err = walk.node(root, keySz, 0, &rootExtra); err != nil {
 			return err
 		}
 	}
@@ -1374,39 +1470,40 @@ func validateAugmentedDictNode(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 		return fmt.Errorf("augmented dict branch is nil")
 	}
 
-	if c.IsSpecial() {
-		if c.GetType() == PrunedCellType {
+	var loader Slice
+	if err := c.BeginParseInto(&loader); err != nil {
+		return fmt.Errorf("failed to load augmented dict node: %w", err)
+	}
+	if loader.cell.IsSpecial() {
+		if loader.cell.GetType() == PrunedCellType {
 			return nil
 		}
 		return fmt.Errorf("augmented dict has unsupported special cell in tree structure")
 	}
 
-	loader, err := c.BeginParse()
-	if err != nil {
-		return fmt.Errorf("failed to load augmented dict node: %w", err)
-	}
-
-	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
+	labelLen, _, err := readLabelView(keySz, &loader)
 	if err != nil {
 		return fmt.Errorf("failed to parse augmented dict label: %w", err)
 	}
 
+	// The extra is only skipped here, never kept, so the walk consumes it in
+	// place instead of cutting a cell out of the bits it just stepped over.
 	if labelLen == keySz {
-		leaf := loader.Copy()
-		if _, err = captureConsumedPrefix(leaf, skipExtra); err != nil {
+		leaf := loader
+		if err = skipExtra(&leaf); err != nil {
 			return fmt.Errorf("invalid augmented dict leaf extra: %w", err)
 		}
 		return nil
 	}
 
-	fork := loader.Copy()
+	fork := loader
 	if _, err = fork.LoadRefCell(); err != nil {
 		return fmt.Errorf("invalid augmented dict fork left ref: %w", err)
 	}
 	if _, err = fork.LoadRefCell(); err != nil {
 		return fmt.Errorf("invalid augmented dict fork right ref: %w", err)
 	}
-	if _, err = captureConsumedPrefix(fork, skipExtra); err != nil {
+	if err = skipExtra(&fork); err != nil {
 		return fmt.Errorf("invalid augmented dict fork extra: %w", err)
 	}
 	if fork.BitsLeft() != 0 || fork.RefsNum() != 0 {
@@ -1415,91 +1512,138 @@ func validateAugmentedDictNode(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 	return nil
 }
 
-func computeAugmentedNodeExtra(c *Cell, keySz uint, aug Augmentation) (*Cell, error) {
+// augValidateLevel is the scratch one tree level of a semantic validation walk
+// works in. Every pointer the augmentation callbacks receive lives here: they
+// are interface calls, so a Builder or Slice handed to them escapes, and one
+// set per level replaces one set per node.
+type augValidateLevel struct {
+	computed    Builder
+	rest        Slice
+	left, right Slice
+	buf         [maxCellDataBytes]byte
+}
+
+// augValidateWalk recomputes the augmentation of a whole subtree. Levels are
+// held by pointer so that growing the stack never moves a frame's scratch out
+// from under it.
+type augValidateWalk struct {
+	aug    Augmentation
+	levels []*augValidateLevel
+}
+
+func (w *augValidateWalk) level(depth int) *augValidateLevel {
+	for len(w.levels) <= depth {
+		w.levels = append(w.levels, new(augValidateLevel))
+	}
+	return w.levels[depth]
+}
+
+// node recomputes one node's extra from its children (or, at a leaf, from its
+// value) and checks it against the extra the node stores, then publishes the
+// subtree's extra into out for the parent to combine.
+//
+// What it publishes is the stored extra itself, as a view into the node cell.
+// The check that just passed proves the stored bits are the recomputed ones —
+// bit for bit and reference hash for reference hash, and an equal hash means
+// equal descriptors, so a stored reference reads exactly like the recomputed
+// one it matched. Nothing has to be built to carry the extra upwards.
+func (w *augValidateWalk) node(c *Cell, keySz uint, depth int, out *Slice) error {
+	lvl := w.level(depth)
+
 	if c == nil {
-		var extra Builder
-		if err := aug.EmptyExtra(&extra); err != nil {
-			return nil, err
+		lvl.computed = Builder{}
+		if err := w.aug.EmptyExtra(&lvl.computed); err != nil {
+			return err
 		}
-		return extra.EndCell(), nil
+		return lvl.computed.EndCell().BeginParseInto(out)
 	}
 
-	if c.IsSpecial() {
-		if c.GetType() == PrunedCellType {
-			return nil, ErrAugmentationSemanticsUnavailable
+	var loader Slice
+	if err := c.BeginParseInto(&loader); err != nil {
+		return fmt.Errorf("failed to load augmented dict node: %w", err)
+	}
+	if loader.cell.IsSpecial() {
+		if loader.cell.GetType() == PrunedCellType {
+			return ErrAugmentationSemanticsUnavailable
 		}
-		return nil, fmt.Errorf("augmented dict has unsupported special cell in tree structure")
+		return fmt.Errorf("augmented dict has unsupported special cell in tree structure")
 	}
 
-	loader, err := c.BeginParse()
+	labelLen, _, err := readLabelView(keySz, &loader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load augmented dict node: %w", err)
-	}
-
-	labelLen, _, err := loadLabel(keySz, loader, BeginCell())
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse augmented dict label: %w", err)
+		return fmt.Errorf("failed to parse augmented dict label: %w", err)
 	}
 
 	if labelLen == keySz {
-		valueExtra := *loader
-		storedExtra, err := captureConsumedPrefix(&valueExtra, aug.SkipExtra)
-		if err != nil {
-			return nil, fmt.Errorf("invalid augmented dict leaf extra: %w", err)
+		stored := loader
+		lvl.rest = loader
+		if err = w.aug.SkipExtra(&lvl.rest); err != nil {
+			return fmt.Errorf("invalid augmented dict leaf extra: %w", err)
 		}
+		stored.bitEnd, stored.refEnd = lvl.rest.bitStart, lvl.rest.refStart
 
-		var computedExtra Builder
-		if err := aug.LeafExtra(&valueExtra, &computedExtra); err != nil {
-			return nil, err
+		lvl.computed = Builder{}
+		if err = w.aug.LeafExtra(&lvl.rest, &lvl.computed); err != nil {
+			return err
 		}
-		if !computedExtra.EqualsCell(storedExtra) {
-			return nil, fmt.Errorf("augmented dict leaf extra mismatch")
+		if !lvl.computed.equalsSlice(&stored, &lvl.buf) {
+			return fmt.Errorf("augmented dict leaf extra mismatch")
 		}
-		return computedExtra.EndCell(), nil
+		return publishAugExtra(&lvl.computed, &stored, out)
 	}
 
 	left, err := loader.LoadRefCell()
 	if err != nil {
-		return nil, fmt.Errorf("invalid augmented dict fork left ref: %w", err)
+		return fmt.Errorf("invalid augmented dict fork left ref: %w", err)
 	}
 	right, err := loader.LoadRefCell()
 	if err != nil {
-		return nil, fmt.Errorf("invalid augmented dict fork right ref: %w", err)
+		return fmt.Errorf("invalid augmented dict fork right ref: %w", err)
 	}
-	storedExtra, err := captureConsumedPrefix(loader, aug.SkipExtra)
-	if err != nil {
-		return nil, fmt.Errorf("invalid augmented dict fork extra: %w", err)
+
+	stored := loader
+	lvl.rest = loader
+	if err = w.aug.SkipExtra(&lvl.rest); err != nil {
+		return fmt.Errorf("invalid augmented dict fork extra: %w", err)
 	}
-	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
-		return nil, fmt.Errorf("invalid augmented dict fork node")
+	stored.bitEnd, stored.refEnd = lvl.rest.bitStart, lvl.rest.refStart
+	if lvl.rest.BitsLeft() != 0 || lvl.rest.RefsNum() != 0 {
+		return fmt.Errorf("invalid augmented dict fork node")
 	}
 
 	childKeyBits := keySz - labelLen - 1
-	leftExtra, err := computeAugmentedNodeExtra(left, childKeyBits, aug)
-	if err != nil {
-		return nil, fmt.Errorf("invalid left branch: %w", err)
+	if err = w.node(left, childKeyBits, depth+1, &lvl.left); err != nil {
+		return fmt.Errorf("invalid left branch: %w", err)
 	}
-	rightExtra, err := computeAugmentedNodeExtra(right, childKeyBits, aug)
-	if err != nil {
-		return nil, fmt.Errorf("invalid right branch: %w", err)
+	if err = w.node(right, childKeyBits, depth+1, &lvl.right); err != nil {
+		return fmt.Errorf("invalid right branch: %w", err)
 	}
 
-	var leftExtraSlice, rightExtraSlice Slice
-	if err := leftExtra.BeginParseInto(&leftExtraSlice); err != nil {
-		return nil, fmt.Errorf("failed to load left extra: %w", err)
+	lvl.computed = Builder{}
+	if err = w.aug.CombineExtra(&lvl.left, &lvl.right, &lvl.computed); err != nil {
+		return err
 	}
-	if err := rightExtra.BeginParseInto(&rightExtraSlice); err != nil {
-		return nil, fmt.Errorf("failed to load right extra: %w", err)
+	if !lvl.computed.equalsSlice(&stored, &lvl.buf) {
+		return fmt.Errorf("augmented dict fork extra mismatch")
 	}
+	return publishAugExtra(&lvl.computed, &stored, out)
+}
 
-	var computedExtra Builder
-	if err := aug.CombineExtra(&leftExtraSlice, &rightExtraSlice, &computedExtra); err != nil {
-		return nil, err
+// publishAugExtra hands the parent the subtree extra. Equal bits and equal
+// reference hashes make the stored view interchangeable with the recomputed
+// builder for a ref-free extra, so that costs no cell. A stored reference can
+// still read differently from the one it matched - a pruned stand-in under a
+// virtualized view reports the represented hash - so an extra that carries
+// references publishes the recomputed cell, exactly as the pre-change walk did.
+// The stored view is also published without the node's trace, so recomputing a
+// parent extra marks no cell the old walk left unmarked.
+func publishAugExtra(computed *Builder, stored *Slice, out *Slice) error {
+	if computed.refsNum != 0 {
+		return computed.EndCell().BeginParseInto(out)
 	}
-	if !computedExtra.EqualsCell(storedExtra) {
-		return nil, fmt.Errorf("augmented dict fork extra mismatch")
-	}
-	return computedExtra.EndCell(), nil
+	*out = *stored
+	out.trace = nil
+	return nil
 }
 
 func extractAugmentedNodeExtra(c *Cell, keySz uint, skipExtra AugmentedExtraSkipper) (*Cell, error) {
@@ -1510,6 +1654,11 @@ func extractAugmentedNodeExtra(c *Cell, keySz uint, skipExtra AugmentedExtraSkip
 	loader, err := c.BeginParse()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load augmented dict node: %w", err)
+	}
+	if trace := loader.Trace(); trace != nil {
+		if err = trace.PendingError(); err != nil {
+			return nil, err
+		}
 	}
 
 	labelLen, _, err := loadLabel(keySz, loader, BeginCell())

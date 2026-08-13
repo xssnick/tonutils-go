@@ -113,6 +113,8 @@ type CertificateV2 struct {
 	Signature []byte `tl:"bytes"`
 }
 
+const certificateMaxSimpleBroadcastSize uint32 = 768
+
 func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint32, isFEC bool) (CertCheckResult, error) {
 	if dataSize > c.MaxSize {
 		return CertCheckResultForbidden, nil
@@ -124,13 +126,24 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 		return CertCheckResultForbidden, nil
 	}
 
-	toSign, err := tl.Serialize(CertificateIdV2{
-		OverlayID: overlayId,
-		Node:      issuedToId,
-		ExpireAt:  c.ExpireAt,
-		MaxSize:   c.MaxSize,
-		Flags:     c.Flags,
-	}, true)
+	var toSign []byte
+	var err error
+	if c.Flags == defaultCertificateFlags(c.MaxSize) {
+		toSign, err = tl.Serialize(CertificateId{
+			OverlayID: overlayId,
+			Node:      issuedToId,
+			ExpireAt:  c.ExpireAt,
+			MaxSize:   c.MaxSize,
+		}, true)
+	} else {
+		toSign, err = tl.Serialize(CertificateIdV2{
+			OverlayID: overlayId,
+			Node:      issuedToId,
+			ExpireAt:  c.ExpireAt,
+			MaxSize:   c.MaxSize,
+			Flags:     c.Flags,
+		}, true)
+	}
 	if err != nil {
 		return CertCheckResultForbidden, err
 	}
@@ -147,6 +160,14 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 		return CertCheckResultNeedCheck, nil
 	}
 	return CertCheckResultTrusted, nil
+}
+
+func defaultCertificateFlags(maxSize uint32) int32 {
+	flags := int32(_CertFlagTrusted)
+	if maxSize > certificateMaxSimpleBroadcastSize {
+		flags |= _CertFlagAllowFEC
+	}
+	return flags
 }
 
 type Broadcast struct {

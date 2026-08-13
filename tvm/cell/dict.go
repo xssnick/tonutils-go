@@ -370,11 +370,17 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return leaf, nil, err == nil, err
 	}
 
-	node, err := parseFixedDictNode(branch, keyOffset)
+	node, err := parseFixedDictNodeWithTrace(branch, keyOffset, branch.Trace())
 	if err != nil {
 		return nil, nil, false, err
 	}
+	if err = node.resolveIfSpecial(keyOffset, branch.Trace(), nil); err != nil {
+		return nil, nil, false, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, nil, false, err
+	}
+	if err = node.validateForkShape(keyOffset, false); err != nil {
 		return nil, nil, false, err
 	}
 
@@ -407,7 +413,18 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 			return node.cell, oldValue, false, nil
 		}
 
-		cloned, changed, err := node.cloneWithRef(refIdx, ref, d.trace)
+		canonical, decided := node.canonicalLabelFast(keyOffset)
+		if !decided {
+			canonical, err = node.hasCanonicalLabel(keyOffset)
+			if err != nil {
+				return nil, nil, false, err
+			}
+		}
+		if canonical {
+			cloned, changed, err := node.cloneWithRef(refIdx, ref, d.trace)
+			return cloned, oldValue, changed, err
+		}
+		cloned, changed, err := node.rebuildNonCanonicalFixedForkWithRef(refIdx, ref, keyOffset, d.trace)
 		return cloned, oldValue, changed, err
 	}
 
@@ -454,11 +471,17 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return nil, nil, false, nil
 	}
 
-	node, err := parseFixedDictNode(branch, keyOffset)
+	node, err := parseFixedDictNodeWithTrace(branch, keyOffset, branch.Trace())
 	if err != nil {
 		return nil, nil, false, err
 	}
+	if err = node.resolveIfSpecial(keyOffset, branch.Trace(), nil); err != nil {
+		return nil, nil, false, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, nil, false, err
+	}
+	if err = node.validateForkShape(keyOffset, false); err != nil {
 		return nil, nil, false, err
 	}
 
@@ -501,6 +524,11 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		if err != nil {
 			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
+		if trace := slc.Trace(); trace != nil {
+			if err = trace.PendingError(); err != nil {
+				return nil, nil, false, err
+			}
+		}
 
 		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
 		if err != nil {
@@ -521,7 +549,18 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		return removed, merged, true, nil
 	}
 
-	cloned, changed, err := node.cloneWithRef(refIdx, newChild, d.trace)
+	canonical, decided := node.canonicalLabelFast(keyOffset)
+	if !decided {
+		canonical, err = node.hasCanonicalLabel(keyOffset)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	if canonical {
+		cloned, changed, err := node.cloneWithRef(refIdx, newChild, d.trace)
+		return removed, cloned, changed, err
+	}
+	cloned, changed, err := node.rebuildNonCanonicalFixedForkWithRef(refIdx, newChild, keyOffset, d.trace)
 	return removed, cloned, changed, err
 }
 
@@ -599,7 +638,7 @@ func (d *Dictionary) LoadValueByIntKeyInto(key *big.Int, value *Slice) error {
 	initIntKeyBuilder(key, d.keySz, &builder)
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	return d.findKeySliceInto(&keySlice, value)
+	return d.findKeySliceInto(&keySlice, value, dictWalk{})
 }
 
 // LoadValueByUintKey is the same as LoadValue, but constructs the key cell from uint,
@@ -620,7 +659,7 @@ func (d *Dictionary) LoadValueByUintKeyInto(key uint64, value *Slice) error {
 	}
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	return d.findKeySliceInto(&keySlice, value)
+	return d.findKeySliceInto(&keySlice, value, dictWalk{})
 }
 
 // LoadValueByBytesKey is the same as LoadValue, but takes the key as raw
@@ -642,7 +681,7 @@ func (d *Dictionary) LoadValueByBytesKeyInto(key []byte, value *Slice) error {
 
 	cell := Cell{data: key, bitsSz: uint16(d.keySz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	return d.findKeySliceInto(&keySlice, value)
+	return d.findKeySliceInto(&keySlice, value, dictWalk{})
 }
 
 // LoadValueBySliceKeyInto loads a value using the first key-size remaining
@@ -652,7 +691,7 @@ func (d *Dictionary) LoadValueBySliceKeyInto(key *Slice, value *Slice) error {
 	if err != nil {
 		return err
 	}
-	return d.findKeySliceInto(&keySlice, value)
+	return d.findKeySliceInto(&keySlice, value, dictWalk{})
 }
 
 func fixedDictKeySlice(key *Slice, bits uint) (Slice, error) {
@@ -736,6 +775,25 @@ func (d *Dictionary) LoadValue(key *Cell) (*Slice, error) {
 	return value, nil
 }
 
+// LoadValueWithResolver performs one lookup with an explicit special-node
+// resolver. It is used by unmetered VM library lookup, where no execution
+// trace is installed and the resolver must not become dictionary state.
+func (d *Dictionary) LoadValueWithResolver(key *Cell, resolver DictSpecialResolver) (*Slice, error) {
+	value := new(Slice)
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, fmt.Errorf("incorrect key size")
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return nil, fmt.Errorf("failed to load lookup key: %w", err)
+	}
+	if err := d.findKeySliceInto(&keySlice, value, dictWalk{resolver: resolver}); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
 // LoadValueInto is LoadValue with caller-owned result storage.
 func (d *Dictionary) LoadValueInto(key *Cell, value *Slice) error {
 	if key == nil || key.BitsSize() != d.keySz {
@@ -762,7 +820,15 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			return nil, nil, err
 		}
 		if loader.cell.IsSpecial() {
-			return nil, nil, fmt.Errorf("dict %w", ErrDictHasSpecialCells)
+			resolved, err := resolveDictNodeCell(loader.cell, branchTrace, nil, "dict")
+			if err != nil {
+				return nil, nil, err
+			}
+			branchTrace = CombineTraces(resolved.Trace(), branchTrace)
+			if err = resolved.BeginParseIntoWithTrace(&loader, nil); err != nil {
+				return nil, nil, err
+			}
+			loader.SetTrace(branchTrace)
 		}
 
 		labelLen, keyBuilder, err := loadLabel(remaining, &loader, key)
@@ -770,6 +836,14 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 			return nil, nil, err
 		}
 		key = keyBuilder
+
+		// a fork must hold nothing but its label and exactly two references;
+		// an augmented tree walked as a plain dictionary keeps its extras
+		if labelLen < remaining {
+			if loader.BitsLeft() != 0 || loader.RefsNum() != 2 {
+				return nil, nil, ErrInvalidDictForkNode
+			}
+		}
 		remaining -= labelLen
 
 		if remaining == 0 {
@@ -800,76 +874,34 @@ func (d *Dictionary) LoadMinMax(fetchMax bool, invertFirst bool) (*Cell, *Slice,
 	}
 }
 
+// LoadMinMaxAndDelete runs a full boundary lookup (charging every node load)
+// followed by a separate delete walk over the now-loaded path (reload prices,
+// then new-cell creation on the way back up), as the reference does. Keeping
+// the two walks distinct keeps the point at which an exhausted gas limit
+// interrupts the operation — and so the reported gas usage — identical.
 func (d *Dictionary) LoadMinMaxAndDelete(fetchMax bool, invertFirst bool) (*Cell, *Slice, error) {
 	if d == nil || d.root == nil {
 		return nil, nil, ErrNoSuchKeyInDict
 	}
 
-	root, key, value, err := deleteFixedDictBoundary(d.tracedRoot(), d.keySz, BeginCell(), fetchMax, invertFirst, d.trace)
+	key, value, err := d.LoadMinMax(fetchMax, invertFirst)
 	if err != nil {
 		return nil, nil, err
 	}
-	d.setRoot(root)
+
+	var keySlice Slice
+	if err = key.BeginParseInto(&keySlice); err != nil {
+		return nil, nil, fmt.Errorf("failed to load boundary key: %w", err)
+	}
+	_, newRoot, changed, err := d.lookupDelete(d.tracedRoot(), &keySlice, d.keySz)
+	if err != nil {
+		return nil, nil, err
+	}
+	if !changed {
+		return nil, nil, ErrNoSuchKeyInDict
+	}
+	d.setRoot(newRoot)
 	return key, value, nil
-}
-
-func deleteFixedDictBoundary(root *Cell, remaining uint, prefix *Builder, fetchMax, invertFirst bool, trace *Trace) (*Cell, *Cell, *Slice, error) {
-	node, err := parseFixedDictNode(root, remaining)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if err = node.rejectSpecial("dict"); err != nil {
-		return nil, nil, nil, err
-	}
-
-	saved := prefix.BitsUsed()
-	defer prefix.truncateBits(saved)
-	label := node.labelSlice()
-	if err = prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
-		return nil, nil, nil, err
-	}
-	if node.isLeaf(remaining) {
-		// The reference VM implements REMMIN/REMMAX as a lookup walk followed
-		// by a delete walk, loading every node on the path twice. This fused
-		// walk visits each node once, so it replays the second-walk load
-		// notifications (on success only) to keep cell-load gas identical.
-		root.Trace().NotifyLoad(node.cell)
-		return nil, prefix.EndCell(), node.value(), nil
-	}
-
-	refIdx := 0
-	if fetchMax {
-		refIdx = 1
-	}
-	if prefix.BitsUsed() == 0 && invertFirst {
-		refIdx ^= 1
-	}
-	if err = prefix.StoreUInt(uint64(refIdx), 1); err != nil {
-		return nil, nil, nil, err
-	}
-
-	childRemaining := node.nextKeyBits(remaining)
-	child, err := node.ref(refIdx)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	newChild, key, value, err := deleteFixedDictBoundary(child, childRemaining, prefix, fetchMax, invertFirst, trace)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	root.Trace().NotifyLoad(node.cell)
-	if newChild == nil {
-		otherIdx := refIdx ^ 1
-		other, err := node.ref(otherIdx)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		merged, err := mergeFixedDictSurvivor(node, uint64(otherIdx), other, remaining, trace)
-		return merged, key, value, err
-	}
-
-	cloned, _, err := node.cloneWithRef(refIdx, newChild, trace)
-	return cloned, key, value, err
 }
 
 func (d *Dictionary) LoadValueAndSet(key, value *Cell) (*Slice, bool, error) {
@@ -1046,7 +1078,9 @@ func (d *Dictionary) mapInner(out []DictKV, keySz, leftKeySz uint, c *Cell, keyP
 			// ignore pruned keys
 			return out, nil
 		}
-		return nil, fmt.Errorf("dict %w, cannot load some values", ErrDictHasSpecialCells)
+		if c.Trace().dictSpecialResolver() == nil {
+			return nil, fmt.Errorf("dict %w, cannot load some values", ErrDictHasSpecialCells)
+		}
 	}
 
 	// the walk reuses a value slice, only leaf values escape
@@ -1058,13 +1092,24 @@ func (d *Dictionary) mapInner(out []DictKV, keySz, leftKeySz uint, c *Cell, keyP
 		if skipPruned && loader.cell.GetType() == PrunedCellType {
 			return out, nil
 		}
-		return nil, fmt.Errorf("dict %w, cannot load some values", ErrDictHasSpecialCells)
+		resolved, err := resolveDictNodeCell(loader.cell, loader.Trace(), nil, "dict")
+		if err != nil {
+			return nil, err
+		}
+		trace := CombineTraces(resolved.Trace(), loader.Trace())
+		if err = resolved.BeginParseIntoWithTrace(&loader, nil); err != nil {
+			return nil, err
+		}
+		loader.SetTrace(trace)
 	}
 
 	sz, keyPrefix, err = loadLabel(leftKeySz, &loader, keyPrefix)
 	if err != nil {
 		return nil, err
 	}
+	// LoadAll is also the raw HashmapAug walker used by block parsers: a fork
+	// may carry augmentation bits after its label, while its first two refs are
+	// still the dictionary children.
 
 	// until key size is not equals we go deeper
 	if keyPrefix.BitsUsed() < keySz {
@@ -1112,10 +1157,10 @@ func (d *Dictionary) findKeyInto(lookupKey *Cell, value *Slice) error {
 	if err := lookupKey.BeginParseInto(&lKey); err != nil {
 		return fmt.Errorf("failed to load lookup key: %w", err)
 	}
-	return d.findKeySliceInto(&lKey, value)
+	return d.findKeySliceInto(&lKey, value, dictWalk{})
 }
 
-func (d *Dictionary) findKeySliceInto(lKey *Slice, value *Slice) error {
+func (d *Dictionary) findKeySliceInto(lKey *Slice, value *Slice, walk dictWalk) error {
 	branch := d.root
 	if branch == nil {
 		return ErrNoSuchKeyInDict
@@ -1129,27 +1174,64 @@ func (d *Dictionary) findKeySliceInto(lKey *Slice, value *Slice) error {
 			return err
 		}
 		if branchSlice.cell.IsSpecial() {
-			return fmt.Errorf("dict %w", ErrDictHasSpecialCells)
+			resolved, err := resolveDictNodeCell(branchSlice.cell, branchTrace, walk.resolver, "dict")
+			if err != nil {
+				return err
+			}
+			// the resolver already charged the resolved cell: parse it
+			// charge-free, children stay metered through the walk trace
+			branchTrace = CombineTraces(resolved.Trace(), branchTrace)
+			if err = resolved.BeginParseIntoWithTrace(&branchSlice, nil); err != nil {
+				return err
+			}
+			branchSlice.SetTrace(branchTrace)
 		}
-		sz, matched, err := matchLabelPrefix(lKey.BitsLeft(), &branchSlice, lKey)
+		remaining := lKey.BitsLeft()
+		sz, matched, err := matchLabelPrefix(remaining, &branchSlice, lKey)
 		if err != nil {
 			return err
 		}
-
 		if matched != sz {
+			// The matcher stops at the first differing bit. Re-read only this
+			// uncommon path to validate the complete node before reporting a
+			// missing key; successful lookups keep the old tight descent.
+			if sz < remaining {
+				check := Slice{
+					cell:   branchSlice.cell,
+					bitEnd: branchSlice.cell.bitsSz,
+					refEnd: uint8(branchSlice.cell.refsCount()),
+				}
+				if _, _, err = readLabelView(remaining, &check); err != nil {
+					return err
+				}
+				refsLeft := check.refEnd - check.refStart
+				if check.bitStart != check.bitEnd || refsLeft != 2 {
+					if !walk.lenient || refsLeft < 2 {
+						return ErrInvalidDictForkNode
+					}
+				}
+			}
 			return ErrNoSuchKeyInDict
 		}
 
-		if lKey.BitsLeft() == 0 {
+		if remaining == sz {
 			*value = branchSlice
 			return nil
+		}
+
+		// A matched non-leaf is necessarily a fork. Validate it without an
+		// extra label-length branch on the successful lookup path.
+		refsLeft := branchSlice.refEnd - branchSlice.refStart
+		if branchSlice.bitStart != branchSlice.bitEnd || refsLeft != 2 {
+			if !walk.lenient || refsLeft < 2 {
+				return ErrInvalidDictForkNode
+			}
 		}
 
 		idx, err := lKey.LoadUInt(1)
 		if err != nil {
 			return err
 		}
-
 		next, nextTrace, err := branchSlice.refAndTraceAt(int(idx))
 		if err != nil {
 			return err

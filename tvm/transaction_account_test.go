@@ -1,6 +1,8 @@
 package tvm
 
 import (
+	"bytes"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -155,6 +157,96 @@ func TestTransactionFrozenStateInitDepthMatchesExistingAnycast(t *testing.T) {
 	}
 	if used || skip == nil || skip.Type != tlb.ComputeSkipReasonBadState {
 		t.Fatalf("mismatching depth result: used=%t skip=%+v, want bad_state", used, skip)
+	}
+}
+
+func TestTransactionFrozenStateInitDepthMismatchAllowedFromV16(t *testing.T) {
+	stateDepth := uint64(6)
+	stateInit := &tlb.StateInit{
+		Depth: &stateDepth,
+		Code:  cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+		Data:  cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell(),
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeExternalIn,
+		Msg: &tlb.ExternalMessage{
+			DstAddr:   addr,
+			StateInit: stateInit,
+		},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		version  uint32
+		wantUsed bool
+	}{
+		{name: "v15", version: 15},
+		{name: "v16", version: 16, wantUsed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next, used, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
+				addr:      addr,
+				status:    tlb.AccountStatusFrozen,
+				stateHash: stateCell.Hash(),
+			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tc.wantUsed {
+				if skip != nil || !used || next.status != tlb.AccountStatusActive {
+					t.Fatalf("frozen account was not activated: next=%+v used=%t skip=%+v", next, used, skip)
+				}
+				if next.stateDepth == nil || *next.stateDepth != stateDepth {
+					t.Fatalf("activated account state depth = %v, want %d", next.stateDepth, stateDepth)
+				}
+				return
+			}
+
+			if used || skip == nil || skip.Type != tlb.ComputeSkipReasonBadState {
+				t.Fatalf("mismatching depth result: used=%t skip=%+v, want bad_state", used, skip)
+			}
+		})
+	}
+}
+
+func TestTransactionNewlyFrozenAccountCannotReactivate(t *testing.T) {
+	stateInit := &tlb.StateInit{
+		Code: cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell(),
+		Data: cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell(),
+	}
+	stateCell, err := tlb.ToCell(stateInit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := address.NewAddress(0, 0, stateCell.Hash())
+	msg := &tlb.Message{
+		MsgType: tlb.MsgTypeInternal,
+		Msg: &tlb.InternalMessage{
+			DstAddr:   addr,
+			StateInit: stateInit,
+		},
+	}
+
+	for _, version := range []uint32{15, 16} {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			_, used, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
+				addr:      addr,
+				status:    tlb.AccountStatusActive,
+				stateHash: stateCell.Hash(),
+			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if used || skip == nil || skip.Type != tlb.ComputeSkipReasonBadState {
+				t.Fatalf("newly frozen account result: used=%t skip=%+v, want bad_state", used, skip)
+			}
+		})
 	}
 }
 
@@ -313,8 +405,9 @@ func TestTransactionAccountStatusAndStorageHelperEdges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != (transactionUsage{cells: 2, bits: 0}) {
-		t.Fatalf("shrunk storage usage = %+v, want old cells and zero bits", got)
+	wantWrappedBits := ^uint64(0) - 10
+	if got != (transactionUsage{cells: 2, bits: wantWrappedBits}) {
+		t.Fatalf("shrunk storage usage = %+v, want old cells and %d wrapped bits", got, wantWrappedBits)
 	}
 
 	if sorted := transactionSortedAccountStorageRoots([4]*cell.Cell{}, 0); sorted != ([4]transactionAccountStorageRootHash{}) {
@@ -326,6 +419,113 @@ func TestTransactionAccountStatusAndStorageHelperEdges(t *testing.T) {
 	}
 	if got := transactionStorageUsedUint64(big.NewInt(-1)); got != 0 {
 		t.Fatalf("negative storage used = %d, want 0", got)
+	}
+}
+
+func TestTransactionFinalAccountAnycastWorkchainBoundary(t *testing.T) {
+	now := uint32(tonopsTestTime.Unix())
+	cfg := transactionTestConfigWithGlobalVersion(t, 15)
+	storage := tlb.StorageInfo{
+		StorageUsed: tlb.StorageUsed{
+			CellsUsed: big.NewInt(1),
+			BitsUsed:  big.NewInt(1_000),
+		},
+		StorageExtra: tlb.StorageExtraNone{},
+		LastPaid:     now,
+	}
+	statuses := []struct {
+		name   string
+		status tlb.AccountStatus
+	}{
+		{name: "active", status: tlb.AccountStatusActive},
+		{name: "uninit", status: tlb.AccountStatusUninit},
+		{name: "frozen", status: tlb.AccountStatusFrozen},
+		{name: "account_none", status: tlb.AccountStatusNonExist},
+	}
+
+	for _, workchain := range []int32{-128, 126, 127} {
+		for _, hasAnycast := range []bool{false, true} {
+			for _, tc := range statuses {
+				name := fmt.Sprintf("wc%d/anycast_%t/%s", workchain, hasAnycast, tc.name)
+				t.Run(name, func(t *testing.T) {
+					addr := address.NewAddress(0, byte(workchain), bytes.Repeat([]byte{0x3f}, 32))
+					if hasAnycast {
+						addr = addr.WithAnycast(address.NewAnycast(1, []byte{0x80}))
+					}
+
+					var shard *tlb.ShardAccount
+					switch tc.status {
+					case tlb.AccountStatusActive:
+						shard = buildTransactionTestStoredShardAccount(t, addr, tc.status, 1_000_000_000, storage, &tlb.StateInit{
+							Code: cell.BeginCell().EndCell(),
+							Data: cell.BeginCell().EndCell(),
+						}, nil)
+					case tlb.AccountStatusFrozen:
+						shard = buildTransactionTestStoredShardAccount(t, addr, tc.status, 1_000_000_000, storage, nil, bytes.Repeat([]byte{0x55}, 32))
+					case tlb.AccountStatusUninit:
+						shard = buildTransactionTestStoredShardAccount(t, addr, tc.status, 1_000_000_000, storage, nil, nil)
+					case tlb.AccountStatusNonExist:
+						shard = buildTransactionTestNoneShardAccount(t)
+					}
+
+					prepared, err := PrepareAccount(shard, addr)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantReject := tc.status != tlb.AccountStatusNonExist && hasAnycast && workchain == 127
+					if prepared.runtime.nonCanonicalMyAddr != wantReject {
+						t.Fatalf("non-canonical address marker = %t, want %t", prepared.runtime.nonCanonicalMyAddr, wantReject)
+					}
+
+					_, err = buildTransactionAccountCell(
+						&prepared.runtime,
+						tlb.AccountStatusUninit,
+						big.NewInt(1_000_000_000),
+						nil,
+						1,
+						now,
+						nil,
+						nil,
+						nil,
+						nil,
+						nil,
+						false,
+						cfg,
+						nil,
+						nil,
+					)
+					if (err != nil) != wantReject {
+						t.Fatalf("non-empty final account error = %v, want rejection %t", err, wantReject)
+					}
+
+					if wantReject {
+						built, err := buildTransactionAccountCell(
+							&prepared.runtime,
+							tlb.AccountStatusNonExist,
+							big.NewInt(0),
+							nil,
+							1,
+							now,
+							nil,
+							nil,
+							nil,
+							nil,
+							nil,
+							false,
+							cfg,
+							nil,
+							nil,
+						)
+						if err != nil {
+							t.Fatalf("account_none final state should remain serializable: %v", err)
+						}
+						if built.state.IsValid {
+							t.Fatal("account_none final state should be non-existing")
+						}
+					}
+				})
+			}
+		}
 	}
 }
 
@@ -386,6 +586,49 @@ func TestTransactionAddressSuspensionAndStateInitEdges(t *testing.T) {
 	}
 	if transactionStateInitMatchesAddress(make([]byte, 32), address.NewAddressExt(0, 8, []byte{0xAB}), nil) {
 		t.Fatal("non-std address data should not match state hash")
+	}
+}
+
+func TestTransactionApplyPreV9OriginalBalanceFees(t *testing.T) {
+	extra := makeTransactionExtraCurrencies(t, 7, 9)
+	acc := &transactionRuntimeAccount{
+		balance:         big.NewInt(100),
+		extraCurrencies: extra,
+	}
+	prepared := &transactionPreparedPhases{
+		storagePhase: &tlb.StoragePhase{StorageFeesCollected: tlb.FromNanoTONU(30)},
+	}
+	if err := prepared.applyPreV9OriginalBalance(acc, big.NewInt(20)); err != nil {
+		t.Fatal(err)
+	}
+	original := prepared.preV9OriginalBalance()
+	if original == nil || original.grams.Int64() != 50 || original.extra[7].Int64() != 9 {
+		t.Fatalf("pre-v9 original balance = %+v, want grams=50 extra[7]=9", original)
+	}
+
+	acc.balance.SetInt64(40)
+	prepared = &transactionPreparedPhases{
+		storagePhase: &tlb.StoragePhase{StorageFeesCollected: tlb.FromNanoTONU(30)},
+	}
+	if err := prepared.applyPreV9OriginalBalance(acc, big.NewInt(20)); err != nil {
+		t.Fatal(err)
+	}
+	if prepared.originalBalanceValid || prepared.preV9OriginalBalance() != nil {
+		t.Fatalf("negative pre-v9 original balance remained valid: %+v", prepared.originalBalance)
+	}
+}
+
+func BenchmarkTransactionApplyPreV9OriginalBalance(b *testing.B) {
+	acc := &transactionRuntimeAccount{balance: big.NewInt(1_000_000_000)}
+	inFwdFee := big.NewInt(1_000)
+	storagePhase := &tlb.StoragePhase{StorageFeesCollected: tlb.FromNanoTONU(2_000)}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		prepared := transactionPreparedPhases{storagePhase: storagePhase}
+		if err := prepared.applyPreV9OriginalBalance(acc, inFwdFee); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 

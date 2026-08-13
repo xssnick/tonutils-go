@@ -31,11 +31,9 @@ func init() {
 		func() vm.OP { return BBITS() },
 		func() vm.OP { return BREFS() },
 		func() vm.OP { return BBITREFS() },
-		func() vm.OP { return BCHKBITSIMM(1, false) },
 		func() vm.OP { return BCHKBITS() },
 		func() vm.OP { return BCHKREFS() },
 		func() vm.OP { return BCHKBITREFS() },
-		func() vm.OP { return BCHKBITSIMM(1, true) },
 		func() vm.OP { return BCHKBITSQ() },
 		func() vm.OP { return BCHKREFSQ() },
 		func() vm.OP { return BCHKBITREFSQ() },
@@ -44,6 +42,7 @@ func init() {
 		func() vm.OP { return STSAME() },
 		func() vm.OP { return BTOS() },
 	)
+	vm.ArgList = append(vm.ArgList, bchkBitsImmOp, bchkBitsImmQuietOp)
 }
 
 func pushBuilderInt(state *vm.State, v int64) error {
@@ -620,37 +619,26 @@ func BBITREFS() *helpers.SimpleOP {
 	}
 }
 
-func BCHKBITSIMM(bits uint, quiet bool) *helpers.AdvancedOP {
-	name := "BCHKBITS"
-	prefix := helpers.BytesPrefix(0xCF, 0x38)
-	if quiet {
-		name = "BCHKBITSQ"
-		prefix = helpers.BytesPrefix(0xCF, 0x3C)
-	}
+// Quiet and non-quiet forms carry the same operand — the width minus one — but
+// sit under different prefixes, so each gets its own shared instance.
+var (
+	bchkBitsImmOp      = newBchkBitsImmOp("BCHKBITS", helpers.BytesPrefix(0xCF, 0x38), false)
+	bchkBitsImmQuietOp = newBchkBitsImmOp("BCHKBITSQ", helpers.BytesPrefix(0xCF, 0x3C), true)
+)
 
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("%s %d", name, bits)
+func newBchkBitsImmOp(name string, prefix helpers.BitPrefix, quiet bool) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(prefix),
+		ArgBits:  8,
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%s %d", name, uint(args+1))
 		},
-		BitPrefix:     prefix,
-		FixedSizeBits: 8,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(bits-1), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			bits = uint(v + 1)
-			return nil
-		},
-		Action: func(state *vm.State) error {
+		Action: func(state *vm.State, args uint64) error {
 			builder, err := state.Stack.PopBuilder()
 			if err != nil {
 				return err
 			}
-			ok := builder.CanExtendBy(bits, 0)
+			ok := builder.CanExtendBy(uint(args+1), 0)
 			if quiet {
 				return state.Stack.PushBool(ok)
 			}
@@ -659,7 +647,14 @@ func BCHKBITSIMM(bits uint, quiet bool) *helpers.AdvancedOP {
 			}
 			return nil
 		},
+	})
+}
+
+func BCHKBITSIMM(bits uint, quiet bool) vm.OP {
+	if quiet {
+		return vm.Bind(bchkBitsImmQuietOp, uint64(bits-1))
 	}
+	return vm.Bind(bchkBitsImmOp, uint64(bits-1))
 }
 
 func bchkOp(name string, prefix helpers.BitPrefix, needBits, needRefs, quiet bool) *helpers.SimpleOP {

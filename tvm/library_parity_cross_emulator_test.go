@@ -153,6 +153,60 @@ func TestTVMCrossEmulatorLibraryLookupGasParity(t *testing.T) {
 	})
 }
 
+func TestTVMCrossEmulatorMissingLibraryResultParity(t *testing.T) {
+	libraryLoadLimitSkipIfReferenceUnavailable(t)
+
+	missing := cell.BeginCell().MustStoreUInt(0xDEAD_BEEF, 32).EndCell()
+	missingRef := mustCrossLibraryCellForHash(t, missing.Hash())
+	code := prependRawMethodDrop(codeFromBuilders(t,
+		stackop.PUSHREF(missingRef).Serialize(),
+		cellsliceop.XLOADQ().Serialize(),
+	))
+	data := cell.BeginCell().EndCell()
+
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("build Go stack: %v", err)
+	}
+	goRes, err := runGoCrossCodeWithVersion(code, data, tuple.Tuple{}, goStack, vmcore.MaxSupportedGlobalVersion)
+	if err != nil {
+		t.Fatalf("run Go TVM: %v", err)
+	}
+
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("build reference stack: %v", err)
+	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, vmcore.MaxSupportedGlobalVersion))
+	refRes, err := runReferenceCrossCodeViaEmulator(code, data, refStack, *refCfg)
+	if err != nil {
+		t.Fatalf("run reference TVM: %v", err)
+	}
+
+	if goRes.exitCode != refRes.exitCode || goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("result mismatch: go exit/gas=%d/%d reference=%d/%d", goRes.exitCode, goRes.gasUsed, refRes.exitCode, refRes.gasUsed)
+	}
+	goStackCell, err := normalizeStackCell(goRes.stack)
+	if err != nil {
+		t.Fatalf("normalize Go stack: %v", err)
+	}
+	refStackCell, err := normalizeStackCell(refRes.stack)
+	if err != nil {
+		t.Fatalf("normalize reference stack: %v", err)
+	}
+	if goStackCell.HashKey() != refStackCell.HashKey() {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
+	}
+
+	want := missing.HashKey()
+	if goRes.missingLibrary == nil || *goRes.missingLibrary != want {
+		t.Fatalf("Go missing library = %v, want %x", goRes.missingLibrary, want)
+	}
+	if refRes.missingLibrary == nil || *refRes.missingLibrary != want {
+		t.Fatalf("reference missing library = %v, want %x", refRes.missingLibrary, want)
+	}
+}
+
 // FuzzTVMCrossEmulatorLibraryNestedChainGlobalVersion is the cross-emulator anchor
 // for the nested-library version gate in vm/cell_manager.go: across every
 // supported global version, resolving a library cell whose target is another

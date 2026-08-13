@@ -3,6 +3,8 @@
 package tvm
 
 import (
+	"encoding/hex"
+	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tlb"
@@ -12,11 +14,31 @@ import (
 )
 
 type crossRunResult struct {
-	exitCode int32
-	gasUsed  int64
-	stack    *cell.Cell
+	exitCode       int32
+	gasUsed        int64
+	stack          *cell.Cell
+	missingLibrary *cell.Hash
 }
 
+func parseCrossMissingLibrary(src *string) (*cell.Hash, error) {
+	if src == nil {
+		return nil, nil
+	}
+
+	if len(*src) != hex.EncodedLen(len(cell.Hash{})) {
+		return nil, fmt.Errorf("invalid reference missing_library length %d", len(*src))
+	}
+
+	var hash cell.Hash
+	if _, err := hex.Decode(hash[:], []byte(*src)); err != nil {
+		return nil, fmt.Errorf("failed to decode reference missing_library: %w", err)
+	}
+	return &hash, nil
+}
+
+// referenceRawRunGlobalVersion is the stable baseline used by Go-side raw-run
+// helpers. It is not the C++ runner's implicit SUPPORTED_VERSION; tests with
+// version-sensitive behavior must pin the reference through config or raw c7.
 const referenceRawRunGlobalVersion = 13
 
 func buildCrossStack(values ...any) (*vm.Stack, error) {
@@ -81,9 +103,10 @@ func runGoCrossCodeWithVersionGasAndLibs(code, data *cell.Cell, c7 tuple.Tuple, 
 	}
 
 	return &crossRunResult{
-		exitCode: int32(res.ExitCode),
-		gasUsed:  res.GasUsed,
-		stack:    stackCell,
+		exitCode:       int32(res.ExitCode),
+		gasUsed:        res.GasUsed,
+		stack:          stackCell,
+		missingLibrary: res.MissingLibrary,
 	}, nil
 }
 
@@ -146,17 +169,17 @@ func normalizeTLBStackValue(val any) any {
 		if v == nil {
 			return nil
 		}
-		return v
+		return v.WithoutTrace()
 	case *cell.Slice:
 		if v == nil {
 			return nil
 		}
-		return v
+		return v.WithoutTrace()
 	case *cell.Builder:
 		if v == nil {
 			return nil
 		}
-		return v
+		return v.WithoutTrace()
 	default:
 		return val
 	}
@@ -200,11 +223,11 @@ func canonicalizeCrossStackValue(val any) (any, error) {
 		if v == nil {
 			return nil, nil
 		}
-		c, err := v.ToCell()
+		c, err := v.WithoutTrace().ToCell()
 		if err != nil {
 			return nil, err
 		}
-		return c.BeginParse()
+		return c.BeginParseWithoutTrace()
 	case []any:
 		cp := make([]any, len(v))
 		for i := range v {

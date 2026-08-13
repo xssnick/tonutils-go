@@ -9,19 +9,19 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return ADDRSHIFTCODEMOD(1) },
-		func() vm.OP { return ADDRSHIFTRCODEMOD(1) },
-		func() vm.OP { return ADDRSHIFTCCODEMOD(1) },
+	vm.ArgList = append(vm.ArgList,
+		addrShiftModOp,
+		addrShiftRModOp,
+		addrShiftCModOp,
 	)
 }
 
-func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int, round func(*big.Int, *big.Int) (*big.Int, *big.Int)) *helpers.AdvancedOP {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		MinVersion:    4,
-		Action: func(state *vm.State) error {
+func newAddrShiftCodeModOp(name string, prefix helpers.BitPrefix, round func(*big.Int, *big.Int) (*big.Int, *big.Int)) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed:   helpers.SinglePrefixed(prefix),
+		ArgBits:    8,
+		MinVersion: 4,
+		Action: func(state *vm.State, args uint64) error {
 			if err := checkStackDepth(state, 2); err != nil {
 				return err
 			}
@@ -38,7 +38,7 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int, round 
 			}
 
 			dividend := new(big.Int).Add(x, w)
-			divider := new(big.Int).Lsh(bigIntOne, uint(imm()))
+			divider := new(big.Int).Lsh(bigIntOne, uint(bytePlusOneValue(args)))
 			q, r := round(dividend, divider)
 
 			if err = state.Stack.PushInt(q); err != nil {
@@ -46,29 +46,38 @@ func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int, round 
 			}
 			return state.Stack.PushInt(r)
 		},
-		BitPrefix:       prefix,
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d %s", imm(), name)
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%d %s", bytePlusOneValue(args), name)
 		},
-		DeserializeSuffix: deserializeImmediate,
-	}
+	})
 }
 
-func ADDRSHIFTCODEMOD(value int) *helpers.AdvancedOP {
-	return addrShiftCodeModOp("ADDRSHIFT#MOD", helpers.BytesPrefix(0xA9, 0x30), value, helpers.DivFloor)
+func addrShiftCodeModOp(name string, prefix helpers.BitPrefix, value int, round func(*big.Int, *big.Int) (*big.Int, *big.Int)) vm.OP {
+	return vm.Bind(newAddrShiftCodeModOp(name, prefix, round), bytePlusOneArg(value))
 }
 
-func ADDRSHIFTRCODEMOD(value int) *helpers.AdvancedOP {
-	return addrShiftCodeModOp("ADDRSHIFTR#MOD", helpers.BytesPrefix(0xA9, 0x31), value, func(x, y *big.Int) (*big.Int, *big.Int) {
+var (
+	addrShiftModOp = newAddrShiftCodeModOp("ADDRSHIFT#MOD", helpers.BytesPrefix(0xA9, 0x30), helpers.DivFloor)
+
+	addrShiftRModOp = newAddrShiftCodeModOp("ADDRSHIFTR#MOD", helpers.BytesPrefix(0xA9, 0x31), func(x, y *big.Int) (*big.Int, *big.Int) {
 		q := helpers.DivRound(x, y)
 		return q, new(big.Int).Sub(x, new(big.Int).Mul(y, q))
 	})
-}
 
-func ADDRSHIFTCCODEMOD(value int) *helpers.AdvancedOP {
-	return addrShiftCodeModOp("ADDRSHIFTC#MOD", helpers.BytesPrefix(0xA9, 0x32), value, func(x, y *big.Int) (*big.Int, *big.Int) {
+	addrShiftCModOp = newAddrShiftCodeModOp("ADDRSHIFTC#MOD", helpers.BytesPrefix(0xA9, 0x32), func(x, y *big.Int) (*big.Int, *big.Int) {
 		q := helpers.DivCeil(x, y)
 		return q, new(big.Int).Sub(x, new(big.Int).Mul(y, q))
 	})
+)
+
+func ADDRSHIFTCODEMOD(value int) vm.OP {
+	return vm.Bind(addrShiftModOp, bytePlusOneArg(value))
+}
+
+func ADDRSHIFTRCODEMOD(value int) vm.OP {
+	return vm.Bind(addrShiftRModOp, bytePlusOneArg(value))
+}
+
+func ADDRSHIFTCCODEMOD(value int) vm.OP {
+	return vm.Bind(addrShiftCModOp, bytePlusOneArg(value))
 }

@@ -154,8 +154,18 @@ type WorkchainDescrV1 struct {
 }
 
 type WorkchainDescrV2 struct {
-	_                    Magic `tlb:"#a7"`
-	WorkchainDescrFields `tlb:"."`
+	_                         Magic `tlb:"#a7"`
+	WorkchainDescrFields      `tlb:"."`
+	SplitMergeTimings         WorkchainSplitMergeTimings `tlb:"."`
+	PersistentStateSplitDepth uint8                      `tlb:"## 8"`
+}
+
+type WorkchainSplitMergeTimings struct {
+	_                     Magic  `tlb:"#0"`
+	SplitMergeDelay       uint32 `tlb:"## 32"`
+	SplitMergeInterval    uint32 `tlb:"## 32"`
+	MinSplitMergeInterval uint32 `tlb:"## 32"`
+	MaxSplitMergeDelay    uint32 `tlb:"## 32"`
 }
 
 type WorkchainDescrFields struct {

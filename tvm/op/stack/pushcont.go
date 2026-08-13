@@ -66,6 +66,14 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 	if prefix != 0x9 {
 		prefix2, err := code.LoadUInt(3)
 		if err != nil {
+			// consensus-critical: the zero-padded prefix picks the charged
+			// opcode-table entry — 0x47 is the 16-bit inline form, anything
+			// else matching here pads to the 8-bit ref form
+			if (prefix<<3)|helpers.PeekZeroPaddedOpcode(code, 3) == 0x47 {
+				op.typ = "BIG"
+			} else {
+				op.typ = "REF"
+			}
 			return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 		}
 
@@ -75,6 +83,8 @@ func (op *OpPUSHCONT) Deserialize(code *cell.Slice) error {
 		if prefix != 0x47 {
 			prefix3, err := code.LoadUInt(1)
 			if err != nil {
+				// zero padding selects the ref form entry
+				op.typ = "REF"
 				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
 			}
 

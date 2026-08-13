@@ -478,7 +478,7 @@ func execLoadDict(preload bool, quiet bool) func(*vm.State) error {
 				return cellUnderflowError(err)
 			}
 		}
-		if err = pushMaybeCell(state.Stack, dictRoot); err != nil {
+		if err = state.Stack.PushMaybeCell(dictRoot); err != nil {
 			return err
 		}
 		if !preload {
@@ -554,14 +554,14 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 			return err
 		}
 		if !ok {
-			return pushMaybeCell(state.Stack, nil)
+			return state.Stack.PushMaybeCell(nil)
 		}
 
 		dict := newReadOnlyTracedDict(root, keyBits, state)
 		var value cell.Slice
 		if err = key.loadValueInto(dict, &value); err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-				return pushMaybeCell(state.Stack, nil)
+				return state.Stack.PushMaybeCell(nil)
 			}
 			return mapDictError(err)
 		}
@@ -569,7 +569,7 @@ func execDictGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return mapDictError(err)
 		}
-		return pushMaybeCell(state.Stack, ref)
+		return state.Stack.PushMaybeCell(ref)
 	}
 }
 
@@ -623,7 +623,7 @@ func execDictSet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State) e
 				}
 			}
 
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			if mode == cell.DictSetModeSet {
@@ -665,7 +665,7 @@ func execDictSetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*vm.
 			if err != nil {
 				return mapDictError(err)
 			}
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			if mode == cell.DictSetModeSet {
@@ -717,7 +717,7 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 				if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					return mapDictError(err)
 				}
-				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+				if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 					return err
 				}
 				return pushSetGetResultRef(state, oldValue, mode)
@@ -736,7 +736,7 @@ func execDictSetGet(mode cell.DictSetMode) func(dictValueVariant) func(*vm.State
 			if err != nil {
 				return mapDictError(err)
 			}
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			return pushSetGetResultSlice(state, oldValue, mode)
@@ -772,7 +772,7 @@ func execDictSetGetBuilder(mode cell.DictSetMode) func(dictScalarVariant) func(*
 			if err != nil {
 				return mapDictError(err)
 			}
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			return pushSetGetResultSlice(state, oldValue, mode)
@@ -849,7 +849,7 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 		}
 		dict := newTracedDict(root, keyBits, state)
 		if !ok {
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			return state.Stack.PushBool(false)
@@ -858,7 +858,7 @@ func execDictDelete(variant dictScalarVariant) func(*vm.State) error {
 		if err != nil {
 			return mapDictError(err)
 		}
-		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+		if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(changed)
@@ -881,7 +881,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		}
 		dict := newTracedDict(root, keyBits, state)
 		if !ok {
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			return state.Stack.PushBool(false)
@@ -891,7 +891,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 			valueSlice, err := key.loadValueAndDelete(dict)
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-					if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+					if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 						return err
 					}
 					return state.Stack.PushBool(false)
@@ -902,7 +902,7 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 			if err != nil {
 				return mapDictError(err)
 			}
-			if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+			if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 				return err
 			}
 			if err = state.Stack.PushCell(value); err != nil {
@@ -914,14 +914,14 @@ func execDictDeleteGet(variant dictValueVariant) func(*vm.State) error {
 		value, err := key.loadValueAndDelete(dict)
 		if err != nil {
 			if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+				if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 					return err
 				}
 				return state.Stack.PushBool(false)
 			}
 			return mapDictError(err)
 		}
-		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+		if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 			return err
 		}
 		if err = state.Stack.PushOwnedSlice(value); err != nil {
@@ -984,10 +984,10 @@ func execDictSetGetOptRef(variant dictScalarVariant) func(*vm.State) error {
 			}
 		}
 
-		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+		if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 			return err
 		}
-		return pushMaybeCell(state.Stack, oldValue)
+		return state.Stack.PushMaybeCell(oldValue)
 	}
 }
 
@@ -1032,7 +1032,7 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 			if err != nil {
 				if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 					if remove {
-						if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+						if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 							return err
 						}
 					}
@@ -1041,7 +1041,7 @@ func execDictMinMax(fetchMax bool, remove bool) func(dictValueVariant) func(*vm.
 				return mapDictError(err)
 			}
 			if remove {
-				if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+				if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 					return err
 				}
 			}
@@ -1098,7 +1098,7 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 
 		keyBits := uint(n)
 		if keySlice.BitsLeft() > keyBits {
-			if err = pushMaybeCell(state.Stack, root); err != nil {
+			if err = state.Stack.PushMaybeCell(root); err != nil {
 				return err
 			}
 			return state.Stack.PushBool(false)
@@ -1111,7 +1111,7 @@ func execPfxDictSet(mode cell.DictSetMode) func(*vm.State) error {
 		if err != nil {
 			return mapDictError(err)
 		}
-		if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+		if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(changed)
@@ -1141,7 +1141,7 @@ func execPfxDictDelete(state *vm.State) error {
 	}
 	keyBits := uint(n)
 	if keySlice.BitsLeft() > keyBits {
-		if err = pushMaybeCell(state.Stack, root); err != nil {
+		if err = state.Stack.PushMaybeCell(root); err != nil {
 			return err
 		}
 		return state.Stack.PushBool(false)
@@ -1153,7 +1153,7 @@ func execPfxDictDelete(state *vm.State) error {
 	if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
 		return mapDictError(err)
 	}
-	if err = pushMaybeCell(state.Stack, dict.AsCell()); err != nil {
+	if err = state.Stack.PushMaybeCell(dict.AsCell()); err != nil {
 		return err
 	}
 	return state.Stack.PushBool(changed)
@@ -1386,7 +1386,7 @@ func execSubdict(removePrefix bool) func(dictScalarVariant) func(*vm.State) erro
 				return vmerr.Error(vmerr.CodeDict, "cannot construct subdictionary by key prefix")
 			}
 
-			return pushMaybeCell(state.Stack, dict.AsCell())
+			return state.Stack.PushMaybeCell(dict.AsCell())
 		}
 	}
 }
@@ -1631,13 +1631,6 @@ func newReadOnlyPrefixDictWithTrace(root *cell.Cell, bits uint, trace *cell.Trac
 	return root.AsPrefixDictWithTrace(bits, trace)
 }
 
-func pushMaybeCell(stack *vm.Stack, value *cell.Cell) error {
-	if value == nil {
-		return stack.PushAny(nil)
-	}
-	return stack.PushCell(value)
-}
-
 func dictNonEmpty(sl *cell.Slice) int {
 	if sl.BitsLeft() < 1 {
 		return -1
@@ -1678,6 +1671,11 @@ func mapDictError(err error) error {
 		return nil
 	}
 	if vmErr := new(vmerr.VMError); errors.As(err, vmErr) {
+		return err
+	}
+	// a virtualization abort is not a dictionary failure: it must reach the
+	// runner uncatchable, exactly as it left the cell load
+	if _, ok := vmerr.AsVirtualization(err); ok {
 		return err
 	}
 	switch {

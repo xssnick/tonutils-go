@@ -66,8 +66,8 @@ func collectMetadataHashesDepths(c *Cell, levelMask LevelMask) ([]Hash, []uint16
 		if !levelMask.IsSignificant(level) {
 			continue
 		}
-		hashes[idx] = c.HashKey(level)
-		depths[idx] = c.Depth(level)
+		hashes[idx] = c.HashKeyAt(level)
+		depths[idx] = c.getDepth(level)
 		idx++
 	}
 	return hashes, depths

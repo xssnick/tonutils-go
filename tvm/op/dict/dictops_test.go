@@ -110,13 +110,13 @@ func TestDictHelpers(t *testing.T) {
 	stack := vm.NewStack()
 	ref := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 
-	if err := pushMaybeCell(stack, nil); err != nil {
+	if err := stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push maybe nil cell: %v", err)
 	}
 	if value, err := stack.PopMaybeCell(); err != nil || value != nil {
 		t.Fatalf("expected nil maybe cell, got %v err=%v", value, err)
 	}
-	if err := pushMaybeCell(stack, ref); err != nil {
+	if err := stack.PushMaybeCell(ref); err != nil {
 		t.Fatalf("push maybe cell: %v", err)
 	}
 	if value, err := stack.PopMaybeCell(); err != nil || string(value.Hash()) != string(ref.Hash()) {
@@ -556,7 +556,7 @@ func TestDictMutationExecOps(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x12)); err != nil {
 		t.Fatalf("push key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push empty root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -584,7 +584,7 @@ func TestDictMutationExecOps(t *testing.T) {
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x56, 8)); err != nil {
 		t.Fatalf("push key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push empty root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -698,7 +698,7 @@ func TestAdvancedDictExecOps(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x33)); err != nil {
 		t.Fatalf("push builder key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push builder root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {

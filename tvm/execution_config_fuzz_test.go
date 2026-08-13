@@ -277,7 +277,7 @@ func FuzzExecutionConfigSignatureCheckAlwaysSucceedRunVMChild(f *testing.F) {
 		defaultRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
 		configuredRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, true)
 		leakCheck := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
-		if version < execop.RUNVM(0).MinGlobalVersion() {
+		if version < execop.RUNVM(0).(vm.VersionedOp).MinGlobalVersion() {
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, defaultRes)
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, configuredRes)
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, leakCheck)

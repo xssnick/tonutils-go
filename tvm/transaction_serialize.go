@@ -80,8 +80,12 @@ func buildTransactionStateInitCell(stateInit *tlb.StateInit) (*cell.Cell, error)
 	return builder.EndCell(), nil
 }
 
+// storeTransactionStateInit writes the account state the way the reference
+// rebuilds it: both Maybe fields are re-derived from their scalar values, so
+// an all-zero prefix length or tick/tock pair collapses to nothing$0 instead
+// of being carried over verbatim from the deploying message.
 func storeTransactionStateInit(builder *cell.Builder, stateInit *tlb.StateInit) error {
-	if stateInit.Depth == nil {
+	if stateInit.Depth == nil || *stateInit.Depth == 0 {
 		builder.MustStoreBoolBit(false)
 	} else {
 		builder.MustStoreBoolBit(true)
@@ -90,7 +94,7 @@ func storeTransactionStateInit(builder *cell.Builder, stateInit *tlb.StateInit) 
 		}
 	}
 
-	if stateInit.TickTock == nil {
+	if stateInit.TickTock == nil || (!stateInit.TickTock.Tick && !stateInit.TickTock.Tock) {
 		builder.MustStoreBoolBit(false)
 	} else {
 		builder.
@@ -144,7 +148,7 @@ func storeTransactionStorageInfo(builder *cell.Builder, storageUsed tlb.StorageU
 		return nil
 	}
 	builder.MustStoreBoolBit(true)
-	return builder.StoreBigCoins(duePayment.Nano())
+	return builder.StoreBigCoins(duePayment.NanoRef())
 }
 
 func storeTransactionStorageUsed(builder *cell.Builder, used tlb.StorageUsed) error {

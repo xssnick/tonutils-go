@@ -24,7 +24,6 @@ func init() {
 		func() vm.OP { return SETGASLIMIT() },
 		func() vm.OP { return GASCONSUMED() },
 		func() vm.OP { return COMMIT() },
-		func() vm.OP { return GETPARAM(0) },
 		func() vm.OP { return BLOCKLT() },
 		func() vm.OP { return LTIME() },
 		func() vm.OP { return RANDSEED() },
@@ -39,10 +38,7 @@ func init() {
 		func() vm.OP { return CONFIGOPTPARAM() },
 		func() vm.OP { return GLOBALID() },
 		func() vm.OP { return GETGLOBVAR() },
-		func() vm.OP { return GETGLOB(1) },
 		func() vm.OP { return SETGLOBVAR() },
-		func() vm.OP { return SETGLOB(1) },
-		func() vm.OP { return GETPARAMLONG(0) },
 		func() vm.OP { return CHKSIGNU() },
 		func() vm.OP { return CHKSIGNS() },
 		func() vm.OP { return ECRECOVER() },
@@ -50,6 +46,8 @@ func init() {
 		func() vm.OP { return P256_CHKSIGNU() },
 		func() vm.OP { return P256_CHKSIGNS() },
 	)
+
+	vm.ArgList = append(vm.ArgList, getParamOp, getParamLongOp, getGlobOp, setGlobOp)
 }
 
 func pushSmallInt(state *vm.State, v int64) error {
@@ -146,32 +144,35 @@ func COMMIT() *helpers.SimpleOP {
 	}
 }
 
-func GETPARAM(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("GETPARAM %d", idx)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xF82, 12),
-		FixedSizeBits: 4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(4)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-			}
-			idx = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			v, err := state.GetParam(int(idx))
-			if err != nil {
-				return err
-			}
-			return pushHostValue(state, v)
-		},
-	}
+var getParamPrefix = helpers.UIntPrefix(0xF82, 12)
+
+var getParamOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(getParamPrefix),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		v, err := state.GetParam(int(uint8(args)))
+		if err != nil {
+			return err
+		}
+		return pushHostValue(state, v)
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(getParamPrefix.Bits); err != nil {
+			return 0, err
+		}
+		v, err := code.LoadUInt(4)
+		if err != nil {
+			return 0, vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
+		}
+		return v, nil
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("GETPARAM %d", uint8(args))
+	},
+})
+
+func GETPARAM(idx uint8) vm.OP {
+	return vm.Bind(getParamOp, uint64(idx))
 }
 
 var getParamLongPrefixes = func() []helpers.BitPrefix {
@@ -187,37 +188,50 @@ var getParamLongPrefixes = func() []helpers.BitPrefix {
 	return prefixes
 }()
 
-func GETPARAMLONG(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("GETPARAMLONG %d", idx)
-		},
-		BitPrefix:     helpers.BytesPrefix(0xF8, 0x81),
-		Prefixes:      getParamLongPrefixes,
-		FixedSizeBits: 8,
-		MinVersion:    11,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			if v == 255 {
-				return vm.ErrCorruptedOpcode
-			}
-			idx = uint8(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			v, err := state.GetParam(int(idx))
-			if err != nil {
-				return err
-			}
-			return pushHostValue(state, v)
-		},
-	}
+// getParamLongHeaderBits is the part of the instruction shared by every
+// registered prefix: the operand byte completes the 24-bit prefix, so decode,
+// serialization and the charged length all work from the 16-bit header.
+const getParamLongHeaderBits = 16
+
+var getParamLongOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.NewPrefixed(getParamLongPrefixes...),
+	ArgBits:    8,
+	MinVersion: 11,
+	Action: func(state *vm.State, args uint64) error {
+		v, err := state.GetParam(int(uint8(args)))
+		if err != nil {
+			return err
+		}
+		return pushHostValue(state, v)
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(getParamLongHeaderBits); err != nil {
+			return 0, err
+		}
+		v, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, err
+		}
+		if v == 255 {
+			return 0, vm.ErrCorruptedOpcode
+		}
+		return v, nil
+	},
+	Bits: func(uint64) int64 {
+		return getParamLongHeaderBits + 8
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().
+			MustStoreUInt(0xF881, getParamLongHeaderBits).
+			MustStoreUInt(uint64(uint8(args)), 8)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("GETPARAMLONG %d", uint8(args))
+	},
+})
+
+func GETPARAMLONG(idx uint8) vm.OP {
+	return vm.Bind(getParamLongOp, uint64(idx))
 }
 
 func BLOCKLT() *helpers.SimpleOP       { return paramAlias("BLOCKLT", 0xF824, 4) }
@@ -290,6 +304,14 @@ func loadConfigValueFromRoot(state *vm.State, root *cell.Cell, idx *big.Int) (*c
 		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
 			return nil, nil
 		}
+		// an unparsable node label is a cell underflow; only fork-shape
+		// violations are dictionary errors
+		if errors.Is(err, cell.ErrInvalidDictForkNode) {
+			return nil, vmerr.Error(vmerr.CodeDict, err.Error())
+		}
+		if cell.IsNotEnoughDataError(err) || errors.Is(err, cell.ErrLabelExceedsKeyBits) || errors.Is(err, cell.ErrNoMoreRefs) {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, err.Error())
+		}
 		return nil, vmerr.Error(vmerr.CodeDict, err.Error())
 	}
 	if val.BitsLeft() != 0 || val.RefsNum() != 1 {
@@ -337,7 +359,7 @@ func CONFIGOPTPARAM() *helpers.SimpleOP {
 			if err != nil {
 				return err
 			}
-			return pushHostValue(state, value)
+			return state.Stack.PushMaybeCell(value)
 		},
 		Name:      "CONFIGOPTPARAM",
 		BitPrefix: helpers.BytesPrefix(0xF8, 0x33),
@@ -760,53 +782,31 @@ var (
 	setGlobPrefix = helpers.UIntPrefix(0x7C3, 11)
 )
 
-// OpGETGLOB is a struct-based opcode: one allocation per executed instruction
-// instead of an AdvancedOP carrying per-instance closures.
-type OpGETGLOB struct {
-	idx uint8
-}
+// The operand is masked everywhere it is used, so a constructor called with an
+// index wider than the 5 encoded bits behaves like the instruction it would
+// assemble to.
+var getGlobOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(getGlobPrefix),
+	ArgBits:  5,
+	Action: func(state *vm.State, args uint64) error {
+		v, err := state.GetGlobal(int(args & 31))
+		if err != nil {
+			return err
+		}
+		return pushHostValue(state, v)
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().
+			MustStoreSlice(getGlobPrefix.Data, getGlobPrefix.Bits).
+			MustStoreUInt(args&31, 5)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("GETGLOB %d", args&31)
+	},
+})
 
-func GETGLOB(idx uint8) *OpGETGLOB {
-	return &OpGETGLOB{idx: idx}
-}
-
-func (op *OpGETGLOB) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(getGlobPrefix)
-}
-
-func (op *OpGETGLOB) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(getGlobPrefix.Bits); err != nil {
-		return err
-	}
-
-	v, err := code.LoadUInt(5)
-	if err != nil {
-		return err
-	}
-	op.idx = uint8(v)
-	return nil
-}
-
-func (op *OpGETGLOB) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(getGlobPrefix.Data, getGlobPrefix.Bits).
-		MustStoreUInt(uint64(op.idx&31), 5)
-}
-
-func (op *OpGETGLOB) SerializeText() string {
-	return fmt.Sprintf("GETGLOB %d", op.idx&31)
-}
-
-func (op *OpGETGLOB) InstructionBits() int64 {
-	return int64(getGlobPrefix.Bits) + 5
-}
-
-func (op *OpGETGLOB) Interpret(state *vm.State) error {
-	v, err := state.GetGlobal(int(op.idx & 31))
-	if err != nil {
-		return err
-	}
-	return pushHostValue(state, v)
+func GETGLOB(idx uint8) vm.OP {
+	return vm.Bind(getGlobOp, uint64(idx))
 }
 
 func SETGLOBVAR() *helpers.SimpleOP {
@@ -830,51 +830,26 @@ func SETGLOBVAR() *helpers.SimpleOP {
 	}
 }
 
-// OpSETGLOB is a struct-based opcode: one allocation per executed instruction
-// instead of an AdvancedOP carrying per-instance closures.
-type OpSETGLOB struct {
-	idx uint8
-}
+var setGlobOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(setGlobPrefix),
+	ArgBits:  5,
+	Action: func(state *vm.State, args uint64) error {
+		val, err := state.Stack.PopAny()
+		if err != nil {
+			return err
+		}
+		return state.SetGlobal(int(args&31), val)
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().
+			MustStoreSlice(setGlobPrefix.Data, setGlobPrefix.Bits).
+			MustStoreUInt(args&31, 5)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("SETGLOB %d", args&31)
+	},
+})
 
-func SETGLOB(idx uint8) *OpSETGLOB {
-	return &OpSETGLOB{idx: idx}
-}
-
-func (op *OpSETGLOB) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(setGlobPrefix)
-}
-
-func (op *OpSETGLOB) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(setGlobPrefix.Bits); err != nil {
-		return err
-	}
-
-	v, err := code.LoadUInt(5)
-	if err != nil {
-		return err
-	}
-	op.idx = uint8(v)
-	return nil
-}
-
-func (op *OpSETGLOB) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(setGlobPrefix.Data, setGlobPrefix.Bits).
-		MustStoreUInt(uint64(op.idx&31), 5)
-}
-
-func (op *OpSETGLOB) SerializeText() string {
-	return fmt.Sprintf("SETGLOB %d", op.idx&31)
-}
-
-func (op *OpSETGLOB) InstructionBits() int64 {
-	return int64(setGlobPrefix.Bits) + 5
-}
-
-func (op *OpSETGLOB) Interpret(state *vm.State) error {
-	val, err := state.Stack.PopAny()
-	if err != nil {
-		return err
-	}
-	return state.SetGlobal(int(op.idx&31), val)
+func SETGLOB(idx uint8) vm.OP {
+	return vm.Bind(setGlobOp, uint64(idx))
 }

@@ -26,8 +26,8 @@ func TestRUNVMSerializeDeserialize(t *testing.T) {
 	if op.SerializeText() != "RUNVM 37" {
 		t.Fatalf("unexpected name: %q", op.SerializeText())
 	}
-	if op.InstructionBits() != 24 {
-		t.Fatalf("unexpected instruction bits: %d", op.InstructionBits())
+	if bits := instructionBits(t, op); bits != 24 {
+		t.Fatalf("unexpected instruction bits: %d", bits)
 	}
 
 	serialized := op.Serialize().EndCell()
@@ -43,7 +43,7 @@ func TestRUNVMSerializeDeserialize(t *testing.T) {
 	}
 
 	truncated := RUNVM(0)
-	if err := truncated.DeserializeMatched(cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+	if err := truncated.Deserialize(truncated.GetPrefixes()[0]); err == nil {
 		t.Fatal("expected short RUNVM suffix error")
 	}
 }
@@ -647,20 +647,18 @@ func TestRefCodeOpLifecycleAndHelpers(t *testing.T) {
 }
 
 func TestAdditionalControlRegisterHelpers(t *testing.T) {
-	idx := 5
-	serialize := serializeControlRegisterIndex(&idx)
-	if got := serialize().EndCell().MustBeginParse().MustLoadUInt(4); got != 5 {
-		t.Fatalf("unexpected serialized control register index: %d", got)
+	if got := PUSHCTR(5).Serialize().EndCell().MustBeginParse().MustLoadUInt(16); got != 0xED45 {
+		t.Fatalf("unexpected serialized control register index: %#x", got)
 	}
 
-	var decoded int
-	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(5, 4).EndCell().MustBeginParse()); err != nil {
+	decoded, err := pushCtrOp.DecodeArgs(nil, cell.BeginCell().MustStoreUInt(0xED45, 16).EndCell().MustBeginParse())
+	if err != nil {
 		t.Fatalf("deserialize control register index failed: %v", err)
 	}
 	if decoded != 5 {
 		t.Fatalf("unexpected decoded control register index: %d", decoded)
 	}
-	if err := deserializeControlRegisterIndex(&decoded)(cell.BeginCell().MustStoreUInt(6, 4).EndCell().MustBeginParse()); !errors.Is(err, vm.ErrCorruptedOpcode) {
+	if _, err = pushCtrOp.DecodeArgs(nil, cell.BeginCell().MustStoreUInt(0xED46, 16).EndCell().MustBeginParse()); !errors.Is(err, vm.ErrCorruptedOpcode) {
 		t.Fatalf("expected corrupted opcode, got %v", err)
 	}
 

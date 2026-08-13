@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -37,6 +38,31 @@ func BenchmarkStackSplitTopSmall(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkStackSink = next
+	}
+}
+
+func BenchmarkContinuationBuildCallStackPassAll(b *testing.B) {
+	for _, depth := range []int{1, 64, 1024} {
+		b.Run(fmt.Sprintf("depth-%d", depth), func(b *testing.B) {
+			base := make([]any, depth)
+			for i := range base {
+				base[i] = stackIntZero
+			}
+			st := &Stack{}
+			state := &State{}
+			plan := continuationStackPlan{passArgs: -1, cp: -1}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				st.elems = base
+				state.Stack = st
+				next, err := plan.buildCallStack(state)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkStackSink = next
+			}
+		})
 	}
 }
 

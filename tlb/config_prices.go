@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math/big"
 
+	"github.com/xssnick/tonutils-go/internal/fee"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -17,21 +18,41 @@ type ConfigStoragePrices struct {
 }
 
 func (c ConfigStoragePrices) ComputeStorageFee(isMasterchain bool, delta, bits, cells uint64) *big.Int {
-	var bitPrice uint64
-	var cellPrice uint64
+	bitPrice, cellPrice := c.storagePricesFor(isMasterchain)
 
-	if isMasterchain {
-		bitPrice = c.MCBitPrice
-		cellPrice = c.MCCellPrice
-	} else {
-		bitPrice = c.BitPrice
-		cellPrice = c.CellPrice
+	if total, fits := configStorageFeeRaw(cells, cellPrice, bits, bitPrice, delta); fits {
+		return total.CeilShr(16).Big()
 	}
 
+	// (cells*cellPrice + bits*bitPrice)*delta spans up to 193 bits, so a price
+	// table with fields near 2^64 can leave the fixed-width range. No real
+	// config comes close, but the operands are chain data rather than ours:
+	// widen instead of truncating.
+	return configPricesCeilShiftRight(configStorageFeeRawBig(cells, cellPrice, bits, bitPrice, delta), 16)
+}
+
+func (c ConfigStoragePrices) storagePricesFor(isMasterchain bool) (bitPrice, cellPrice uint64) {
+	if isMasterchain {
+		return c.MCBitPrice, c.MCCellPrice
+	}
+	return c.BitPrice, c.CellPrice
+}
+
+// configStorageFeeRaw returns (cells*cellPrice + bits*bitPrice) * delta and
+// reports whether it fits in 128 bits.
+func configStorageFeeRaw(cells, cellPrice, bits, bitPrice, delta uint64) (fee.U128, bool) {
+	total, fits := fee.Mul64(cells, cellPrice).Add(fee.Mul64(bits, bitPrice))
+	if !fits {
+		return fee.U128{}, false
+	}
+
+	return total.Mul64(delta)
+}
+
+func configStorageFeeRawBig(cells, cellPrice, bits, bitPrice, delta uint64) *big.Int {
 	total := new(big.Int).Mul(new(big.Int).SetUint64(cells), new(big.Int).SetUint64(cellPrice))
 	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(bits), new(big.Int).SetUint64(bitPrice)))
-	total.Mul(total, new(big.Int).SetUint64(delta))
-	return configPricesCeilShiftRight(total, 16)
+	return total.Mul(total, new(big.Int).SetUint64(delta))
 }
 
 type ConfigMsgForwardPrices struct {
@@ -45,6 +66,12 @@ type ConfigMsgForwardPrices struct {
 }
 
 func (c ConfigMsgForwardPrices) ComputeForwardFee(cells, bits uint64) *big.Int {
+	if total, fits := fee.Mul64(c.BitPrice, bits).Add(fee.Mul64(c.CellPrice, cells)); fits {
+		return total.CeilShr(16).Add64(c.LumpPrice).Big()
+	}
+
+	// Two full-width products need 129 bits in the worst case. Only a price
+	// table with fields near 2^64 gets there; keep arbitrary precision for it.
 	total := new(big.Int).Mul(new(big.Int).SetUint64(c.BitPrice), new(big.Int).SetUint64(bits))
 	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(c.CellPrice), new(big.Int).SetUint64(cells)))
 	total = configPricesCeilShiftRight(total, 16)
@@ -95,6 +122,11 @@ func (c *ConfigGasLimitsPrices) LoadFromCell(loader *cell.Slice) error {
 	mainTag, err := work.LoadUInt(8)
 	if err != nil {
 		return err
+	}
+	// The flat-pricing prefix is only defined around the extended record:
+	// a flat prefix followed by the plain record is not a valid config.
+	if out.HasFlatPricing && mainTag != 0xDE {
+		return errors.New("invalid gas prices tag")
 	}
 
 	switch mainTag {
@@ -187,10 +219,8 @@ func (c ConfigGasLimitsPrices) ComputeGasPrice(gasUsed uint64) *big.Int {
 		return new(big.Int).SetUint64(c.FlatGasPrice)
 	}
 
-	diff := gasUsed - c.FlatGasLimit
-	total := new(big.Int).Mul(new(big.Int).SetUint64(c.GasPrice), new(big.Int).SetUint64(diff))
-	total = configPricesCeilShiftRight(total, 16)
-	return total.Add(total, new(big.Int).SetUint64(c.FlatGasPrice))
+	// A single product of two uint64 always fits, so this needs no wide path.
+	return fee.Mul64(c.GasPrice, gasUsed-c.FlatGasLimit).CeilShr(16).Add64(c.FlatGasPrice).Big()
 }
 
 func configPricesCeilShiftRight(x *big.Int, bits uint) *big.Int {

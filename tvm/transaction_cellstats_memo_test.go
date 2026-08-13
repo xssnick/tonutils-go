@@ -60,7 +60,7 @@ func assertCellStatsMatchReference(t *testing.T, name string, roots ...*cell.Cel
 	t.Helper()
 
 	want := transactionCellStatsReference(t, roots...)
-	got, err := transactionCellStatsForRoots(roots...)
+	got, err := transactionCellStatsForRoots(false, roots...)
 	if err != nil {
 		t.Fatalf("%s: transactionCellStatsForRoots failed: %v", name, err)
 	}

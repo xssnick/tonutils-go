@@ -22,7 +22,7 @@ func UNTIL() *helpers.SimpleOP {
 				return err
 			}
 
-			if cd := body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			if cd := body.GetControlData(); cd == nil || vm.IsNullContinuation(cd.Save.C[0]) {
 				state.Reg.C[0] = &vm.UntilContinuation{
 					Body:  body,
 					After: after,

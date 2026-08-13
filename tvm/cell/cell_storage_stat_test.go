@@ -3,10 +3,7 @@ package cell
 import "testing"
 
 func TestCellStorageStatCountsCellsProofsAndSharedRefs(t *testing.T) {
-	tree := NewCellUsageTree()
-	externalNode := tree.CreateChild(tree.RootNode(), 0)
-
-	external := BeginCell().MustStoreUInt(0xa, 4).EndCell().WithTrace(tree.Trace(externalNode))
+	external := BeginCell().MustStoreUInt(0xa, 4).EndCell()
 	shared := BeginCell().MustStoreUInt(0xcc, 8).EndCell()
 	root := BeginCell().
 		MustStoreUInt(0xdd, 8).
@@ -15,11 +12,16 @@ func TestCellStorageStatCountsCellsProofsAndSharedRefs(t *testing.T) {
 		MustStoreRef(shared).
 		EndCell()
 
+	// A recorded cell is the boundary of the proof: everything below it is
+	// already accounted for by whoever read it.
+	read := NewReadSet(external)
+	read.Record(external)
+
 	stat := NewCellStorageStat()
 	if err := stat.AddCell(root); err != nil {
 		t.Fatal(err)
 	}
-	if err := stat.AddProof(root, tree); err != nil {
+	if err := stat.AddProof(root, read); err != nil {
 		t.Fatal(err)
 	}
 
@@ -42,7 +44,7 @@ func TestCellStorageStatIgnoresNilRoots(t *testing.T) {
 	if err := stat.AddCell(nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := stat.AddProof(nil, NewCellUsageTree()); err != nil {
+	if err := stat.AddProof(nil, NewReadSet(nil)); err != nil {
 		t.Fatal(err)
 	}
 	if got := stat.TotalStat(); got != (StorageStat{}) {

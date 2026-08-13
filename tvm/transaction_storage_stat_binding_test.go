@@ -9,14 +9,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
-// storageStatBindingAccount builds a masterchain account whose state carries a
-// few refs. Masterchain never stores storage_dict_hash (store_storage_dict_hash
-// = version >= 11 && !is_masterchain), so this is exactly the case where the
-// carried stat can only be trusted through the executor's own binding.
-func storageStatBindingAccount(t *testing.T, payload uint64) (*PreparedAccount, *cell.Cell) {
-	return storageStatBindingAccountSized(t, payload, 3)
-}
-
 // storageStatBindingData builds a contract data cell holding a dictionary with
 // entries keys, one of which carries marker. This is the shape a real contract
 // state has: changing one value rewrites only the path down to that leaf, and
@@ -134,7 +126,7 @@ func storageStatBindingInfo(t *testing.T, acc *PreparedAccount, newStorage *cell
 	t.Helper()
 
 	runtime := acc.runtime
-	usage, _, _, next, bound, err := transactionAccountStorageInfo(&runtime, newStorage, emptyPreparedTestConfig(), carried)
+	usage, _, _, next, bound, err := transactionAccountStorageInfo(&runtime, newStorage, emptyPreparedTestConfig(), carried, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

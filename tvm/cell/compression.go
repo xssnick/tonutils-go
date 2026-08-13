@@ -373,20 +373,40 @@ func cellBits(c *Cell) bitSpan {
 }
 
 func createPrunedBranchFromCell(source *Cell, newLevel int) (*Cell, error) {
-	return CreatePrunedBranch(source, newLevel, _DataCellMaxLevel)
+	return createPrunedBranchInto(source, newLevel, _DataCellMaxLevel, nil)
+}
+
+// createPrunedBranchFromCellInto is createPrunedBranchFromCell for a boundary
+// that belongs to a proof body being assembled, so it comes from that proof's
+// arena instead of its own allocation.
+func createPrunedBranchFromCellInto(source *Cell, newLevel int, arena *proofCellArena) (*Cell, error) {
+	return createPrunedBranchInto(source, newLevel, _DataCellMaxLevel, arena)
 }
 
 // CreatePrunedBranch returns a pruned-branch boundary for source as seen at
 // virtualLevel and bounded by newLevel. Loaded leaf cells are returned as-is.
 func CreatePrunedBranch(source *Cell, newLevel, virtualLevel int) (*Cell, error) {
+	return createPrunedBranchInto(source, newLevel, virtualLevel, nil)
+}
+
+func createPrunedBranchInto(source *Cell, newLevel, virtualLevel int, arena *proofCellArena) (*Cell, error) {
 	virtualLevel = max(0, min(virtualLevel, _DataCellMaxLevel))
 	if !source.IsLazy() && !source.IsVirtualized() && source.Level() <= virtualLevel && source.refsCount() == 0 {
 		return materializePrunedBranchBoundary(source)
 	}
-	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtualLevel)
+	return buildPrunedBranchFromCellAtDepth(source, newLevel, virtualLevel, arena)
 }
 
-func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*Cell, error) {
+// prunedBranchCell packs a boundary cell with the payload it is built from.
+// A boundary keeps its hashes in that payload rather than in cell metadata, so
+// the two are allocated and freed together and nothing else ever points at one
+// without the other.
+type prunedBranchCell struct {
+	c       Cell
+	payload [2 + hashSize + depthSize]byte
+}
+
+func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int, arena *proofCellArena) (*Cell, error) {
 	virtLevel = max(0, min(virtLevel, _DataCellMaxLevel))
 	levelMask := source.getLevelMask().Apply(virtLevel)
 	level := levelMask.GetLevel()
@@ -395,7 +415,21 @@ func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*C
 	}
 
 	hashesCount := levelMask.getHashesCount()
-	data := make([]byte, 2+hashesCount*(hashSize+depthSize))
+	// A boundary cut from a level-0 subtree carries one hash, which is every
+	// boundary a merkle update or a usage proof emits; giving that case its
+	// payload from the same object as the cell makes it one allocation instead
+	// of two. Wider masks are rare enough to keep the plain slice.
+	var (
+		pruned *Cell
+		data   []byte
+	)
+	if hashesCount == 1 {
+		fused := arena.prunedBranch()
+		pruned, data = &fused.c, fused.payload[:]
+	} else {
+		pruned = new(Cell)
+		data = make([]byte, 2+hashesCount*(hashSize+depthSize))
+	}
 	data[0] = byte(PrunedCellType)
 	data[1] = levelMask.Mask | oneLevelMask(newLevel)
 	hashOff := 2
@@ -410,10 +444,8 @@ func buildPrunedBranchFromCellAtDepth(source *Cell, newLevel, virtLevel int) (*C
 		hashIndex++
 	}
 
-	pruned := &Cell{
-		bitsSz: uint16(len(data) * 8),
-		data:   data,
-	}
+	pruned.bitsSz = uint16(len(data) * 8)
+	pruned.data = data
 	pruned.setSpecial(true)
 	pruned.setLevelMask(LevelMask{Mask: data[1]})
 	if err := validateBoundaryCell(pruned); err != nil {

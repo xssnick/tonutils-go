@@ -5,14 +5,11 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return NEQINT(0) })
+	vm.ArgList = append(vm.ArgList, neqIntOp)
 }
 
-func NEQINT(value int8) *OpIntCmp {
-	return &OpIntCmp{
-		name:   "NEQINT",
-		prefix: 0xC3,
-		mask:   intCmpMaskLess | intCmpMaskGreater,
-		value:  value,
-	}
+var neqIntOp = intCmpOp("NEQINT", 0xC3, intCmpMaskLess|intCmpMaskGreater)
+
+func NEQINT(value int8) vm.OP {
+	return vm.Bind(neqIntOp, uint64(uint8(value)))
 }

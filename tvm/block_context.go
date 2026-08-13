@@ -16,9 +16,13 @@ import (
 type BlockOptions struct {
 	// Now is the block unix time. When zero, the current wall clock is used.
 	Now uint32
-	// BlockLT is the block logical time (c7[4]). When zero, it is derived per
-	// transaction from the transaction start LT.
+	// BlockLT is the legacy signed block logical time (c7[4]). When zero, it is
+	// derived per transaction; negative values remain signed for compatibility.
 	BlockLT int64
+	// BlockLTUint64 is the full-width block logical time. When non-zero, it
+	// overrides BlockLT; zero leaves BlockLT (including a negative value) in
+	// effect. Use it for protocol values above MaxInt64.
+	BlockLTUint64 uint64
 	// RandSeed is the block-level random seed. Per-account seeds are derived
 	// from it unless TransactionOptions.RandSeed overrides them.
 	RandSeed []byte
@@ -41,6 +45,7 @@ type BlockContext struct {
 	cfg        *PreparedBlockchainConfig
 	now        uint32
 	blockLT    int64
+	blockLTU64 uint64
 	randSeed   []byte
 	prevBlocks tuple.Tuple
 	libraries  []*cell.Cell
@@ -73,6 +78,7 @@ func (c *PreparedBlockchainConfig) NewBlockContext(opts BlockOptions) (*BlockCon
 		cfg:        c,
 		now:        now,
 		blockLT:    opts.BlockLT,
+		blockLTU64: opts.BlockLTUint64,
 		randSeed:   randSeed,
 		prevBlocks: opts.PrevBlocks,
 		libraries:  append([]*cell.Cell(nil), opts.Libraries...),
@@ -86,15 +92,28 @@ func (b *BlockContext) Config() *PreparedBlockchainConfig {
 	return b.cfg
 }
 
+// BindAccountStorageStat validates an account storage-stat proof against the
+// hash committed by account and binds it to subsequent transaction execution.
+// It mirrors block::Account::init_account_storage_stat in the reference node.
+func (b *BlockContext) BindAccountStorageStat(account *PreparedAccount, root *cell.Cell) error {
+	return transactionBindAccountStorageStat(&account.runtime, root, b.cfg)
+}
+
 // Now returns the resolved block unix time.
 func (b *BlockContext) Now() uint32 {
 	return b.now
 }
 
-// BlockLT returns the configured block logical time, zero when derived per
-// transaction.
+// BlockLT returns the legacy signed block logical time option. Use
+// BlockLTUint64 when the full-width option may have been supplied.
 func (b *BlockContext) BlockLT() int64 {
 	return b.blockLT
+}
+
+// BlockLTUint64 returns the configured full-width override, or zero when none
+// was supplied.
+func (b *BlockContext) BlockLTUint64() uint64 {
+	return b.blockLTU64
 }
 
 // UnpackedConfig returns the prebuilt c7 unpacked config tuple and whether it
@@ -118,12 +137,9 @@ func buildUnpackedConfig(cfg *PreparedBlockchainConfig, now uint32, globalIDOver
 		values[1] = cell.BeginCell().MustStoreUInt(uint64(uint32(globalIDOverride)), 32).ToSlice()
 	}
 
-	for _, value := range values {
-		if value != nil {
-			return tuple.NewTupleOwned(values)
-		}
-	}
-	return nil
+	// The unpacked config is always a 7-element tuple, even when every slot
+	// is empty.
+	return tuple.NewTupleOwned(values)
 }
 
 func unpackedConfigParamSlice(param *cell.Cell) any {

@@ -248,6 +248,17 @@ func TestCellManagerVirtualizationSemantics(t *testing.T) {
 	}
 }
 
+func TestLoadLibraryByHashPropagatesVirtualization(t *testing.T) {
+	st := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(10_000), nil, tuple.Tuple{}, NewStack())
+	st.InitForExecution()
+	st.SetLibraries(mustPrunedCell(t).Virtualize(0))
+
+	_, err := st.LoadLibraryByHash(make([]byte, 32))
+	if _, ok := vmerr.AsVirtualization(err); !ok {
+		t.Fatalf("virtualized library dictionary lookup error = %v, want virtualization abort", err)
+	}
+}
+
 func TestStackWrappersAndHelpers(t *testing.T) {
 	s := NewStack()
 	if err := s.PushBool(true); err != nil {

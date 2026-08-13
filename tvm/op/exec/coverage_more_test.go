@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -37,7 +36,7 @@ func TestRegisteredExecOpsInstantiate(t *testing.T) {
 		t.Fatal("expected exec package to register opcode getters")
 	}
 
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -96,7 +95,7 @@ func TestCallCCAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "CALLCCARGS 2,-1" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 24 {
+		if got := instructionBits(t, dst); got != 24 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 	})
@@ -121,7 +120,7 @@ func TestTryArgsAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "TRYARGS 2,15" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected instruction bits: %d", got)
 		}
 
@@ -736,8 +735,7 @@ func TestCallContinuationAdditionalErrorStackEffects(t *testing.T) {
 
 	t.Run("CallCCArgsRejectsTruncatedSuffix", func(t *testing.T) {
 		truncated := CALLCCARGS(0, 0)
-		code := cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell()
-		if err := truncated.DeserializeMatched(code.MustBeginParse()); err == nil {
+		if err := truncated.Deserialize(truncated.GetPrefixes()[0]); err == nil {
 			t.Fatal("expected CALLCCARGS truncated suffix to fail")
 		}
 	})
@@ -1006,13 +1004,12 @@ func TestArgsBlessAdditionalStackAndDecodeEdges(t *testing.T) {
 	})
 
 	t.Run("FixedArgFormsRejectTruncatedSuffix", func(t *testing.T) {
-		for _, op := range []*helpers.AdvancedOP{
+		for _, op := range []vm.OP{
 			SETCONTARGS(0, 0),
 			RETURNARGS(0),
 			BLESSARGS(0, 0),
 		} {
-			code := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell()
-			if err := op.DeserializeMatched(code.MustBeginParse()); err == nil {
+			if err := op.Deserialize(op.GetPrefixes()[0]); err == nil {
 				t.Fatalf("expected %s truncated suffix to fail", op.SerializeText())
 			}
 		}
@@ -1959,7 +1956,7 @@ func TestSetContCtrAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "c7 SETCONTCTR" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 
@@ -2316,8 +2313,7 @@ func TestJumpAndReturnGuardCoverage(t *testing.T) {
 		assertVMErrCode(t, RETDATA().Interpret(state), vmerr.CodeTypeCheck)
 
 		truncated := RETARGS(0)
-		code := cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell()
-		if err := truncated.DeserializeMatched(code.MustBeginParse()); err == nil {
+		if err := truncated.Deserialize(truncated.GetPrefixes()[0]); err == nil {
 			t.Fatal("expected RETARGS truncated suffix to fail")
 		}
 
@@ -2378,12 +2374,12 @@ func TestJumpAndReturnGuardCoverage(t *testing.T) {
 
 func TestCallJumpArgsDecodeAndContinuationErrors(t *testing.T) {
 	t.Run("ShortAdvancedSuffixes", func(t *testing.T) {
-		for _, op := range []*helpers.AdvancedOP{
+		for _, op := range []vm.OP{
 			CALLXARGS(1, 2),
 			CALLXARGSP(3),
 			JMPXARGS(4),
 		} {
-			if err := op.DeserializeMatched(cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+			if err := op.Deserialize(op.GetPrefixes()[0]); err == nil {
 				t.Fatalf("expected short suffix error for %s", op.SerializeText())
 			}
 		}
@@ -2541,7 +2537,7 @@ func TestDictJumpMissingC3StackEffects(t *testing.T) {
 	t.Run("TruncatedSuffixes", func(t *testing.T) {
 		for _, tt := range []struct {
 			name string
-			op   *helpers.AdvancedOP
+			op   vm.OP
 		}{
 			{name: "call short", op: callDictShort(0)},
 			{name: "call long", op: callDictLong(0)},

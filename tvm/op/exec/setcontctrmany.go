@@ -3,17 +3,14 @@ package exec
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return SETCONTCTRMANY(0) },
-		func() vm.OP { return SETCONTCTRMANYX() },
-	)
+	vm.List = append(vm.List, func() vm.OP { return SETCONTCTRMANYX() })
+	vm.ArgList = append(vm.ArgList, setContCtrManyOp)
 }
 
 func setContCtrManyCommon(state *vm.State, mask uint8) error {
@@ -35,32 +32,23 @@ func setContCtrManyCommon(state *vm.State, mask uint8) error {
 			return vmerr.Error(vmerr.CodeTypeCheck)
 		}
 	}
-	return state.Stack.PushContinuation(cont)
+	return state.Stack.PushOwnedContinuation(cont)
 }
 
-func SETCONTCTRMANY(mask uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		MinVersion:    9,
-		Action: func(state *vm.State) error {
-			return setContCtrManyCommon(state, mask)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("SETCONTCTRMANY %d", int(mask)+1)
-		},
-		BitPrefix: helpers.BytesPrefix(0xED, 0xE3),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(mask), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			mask = uint8(val)
-			return nil
-		},
-	}
+var setContCtrManyOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(helpers.BytesPrefix(0xED, 0xE3)),
+	ArgBits:    8,
+	MinVersion: 9,
+	Action: func(state *vm.State, args uint64) error {
+		return setContCtrManyCommon(state, uint8(args))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("SETCONTCTRMANY %d", int(uint8(args))+1)
+	},
+})
+
+func SETCONTCTRMANY(mask uint8) vm.OP {
+	return vm.Bind(setContCtrManyOp, uint64(mask))
 }
 
 func SETCONTCTRMANYX() *helpers.SimpleOP {

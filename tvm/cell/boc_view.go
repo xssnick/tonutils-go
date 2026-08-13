@@ -15,8 +15,11 @@ const bocViewReadWindowSize = 4 << 20
 
 // BOCViewOptions configures a random-access BoC view.
 type BOCViewOptions struct {
-	// TrustedHashes trusts serialized hashes and depths when a cell stores them
-	// in the BoC payload. Cells without serialized metadata are hashed normally.
+	// TrustedHashes takes the hashes and depths a cell stores in the BoC payload
+	// instead of recomputing its metadata, and with it drops the reference's
+	// cross-check that a declared level mask equals the union of the reference
+	// masks. Cells without serialized metadata are still hashed normally. Only
+	// enable it for data from a trusted source.
 	TrustedHashes bool
 	// RequireIndex rejects BoCs without an index table.
 	RequireIndex bool
@@ -192,6 +195,9 @@ func (m BOCCellMeta) HashAtLevel(level int) Hash {
 	if m.Count == 0 {
 		return Hash{}
 	}
+	if level < 0 {
+		level = _DataCellMaxLevel
+	}
 	hashIndex := m.LevelMask.Apply(level).getHashIndex()
 	if hashIndex >= int(m.Count) {
 		hashIndex = int(m.Count) - 1
@@ -203,6 +209,9 @@ func (m BOCCellMeta) HashAtLevel(level int) Hash {
 func (m BOCCellMeta) DepthAtLevel(level int) uint16 {
 	if m.Count == 0 {
 		return 0
+	}
+	if level < 0 {
+		level = _DataCellMaxLevel
 	}
 	hashIndex := m.LevelMask.Apply(level).getHashIndex()
 	if hashIndex >= int(m.Count) {
@@ -379,7 +388,8 @@ func readBOCViewHeader(r io.ReaderAt, size int64) (bocViewHeader, error) {
 	if err != nil {
 		return header, fmt.Errorf("failed to read absent count: %w", err)
 	}
-	if absentNum < 0 || absentNum > cellsNum || rootsNum+absentNum > cellsNum {
+	// the reference bounds the absent count by the cell count alone
+	if absentNum < 0 || absentNum > cellsNum {
 		return header, errors.New("invalid boc counters")
 	}
 
@@ -387,14 +397,14 @@ func readBOCViewHeader(r io.ReaderAt, size int64) (bocViewHeader, error) {
 	if err != nil {
 		return header, fmt.Errorf("failed to read cells data size: %w", err)
 	}
-	if dataLen < cellsNum*2 {
+	if minDataLen := cellsNum*(2+cellNumSizeBytes) - cellNumSizeBytes; cellsNum > 0 && dataLen < minDataLen {
 		return header, errors.New("invalid boc cells data size")
 	}
 	maxPayloadBytes := maxBOCPayloadBytes()
 	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
 		return header, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
 	}
-	if cellsNum > 0 && dataLen > cellsNum*maxSerializedBOCCellBytes {
+	if cellsNum > 0 && uint64(dataLen) > uint64(cellsNum)*maxBOCDeclaredPayloadBytesPerCell {
 		return header, fmt.Errorf("boc cells data size is too big for cells count: data len %d, cells %d", dataLen, cellsNum)
 	}
 	if flags.hasCacheBits && !flags.hasIndex {
@@ -549,9 +559,6 @@ func (v *BOCView) loadIndex(indexOffset uint64) error {
 			return errors.New("invalid cell index")
 		}
 		prev = end
-	}
-	if prev != v.payloadSize {
-		return errors.New("invalid cell index")
 	}
 	return nil
 }

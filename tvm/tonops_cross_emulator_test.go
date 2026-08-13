@@ -71,7 +71,8 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 
 	configValue := cell.BeginCell().MustStoreUInt(0xBEEF, 16).EndCell()
 	// Config param 8 is part of the C7 fixtures for config-reading tonops.
-	// The raw reference runner itself stays on referenceRawRunGlobalVersion.
+	// Cases without refCfg must stay version-invariant: the raw reference
+	// runner follows the bundled C++ SUPPORTED_VERSION, not the Go baseline.
 	globalVersionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: vm.MaxSupportedGlobalVersion})
 	if err != nil {
 		t.Fatalf("failed to build global version config: %v", err)

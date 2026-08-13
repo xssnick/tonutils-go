@@ -36,10 +36,10 @@ func TestInvalidCompoundFamilies(t *testing.T) {
 			if got := op.SerializeText(); got != tt.name {
 				t.Fatalf("text = %q, want %q", got, tt.name)
 			}
-			if got := op.InstructionBits(); got != int64(tt.prefix.Bits+tt.suffixBits) {
+			if got := mathOpInstructionBits(op); got != int64(tt.prefix.Bits+tt.suffixBits) {
 				t.Fatalf("instruction bits = %d, want %d", got, tt.prefix.Bits+tt.suffixBits)
 			}
-			if got := op.MinGlobalVersion(); got != 0 {
+			if got := mathOpMinVersion(op); got != 0 {
 				t.Fatalf("min version = %d, want 0", got)
 			}
 

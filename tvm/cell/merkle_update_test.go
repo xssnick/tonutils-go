@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 )
 
@@ -48,22 +50,20 @@ func TestMerkleUpdateHands(t *testing.T) {
 		t.Fatalf("validate failed: %v", err)
 	}
 
-	got, reused, err := ApplyMerkleUpdate(node, update)
+	got, err := ApplyMerkleUpdate(node, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	assertCellsEqual(t, got, newNode)
-	if len(reused.Cells) != 1 || reused.Cells[0].Hash != data.HashKey() || reused.Cells[0].Cell != data {
-		t.Fatalf("unexpected reused cells: got=%x want=%x", reused, data.Hash())
-	}
-	if len(reused.Refs) != 1 || reused.Refs[0].LogicalHash != data.HashKey() || reused.Refs[0].RefIndex != 0 || reused.Refs[0].RawCell != reused.Cells[0].Cell {
-		t.Fatalf("unexpected reused refs: %+v", reused.Refs)
+	// The unchanged subtree must be the source cell itself, at the same ref index.
+	if got.ref(0) != data {
+		t.Fatalf("ref 0 is %x, want the source cell %x", got.ref(0).Hash()[:8], data.Hash()[:8])
 	}
 
 	if err := MayApplyMerkleUpdate(otherNode, update); err == nil {
 		t.Fatal("expected may apply to reject a mismatched source root")
 	}
-	if _, _, err := ApplyMerkleUpdate(otherNode, update); err == nil {
+	if _, err := ApplyMerkleUpdate(otherNode, update); err == nil {
 		t.Fatal("expected apply to reject a mismatched source root")
 	}
 
@@ -83,25 +83,24 @@ func TestMerkleUpdateHands(t *testing.T) {
 	if err := ValidateMerkleUpdate(otherUpdate); err == nil {
 		t.Fatal("expected validate to reject unknown pruned destination branches")
 	}
-	if _, _, err := ApplyMerkleUpdate(otherNode, otherUpdate); err == nil {
+	if _, err := ApplyMerkleUpdate(otherNode, otherUpdate); err == nil {
 		t.Fatal("expected apply to reject unknown pruned destination branches")
 	}
 }
 
-func TestCreateMerkleUpdateCppGoldenUsageTreeHands(t *testing.T) {
+func TestCreateMerkleUpdateCppGoldenRecordedHands(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xE, 4).EndCell()
 	reused := BeginCell().MustStoreUInt(0xC0DE, 16).MustStoreRef(leaf).EndCell()
 	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(reused).EndCell()
 
-	usageTree := NewCellUsageTree()
-	usageFrom := from.WithTrace(usageTree.RootTrace())
-	reusedRef, err := usageFrom.MustBeginParse().PeekRefCellAt(0)
+	rs := NewReadSet(from)
+	reusedRef, err := rs.Root().MustBeginParse().PeekRefCellAt(0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(reusedRef).EndCell()
 
-	update, err := usageTree.CreateMerkleUpdate(usageFrom, to)
+	update, err := rs.CreateMerkleUpdate(to)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +113,7 @@ func TestCreateMerkleUpdateCppGoldenUsageTreeHands(t *testing.T) {
 	expectedTo := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(prunedReused).EndCell()
 	expectedUpdate := mustMerkleUpdateCell(t, expectedFrom, expectedTo)
 	if !bytes.Equal(update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{})) {
-		t.Fatalf("usage-tree merkle update BOC mismatch:\n got: %x\nwant: %x", update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
+		t.Fatalf("recorded merkle update BOC mismatch:\n got: %x\nwant: %x", update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
 	}
 
 	if err := MayApplyMerkleUpdate(from, update); err != nil {
@@ -123,51 +122,209 @@ func TestCreateMerkleUpdateCppGoldenUsageTreeHands(t *testing.T) {
 	if err := ValidateMerkleUpdate(update); err != nil {
 		t.Fatalf("validate failed: %v", err)
 	}
-	got, reuse, err := ApplyMerkleUpdate(from, update)
+	got, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	assertCellsEqual(t, got, to)
-	if len(reuse.Cells) != 1 || reuse.Cells[0].Hash != reused.HashKey() {
-		t.Fatalf("unexpected reused cells: %+v", reuse.Cells)
+	if countSharedCells(got, reused) == 0 {
+		t.Fatal("the unchanged subtree was copied instead of being reused from the source")
 	}
 }
 
-func TestCreateMerkleUpdateRestoresUsageTreeMarkMode(t *testing.T) {
-	leaf := BeginCell().MustStoreUInt(0xE, 4).EndCell()
-	reused := BeginCell().MustStoreUInt(0xC0DE, 16).MustStoreRef(leaf).EndCell()
-	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(reused).EndCell()
+func TestCreateMerkleUpdateDoesNotReuseChangedCellWithSourceTrace(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xEE, 8).EndCell()
+	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(leaf).EndCell()
 
-	usageTree := NewCellUsageTree()
-	usageFrom := from.WithTrace(usageTree.RootTrace())
-	reusedRef, err := usageFrom.MustBeginParse().PeekRefCellAt(0)
+	rs := NewReadSet(from)
+	if _, err := rs.Root().BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+
+	to := BeginCell().
+		MustStoreUInt(0xB2, 8).
+		MustStoreRef(leaf).
+		EndCell().
+		WithTrace(rs.Trace())
+	update, err := rs.CreateMerkleUpdate(to)
 	if err != nil {
 		t.Fatal(err)
 	}
-	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(reusedRef).EndCell()
 
-	if _, err = usageTree.CreateMerkleUpdate(usageFrom, to); err != nil {
+	got, err := ApplyMerkleUpdate(from, update)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if usageTree.useMark {
-		t.Fatal("CreateMerkleUpdate should restore ordinary load-based IsLoaded mode")
+	assertCellsEqual(t, got, to)
+}
+
+// Every call decides its boundaries from the destination it was handed. The
+// record only ever grows, so a second update sees at least as much of the source
+// as the first one did — but the source proof it emits exposes the boundaries
+// that destination reused and nothing else, because a boundary the caller did
+// not hand back must stay pruned to keep the proof at the size the reads justify.
+func TestCreateMerkleUpdateRepeatedCallsScopeBoundariesToTheirDestination(t *testing.T) {
+	leafA := BeginCell().MustStoreUInt(0xA, 4).EndCell()
+	leafB := BeginCell().MustStoreUInt(0xB, 4).EndCell()
+	sharedA := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(leafA).EndCell()
+	sharedB := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(leafB).EndCell()
+	branchA := BeginCell().MustStoreUInt(0x1A, 8).MustStoreRef(sharedA).EndCell()
+	branchB := BeginCell().MustStoreUInt(0x1B, 8).MustStoreRef(sharedB).EndCell()
+	from := BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(branchA).MustStoreRef(branchB).EndCell()
+
+	rs := NewReadSet(from)
+	rootSlice := rs.Root().MustBeginParse()
+	readBranchA, err := rootSlice.LoadRef()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if usageTree.HasMark(usageTree.RootNode()) {
-		t.Fatal("CreateMerkleUpdate should not leave temporary reuse marks behind")
+	readBranchB, err := rootSlice.LoadRef()
+	if err != nil {
+		t.Fatal(err)
 	}
+	readSharedA, err := readBranchA.PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readSharedB, err := readBranchB.PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prunedSharedA, err := createPrunedBranchFromCell(sharedA, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prunedSharedB, err := createPrunedBranchFromCell(sharedB, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prunedBranchA, err := createPrunedBranchFromCell(branchA, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prunedBranchB, err := createPrunedBranchFromCell(branchB, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptBranchA := BeginCell().MustStoreUInt(0x1A, 8).MustStoreRef(prunedSharedA).EndCell()
+	keptBranchB := BeginCell().MustStoreUInt(0x1B, 8).MustStoreRef(prunedSharedB).EndCell()
+
+	toA := BeginCell().MustStoreUInt(0xDA, 8).MustStoreRef(readSharedA).EndCell()
+	updateFromA, _, _, err := rs.createMerkleUpdateRaw(toA, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedFromA := BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(keptBranchA).MustStoreRef(prunedBranchB).EndCell()
+	if !bytes.Equal(updateFromA.ToBOCWithOptions(BOCSerializeOptions{}), expectedFromA.ToBOCWithOptions(BOCSerializeOptions{})) {
+		t.Fatalf("first update source proof mismatch:\n got: %x\nwant: %x",
+			updateFromA.ToBOCWithOptions(BOCSerializeOptions{}), expectedFromA.ToBOCWithOptions(BOCSerializeOptions{}))
+	}
+
+	toB := BeginCell().MustStoreUInt(0xDB, 8).MustStoreRef(readSharedB).EndCell()
+	updateFromB, _, _, err := rs.createMerkleUpdateRaw(toB, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedFromB := BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(prunedBranchA).MustStoreRef(keptBranchB).EndCell()
+	if !bytes.Equal(updateFromB.ToBOCWithOptions(BOCSerializeOptions{}), expectedFromB.ToBOCWithOptions(BOCSerializeOptions{})) {
+		t.Fatalf("second update source proof mismatch:\n got: %x\nwant: %x",
+			updateFromB.ToBOCWithOptions(BOCSerializeOptions{}), expectedFromB.ToBOCWithOptions(BOCSerializeOptions{}))
+	}
+}
+
+// The same subtree hangs under two parents and the destination hands both copies
+// back. There is one boundary, because a boundary is a hash, and exposing it once
+// is enough: applying an update looks a boundary up by hash and takes whichever
+// occurrence the source proof carries. So the first parent is kept with the
+// subtree pruned under it, and the second is cut away whole.
+//
+// Opening a path to every occurrence instead is what a hash-keyed recorder does
+// if it lets a shared subtree answer "there is a boundary below me" once per
+// parent. It stays valid — every boundary is still reachable — and it is what this
+// package used to emit; measured against the reference collator on a real
+// masterchain-referenced block, it made the source half of the update carry 581
+// body cells it did not need, and the block 22 KB larger.
+//
+// Which of the two parents carries it is a choice, not a law: both shapes apply
+// to the same new state. The claim pass hands a contested subtree to the parent
+// it reaches first in reverse post-order, which is the last one the walk
+// finished — parent1 here. On a shard state that rule puts the claim on the
+// accounts side rather than the out-message queue, because accounts is the root's
+// last child and holds all but a handful of the boundaries; measured on the same
+// real block it took the source half from 4274 cells to 4260, against the
+// reference's 4265, and the block from 426021 to 425674 bytes.
+func TestCreateMerkleUpdateSharedDAGExposesBoundaryOnce(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xEE, 8).EndCell()
+	shared := BeginCell().MustStoreUInt(0x5A, 8).MustStoreRef(leaf).EndCell()
+	parent0 := BeginCell().MustStoreUInt(0x10, 8).MustStoreRef(shared).EndCell()
+	parent1 := BeginCell().MustStoreUInt(0x11, 8).MustStoreRef(shared).EndCell()
+	from := BeginCell().MustStoreUInt(0xA0, 8).MustStoreRef(parent0).MustStoreRef(parent1).EndCell()
+
+	rs := NewReadSet(from)
+	rootSlice := rs.Root().MustBeginParse()
+	readParent0, err := rootSlice.LoadRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readParent1, err := rootSlice.LoadRef()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readShared0, err := readParent0.PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readShared1, err := readParent1.PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newParent0 := BeginCell().MustStoreUInt(0x20, 8).MustStoreRef(readShared0).EndCell()
+	newParent1 := BeginCell().MustStoreUInt(0x21, 8).MustStoreRef(readShared1).EndCell()
+	to := BeginCell().MustStoreUInt(0xB0, 8).MustStoreRef(newParent0).MustStoreRef(newParent1).EndCell()
+	update, err := rs.CreateMerkleUpdate(to)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	prunedShared, err := createPrunedBranchFromCell(shared, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedParent1 := BeginCell().MustStoreUInt(0x11, 8).MustStoreRef(prunedShared).EndCell()
+	// The other parent proves nothing this one has not already proven, so the
+	// source proof cuts it away instead of repeating the path.
+	expectedParent0, err := createPrunedBranchFromCell(parent0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedFrom := BeginCell().MustStoreUInt(0xA0, 8).MustStoreRef(expectedParent0).MustStoreRef(expectedParent1).EndCell()
+	expectedNewParent0 := BeginCell().MustStoreUInt(0x20, 8).MustStoreRef(prunedShared).EndCell()
+	expectedNewParent1 := BeginCell().MustStoreUInt(0x21, 8).MustStoreRef(prunedShared).EndCell()
+	expectedTo := BeginCell().MustStoreUInt(0xB0, 8).MustStoreRef(expectedNewParent0).MustStoreRef(expectedNewParent1).EndCell()
+	expectedUpdate, err := CreateMerkleUpdate(expectedFrom, expectedTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{})) {
+		t.Fatalf("shared-DAG merkle update BOC mismatch:\n got: %x\nwant: %x",
+			update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
+	}
+
+	checkMerkleUpdate(t, from, to, update)
 }
 
 func TestCreateMerkleUpdateCppGoldenNoReusePrunesSourceRoot(t *testing.T) {
 	from := BeginCell().MustStoreUInt(0xA1, 8).MustStoreRef(BeginCell().MustStoreUInt(0x11, 8).EndCell()).EndCell()
 	to := BeginCell().MustStoreUInt(0xB2, 8).MustStoreRef(BeginCell().MustStoreUInt(0x22, 8).EndCell()).EndCell()
 
-	usageTree := NewCellUsageTree()
-	usageFrom := from.WithTrace(usageTree.RootTrace())
-	if _, err := usageFrom.BeginParse(); err != nil {
+	rs := NewReadSet(from)
+	if _, err := rs.Root().BeginParse(); err != nil {
 		t.Fatal(err)
 	}
 
-	update, err := usageTree.CreateMerkleUpdate(usageFrom, to)
+	update, err := rs.CreateMerkleUpdate(to)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +338,7 @@ func TestCreateMerkleUpdateCppGoldenNoReusePrunesSourceRoot(t *testing.T) {
 		t.Fatalf("no-reuse merkle update BOC mismatch:\n got: %x\nwant: %x", update.ToBOCWithOptions(BOCSerializeOptions{}), expectedUpdate.ToBOCWithOptions(BOCSerializeOptions{}))
 	}
 
-	got, _, err := ApplyMerkleUpdate(from, update)
+	got, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
@@ -213,7 +370,7 @@ func TestMerkleUpdateOrdinaryTreeCases(t *testing.T) {
 				t.Fatalf("may apply failed: %v", err)
 			}
 
-			got, _, err := ApplyMerkleUpdate(from, update)
+			got, err := ApplyMerkleUpdate(from, update)
 			if err != nil {
 				t.Fatalf("apply failed: %v", err)
 			}
@@ -232,14 +389,11 @@ func TestApplyMerkleUpdateReusesUnchangedRefs(t *testing.T) {
 	}
 	update := mustMerkleUpdateCell(t, updateFrom, updateTo)
 
-	got, reused, err := ApplyMerkleUpdate(from, update)
+	got, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	assertCellsEqual(t, got, to)
-	if !containsMerkleUpdateReusedCell(reused.Cells, from.ref(1).HashKey()) {
-		t.Fatalf("expected unchanged right subtree in reused cells: %x", from.ref(1).Hash())
-	}
 	if got.ref(1) != from.ref(1) {
 		t.Fatal("expected unchanged right subtree to reuse source reference identity")
 	}
@@ -258,7 +412,7 @@ func TestApplyMerkleUpdateDefaultPathLoadsLazyRefs(t *testing.T) {
 	loader := testLazyLoaderForCells(from.rawRefs()...)
 	lazyFrom := cellWithLazyRefsFromCell(from, loader.LoadCell)
 
-	got, _, err := ApplyMerkleUpdate(lazyFrom, update)
+	got, err := ApplyMerkleUpdate(lazyFrom, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
@@ -305,28 +459,50 @@ func TestApplyMerkleUpdateCollectsKnownBranchesWhenDestinationShapeDiffers(t *te
 
 	lazyFrom := cellWithLazyRefsFromCell(from)
 
-	got, reused, err := ApplyMerkleUpdate(lazyFrom, update)
+	got, err := ApplyMerkleUpdate(lazyFrom, update)
 	if err != nil {
 		t.Fatalf("apply failed: %v", err)
 	}
 	if got.HashKey() != to.HashKey() {
 		t.Fatalf("hash mismatch: got=%x want=%x", got.Hash(), to.Hash())
 	}
-	if !containsMerkleUpdateReusedCell(reused.Cells, left.HashKey()) {
-		t.Fatalf("expected reused left subtree in reused cells: %+v", reused.Cells)
+	if got.ref(0).HashKey() != left.HashKey() {
+		t.Fatalf("expected the unchanged left subtree, got %x", got.ref(0).Hash()[:8])
 	}
 	if !got.ref(0).IsLazy() {
 		t.Fatal("expected reused left ref to remain lazy")
 	}
 }
 
-func containsMerkleUpdateReusedCell(cells []MerkleUpdateReusedCell, hash Hash) bool {
-	for _, candidate := range cells {
-		if candidate.Hash == hash {
-			return true
-		}
+// An update naming a pruned boundary the source does not carry cannot be applied,
+// and must fail rather than return a partially rebuilt root.
+func TestApplyMerkleUpdateRejectsUnknownPrunedBranch(t *testing.T) {
+	known := BeginCell().MustStoreUInt(0xAA, 8).MustStoreRef(BeginCell().EndCell()).EndCell()
+	oldOther := BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(BeginCell().EndCell()).EndCell()
+	unknown := BeginCell().MustStoreUInt(0xCC, 8).MustStoreRef(BeginCell().EndCell()).EndCell()
+	from := BeginCell().MustStoreRef(known).MustStoreRef(oldOther).EndCell()
+
+	prunedKnown, err := createPrunedBranchFromCell(known, 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return false
+	prunedUnknown, err := createPrunedBranchFromCell(unknown, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateTo := BeginCell().MustStoreRef(prunedKnown).MustStoreRef(prunedUnknown).EndCell()
+	update := mustMerkleUpdateCell(t, from, updateTo)
+
+	got, err := ApplyMerkleUpdate(from, update)
+	if err == nil {
+		t.Fatal("update with an unknown pruned branch succeeded")
+	}
+	if got != nil {
+		t.Fatal("failed update returned a root")
+	}
+	if !strings.Contains(err.Error(), fmt.Sprintf("%x", unknown.Hash())) {
+		t.Fatalf("error does not name the unknown branch: %v", err)
+	}
 }
 
 func TestValidateMerkleUpdateLoadsLazyRootRefs(t *testing.T) {
@@ -646,7 +822,7 @@ func TestMerkleUpdateRejectsBoundaryDepthMismatch(t *testing.T) {
 	if err := ValidateMerkleUpdate(badUpdate); err == nil {
 		t.Fatal("expected validate to reject a boundary with mismatched stored depth")
 	}
-	if _, _, err := ApplyMerkleUpdate(updateFrom, badUpdate); err == nil {
+	if _, err := ApplyMerkleUpdate(updateFrom, badUpdate); err == nil {
 		t.Fatal("expected apply to reject a boundary with mismatched stored depth")
 	}
 
@@ -659,7 +835,7 @@ func TestMerkleUpdateRejectsBoundaryDepthMismatch(t *testing.T) {
 		t.Fatalf("validate failed for correct boundary: %v", err)
 	}
 	expected := BeginCell().MustStoreUInt(0x02, 8).MustStoreRef(leaf).EndCell()
-	got, _, err := ApplyMerkleUpdate(updateFrom, goodUpdate)
+	got, err := ApplyMerkleUpdate(updateFrom, goodUpdate)
 	if err != nil {
 		t.Fatalf("apply failed for correct boundary: %v", err)
 	}
@@ -691,12 +867,12 @@ func TestMerkleUpdateRejectsNonZeroLevelRoot(t *testing.T) {
 	if err := MayApplyMerkleUpdate(leafA, update); err == nil {
 		t.Fatal("expected may apply to reject a non-zero-level merkle update root")
 	}
-	if _, _, err := ApplyMerkleUpdate(leafA, update); err == nil {
+	if _, err := ApplyMerkleUpdate(leafA, update); err == nil {
 		t.Fatal("expected apply to reject a non-zero-level merkle update root")
 	}
 }
 
-func TestMerkleUpdateRawGenerationAcceptsNonZeroLevelRootsCppParity(t *testing.T) {
+func TestCreateMerkleUpdateRejectsNonZeroLevelRoots(t *testing.T) {
 	fromLeaf := BeginCell().MustStoreUInt(0xA, 4).EndCell()
 	toLeaf := BeginCell().MustStoreUInt(0xB, 4).EndCell()
 	fromBranch := BeginCell().MustStoreRef(fromLeaf).EndCell()
@@ -717,26 +893,12 @@ func TestMerkleUpdateRawGenerationAcceptsNonZeroLevelRootsCppParity(t *testing.T
 		t.Fatal("expected non-zero-level roots")
 	}
 
-	usageTree := NewCellUsageTree()
-	if _, err = usageTree.CreateMerkleUpdate(from, to); err == nil {
-		t.Fatal("expected wrapped merkle update generation to reject non-zero-level roots")
+	rs := NewReadSet(from)
+	if _, err = rs.CreateMerkleUpdate(to); err == nil {
+		t.Fatal("expected merkle update generation to reject non-zero-level roots")
 	}
-
-	updateFrom, updateTo, err := usageTree.createMerkleUpdateRaw(from, to)
-	if err != nil {
-		t.Fatalf("raw merkle update generation should accept non-zero-level roots: %v", err)
-	}
-	if err = validateLoadedCell(updateFrom); err != nil {
-		t.Fatalf("source raw proof validation failed: %v", err)
-	}
-	if err = validateLoadedCell(updateTo); err != nil {
-		t.Fatalf("destination raw proof validation failed: %v", err)
-	}
-	if updateFrom.Level() != from.Level()+1 {
-		t.Fatalf("unexpected source raw proof level: got %d want %d", updateFrom.Level(), from.Level()+1)
-	}
-	if updateTo.Level() != to.Level() {
-		t.Fatalf("unexpected destination raw proof level: got %d want %d", updateTo.Level(), to.Level())
+	if _, _, _, err = rs.createMerkleUpdateRaw(to, false); err == nil {
+		t.Fatal("expected raw merkle update generation to reject non-zero-level roots")
 	}
 }
 
@@ -893,7 +1055,7 @@ func checkMerkleUpdate(tb testing.TB, from, to, update *Cell) {
 		tb.Fatalf("validate failed: %v", err)
 	}
 
-	got, _, err := ApplyMerkleUpdate(from, update)
+	got, err := ApplyMerkleUpdate(from, update)
 	if err != nil {
 		tb.Fatalf("apply failed: %v", err)
 	}

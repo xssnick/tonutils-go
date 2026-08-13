@@ -76,8 +76,8 @@ func TestDefaultLimits(t *testing.T) {
 			MaxPlumtreePayloadSize+12,
 		)
 	}
-	if defaultMaxConnectionsPerIP != 1000 {
-		t.Fatalf("defaultMaxConnectionsPerIP = %d, want 1000", defaultMaxConnectionsPerIP)
+	if DefaultMaxConnectionsPerIP != 1000 {
+		t.Fatalf("DefaultMaxConnectionsPerIP = %d, want 1000", DefaultMaxConnectionsPerIP)
 	}
 
 	cfg := defaultQUICConfig(DefaultLimits())

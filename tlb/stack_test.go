@@ -246,6 +246,40 @@ func TestSerializeUnsignedStackIntUsesCanonicalTag(t *testing.T) {
 	}
 }
 
+func TestSerializeNativeTinyIntegerTypes(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  int64
+	}{
+		{name: "int", value: int(-7), want: -7},
+		{name: "int8", value: int8(-8), want: -8},
+		{name: "int16", value: int16(-16), want: -16},
+		{name: "int32", value: int32(-32), want: -32},
+		{name: "int64", value: int64(-64), want: -64},
+		{name: "uint8", value: uint8(8), want: 8},
+		{name: "uint16", value: uint16(16), want: 16},
+		{name: "uint32", value: uint32(32), want: 32},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := cell.BeginCell()
+			if err := SerializeStackValue(builder, test.value); err != nil {
+				t.Fatal(err)
+			}
+
+			parsed, err := ParseStackValue(builder.EndCell().MustBeginParse())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := parsed.(*big.Int); !got.IsInt64() || got.Int64() != test.want {
+				t.Fatalf("decoded integer = %v, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestSerializeInvalidBigIntReturnsError(t *testing.T) {
 	var nilInt *big.Int
 	maxMagnitude := new(big.Int).Lsh(big.NewInt(1), 256)
@@ -421,6 +455,449 @@ func TestParseStackTupleRejectsTrailingReferenceCells(t *testing.T) {
 		EndCell()
 	if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
 		t.Fatal("tuple pair with trailing data parsed successfully")
+	}
+}
+
+func TestParseStackTupleMatchesReferenceFailureOrder(t *testing.T) {
+	validValue := cell.BeginCell().MustStoreUInt(0, 8).EndCell()
+	malformedValue := cell.BeginCell().EndCell()
+
+	t.Run("outer tail before head", func(t *testing.T) {
+		encoded := cell.BeginCell().
+			MustStoreUInt(0x07, 8).
+			MustStoreUInt(2, 16).
+			MustStoreRef(malformedValue).
+			MustStoreRef(malformedValue).
+			EndCell()
+		loader := encoded.MustBeginParse()
+
+		_, err := ParseStackValue(loader)
+		if err == nil {
+			t.Fatal("malformed tuple parsed successfully")
+		}
+		if !strings.Contains(err.Error(), "tuple's 1 value") {
+			t.Fatalf("parse error = %v, want outer tail element failure", err)
+		}
+		if loader.RefsNum() != 0 {
+			t.Fatalf("outer refs left = %d, want both consumed before element parsing", loader.RefsNum())
+		}
+	})
+
+	t.Run("pair shape before pair tail value", func(t *testing.T) {
+		pair := cell.BeginCell().
+			MustStoreRef(validValue).
+			MustStoreRef(malformedValue).
+			MustStoreBoolBit(true).
+			EndCell()
+		encoded := cell.BeginCell().
+			MustStoreUInt(0x07, 8).
+			MustStoreUInt(3, 16).
+			MustStoreRef(pair).
+			MustStoreRef(validValue).
+			EndCell()
+
+		_, err := ParseStackValue(encoded.MustBeginParse())
+		if err == nil {
+			t.Fatal("malformed tuple parsed successfully")
+		}
+		if !strings.Contains(err.Error(), "pair has trailing data") {
+			t.Fatalf("parse error = %v, want pair shape failure before its tail value", err)
+		}
+	})
+}
+
+func TestParseStackValueMatchesReferenceCursorConsumption(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    *cell.Cell
+		wantBits uint
+	}{
+		{
+			name:     "unknown tag is only prefetched",
+			value:    cell.BeginCell().MustStoreUInt(0xff, 8).EndCell(),
+			wantBits: 8,
+		},
+		{
+			name:     "cell without ref keeps tag",
+			value:    cell.BeginCell().MustStoreUInt(0x03, 8).EndCell(),
+			wantBits: 8,
+		},
+		{
+			name:     "tiny int consumes tag before payload failure",
+			value:    cell.BeginCell().MustStoreUInt(0x01, 8).EndCell(),
+			wantBits: 0,
+		},
+		{
+			name:     "short int257 prefix is not consumed",
+			value:    cell.BeginCell().MustStoreUInt(0x02, 8).EndCell(),
+			wantBits: 8,
+		},
+		{
+			name:     "complete int257 prefix precedes payload failure",
+			value:    cell.BeginCell().MustStoreUInt(0x0200/2, 15).EndCell(),
+			wantBits: 0,
+		},
+		{
+			name:     "tuple consumes tag before length failure",
+			value:    cell.BeginCell().MustStoreUInt(0x07, 8).EndCell(),
+			wantBits: 0,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			loader := test.value.MustBeginParse()
+			if _, err := ParseStackValue(loader); err == nil {
+				t.Fatal("malformed value parsed successfully")
+			}
+			if got := loader.BitsLeft(); got != test.wantBits {
+				t.Fatalf("bits left = %d, want %d", got, test.wantBits)
+			}
+		})
+	}
+}
+
+func TestParseStackTupleDefersHeadLoadUntilTailSucceeds(t *testing.T) {
+	headLoads, tailLoads := 0, 0
+	headTrace := cell.NewTrace(cell.TraceHooks{OnLoad: func(*cell.Cell) { headLoads++ }})
+	tailTrace := cell.NewTrace(cell.TraceHooks{OnLoad: func(*cell.Cell) { tailLoads++ }})
+	rootTrace := cell.NewTrace(cell.TraceHooks{OnChild: func(refIdx int) *cell.Trace {
+		if refIdx == 0 {
+			return headTrace
+		}
+		return tailTrace
+	}})
+
+	encoded := cell.BeginCell().
+		MustStoreUInt(0x07, 8).
+		MustStoreUInt(2, 16).
+		MustStoreRef(cell.BeginCell().MustStoreUInt(0, 8).EndCell()).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		EndCell().
+		WithTrace(rootTrace)
+
+	if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
+		t.Fatal("malformed tuple parsed successfully")
+	}
+	if headLoads != 0 || tailLoads != 1 {
+		t.Fatalf("tuple child loads = head:%d tail:%d, want head:0 tail:1", headLoads, tailLoads)
+	}
+}
+
+func TestStackLoadDefersRestCellUntilInlineValueSucceeds(t *testing.T) {
+	restLoads := 0
+	restTrace := cell.NewTrace(cell.TraceHooks{OnLoad: func(*cell.Cell) { restLoads++ }})
+	rootTrace := cell.NewTrace(cell.TraceHooks{OnChild: func(int) *cell.Trace { return restTrace }})
+
+	encoded := cell.BeginCell().
+		MustStoreUInt(1, 24).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreUInt(0xff, 8).
+		EndCell().
+		WithTrace(rootTrace)
+
+	var stack Stack
+	if err := stack.LoadFromCell(encoded.MustBeginParse()); err == nil {
+		t.Fatal("malformed stack parsed successfully")
+	}
+	if restLoads != 0 {
+		t.Fatalf("rest cell loads = %d, want 0", restLoads)
+	}
+}
+
+func TestParseStackSliceDefersBaseLoadUntilBoundsValidate(t *testing.T) {
+	baseLoads := 0
+	baseTrace := cell.NewTrace(cell.TraceHooks{OnLoad: func(*cell.Cell) { baseLoads++ }})
+	rootTrace := cell.NewTrace(cell.TraceHooks{OnChild: func(int) *cell.Trace { return baseTrace }})
+
+	encoded := cell.BeginCell().
+		MustStoreUInt(0x04, 8).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreUInt(1, 10).
+		MustStoreUInt(0, 10).
+		MustStoreUInt(0, 3).
+		MustStoreUInt(0, 3).
+		EndCell().
+		WithTrace(rootTrace)
+
+	if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
+		t.Fatal("slice with reversed bit bounds parsed successfully")
+	}
+	if baseLoads != 0 {
+		t.Fatalf("slice base cell loads = %d, want 0", baseLoads)
+	}
+}
+
+func TestParseStackValueAllowsSpecialSliceButRejectsSpecialBuilder(t *testing.T) {
+	library, err := cell.BeginCell().
+		MustStoreUInt(uint64(cell.LibraryCellType), 8).
+		MustStoreSlice(make([]byte, 32), 256).
+		EndCellSpecial(true)
+	if err != nil {
+		t.Fatalf("build library cell: %v", err)
+	}
+
+	sliceValue := cell.BeginCell().
+		MustStoreUInt(0x04, 8).
+		MustStoreRef(library).
+		MustStoreUInt(0, 10).
+		MustStoreUInt(264, 10).
+		MustStoreUInt(0, 3).
+		MustStoreUInt(0, 3).
+		EndCell()
+
+	parsed, err := ParseStackValue(sliceValue.MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse special slice stack value: %v", err)
+	}
+	parsedSlice, ok := parsed.(*cell.Slice)
+	if !ok {
+		t.Fatalf("parsed special slice type = %T, want *cell.Slice", parsed)
+	}
+	base := parsedSlice.BaseCell()
+	if !base.IsSpecial() || base.GetType() != cell.LibraryCellType {
+		t.Fatalf("parsed slice base = special:%v type:%v, want library", base.IsSpecial(), base.GetType())
+	}
+	if parsedSlice.BitsLeft() != 264 || parsedSlice.RefsNum() != 0 {
+		t.Fatalf("parsed special slice size = %d bits, %d refs, want 264 bits, 0 refs", parsedSlice.BitsLeft(), parsedSlice.RefsNum())
+	}
+
+	rebuilt := cell.BeginCell()
+	if err = SerializeStackValue(rebuilt, parsedSlice); err != nil {
+		t.Fatalf("serialize special slice stack value: %v", err)
+	}
+	if got := rebuilt.EndCell(); !bytes.Equal(got.Hash(), sliceValue.Hash()) {
+		t.Fatal("special slice stack value changed after roundtrip")
+	}
+
+	builderValue := cell.BeginCell().
+		MustStoreUInt(0x05, 8).
+		MustStoreRef(library).
+		EndCell()
+	if _, err = ParseStackValue(builderValue.MustBeginParse()); err == nil {
+		t.Fatal("special builder base cell parsed successfully")
+	}
+
+	cellValue := cell.BeginCell().MustStoreUInt(0x03, 8).MustStoreRef(library).EndCell()
+	parsed, err = ParseStackValue(cellValue.MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse special cell stack value: %v", err)
+	}
+	if got := parsed.(*cell.Cell); !got.IsSpecial() || got.GetType() != cell.LibraryCellType {
+		t.Fatalf("parsed cell = special:%v type:%v, want library", got.IsSpecial(), got.GetType())
+	}
+}
+
+func TestStackLoadMaterializesLazyOrdinaryTailBeforeSpecialCheck(t *testing.T) {
+	want := NewStack()
+	want.Push(int64(7))
+	encoded, err := want.ToCell()
+	if err != nil {
+		t.Fatalf("serialize stack: %v", err)
+	}
+
+	lazy, err := cell.FromBOCWithOptions(encoded.ToBOC(), cell.BOCParseOptions{Lazy: true})
+	if err != nil {
+		t.Fatalf("parse lazy stack boc: %v", err)
+	}
+	probe := lazy.MustBeginParse()
+	probe.MustLoadUInt(24)
+	rest, err := probe.LoadRefCell()
+	if err != nil {
+		t.Fatalf("load lazy stack tail ref: %v", err)
+	}
+	if !rest.IsLazy() {
+		t.Fatal("stack tail is not a lazy placeholder")
+	}
+
+	var got Stack
+	if err = got.LoadFromCell(lazy.MustBeginParse()); err != nil {
+		t.Fatalf("load stack with lazy ordinary tail: %v", err)
+	}
+	value, err := got.Pop()
+	if err != nil {
+		t.Fatalf("pop parsed stack: %v", err)
+	}
+	if value.(*big.Int).Int64() != 7 {
+		t.Fatalf("parsed stack value = %v, want 7", value)
+	}
+}
+
+func TestParseCellStackValueDoesNotLoadReferencedCell(t *testing.T) {
+	loads := 0
+	childTrace := cell.NewTrace(cell.TraceHooks{
+		OnLoad: func(*cell.Cell) {
+			loads++
+		},
+	})
+	rootTrace := cell.NewTrace(cell.TraceHooks{
+		OnChild: func(refIdx int) *cell.Trace {
+			if refIdx != 0 {
+				t.Fatalf("child index = %d, want 0", refIdx)
+			}
+			return childTrace
+		},
+	})
+
+	child := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	encoded := cell.BeginCell().
+		MustStoreUInt(0x03, 8).
+		MustStoreRef(child).
+		EndCell().
+		WithTrace(rootTrace)
+
+	parsed, err := ParseStackValue(encoded.MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse cell stack value: %v", err)
+	}
+	if loads != 0 {
+		t.Fatalf("referenced cell loads during stack parsing = %d, want 0", loads)
+	}
+
+	parsedCell := parsed.(*cell.Cell)
+	if got := parsedCell.MustBeginParse().MustLoadUInt(8); got != 0xAB {
+		t.Fatalf("referenced cell value = %x, want ab", got)
+	}
+	if loads != 1 {
+		t.Fatalf("referenced cell loads after explicit parse = %d, want 1", loads)
+	}
+}
+
+func TestSerializeStackTupleFailureDoesNotMutateDestination(t *testing.T) {
+	builder := cell.BeginCell().MustStoreUInt(0xAB, 8)
+	bitsBefore, refsBefore := builder.BitsUsed(), builder.RefsUsed()
+
+	if err := SerializeStackValue(builder, []any{struct{}{}}); err == nil {
+		t.Fatal("tuple with unsupported element serialized successfully")
+	}
+	if builder.BitsUsed() != bitsBefore || builder.RefsUsed() != refsBefore {
+		t.Fatalf("destination changed from (%d bits, %d refs) to (%d bits, %d refs)",
+			bitsBefore, refsBefore, builder.BitsUsed(), builder.RefsUsed())
+	}
+}
+
+func TestSerializeStackValueCapacityFailureMatchesReference(t *testing.T) {
+	large := new(big.Int).Lsh(big.NewInt(1), 64)
+	tests := []struct {
+		name     string
+		prefix   uint
+		value    any
+		wantBits uint
+	}{
+		{name: "null tag", prefix: 1016, value: nil, wantBits: 1016},
+		{name: "nan tag", prefix: 1008, value: StackNaN{}, wantBits: 1008},
+		{name: "tiny integer payload", prefix: 952, value: int64(1), wantBits: 960},
+		{name: "large integer payload", prefix: 752, value: large, wantBits: 767},
+		{name: "cell tag", prefix: 1016, value: cell.BeginCell().EndCell(), wantBits: 1016},
+		{name: "slice tag", prefix: 1016, value: cell.BeginCell().EndCell().MustBeginParse(), wantBits: 1016},
+		{name: "builder tag", prefix: 1016, value: cell.BeginCell(), wantBits: 1016},
+		{name: "continuation tag", prefix: 1016, value: &vm.ExcQuitContinuation{}, wantBits: 1016},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := cell.BeginCell()
+			if err := builder.StoreSlice(make([]byte, (test.prefix+7)/8), test.prefix); err != nil {
+				t.Fatalf("store prefix: %v", err)
+			}
+
+			if err := SerializeStackValue(builder, test.value); err == nil {
+				t.Fatal("capacity-limited value serialized successfully")
+			}
+			if got := builder.BitsUsed(); got != test.wantBits {
+				t.Fatalf("bits after failure = %d, want %d", got, test.wantBits)
+			}
+		})
+	}
+}
+
+func BenchmarkSerializeStackValueTinyInt(b *testing.B) {
+	b.ReportAllocs()
+	builder := new(cell.Builder)
+
+	for b.Loop() {
+		*builder = cell.Builder{}
+		if err := SerializeStackValue(builder, int64(1)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestSerializeTypedNullStackValuesFailsWithoutPanic(t *testing.T) {
+	var nilCell *cell.Cell
+	var nilBuilder *cell.Builder
+	var nilSlice *cell.Slice
+	continuationStack := vm.NewStack()
+	if err := continuationStack.PushContinuation(nil); err != nil {
+		t.Fatalf("push null continuation: %v", err)
+	}
+	nilContinuation, err := continuationStack.PopAny()
+	if err != nil {
+		t.Fatalf("pop null continuation: %v", err)
+	}
+
+	for _, test := range []struct {
+		name  string
+		value any
+	}{
+		{name: "cell", value: nilCell},
+		{name: "builder", value: nilBuilder},
+		{name: "slice", value: nilSlice},
+		{name: "continuation", value: nilContinuation},
+		{name: "tuple", value: tuple.Tuple{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := SerializeStackValue(cell.BeginCell(), test.value); err == nil {
+				t.Fatal("typed null stack value serialized successfully")
+			}
+		})
+	}
+}
+
+func TestSerializeZeroStackSliceRejectsMissingBaseCell(t *testing.T) {
+	builder := cell.BeginCell()
+	if err := SerializeStackValue(builder, new(cell.Slice)); err == nil {
+		t.Fatal("zero stack slice serialized successfully")
+	}
+	if builder.BitsUsed() != 8 || builder.RefsUsed() != 0 {
+		t.Fatalf("serialized prefix = %d bits, %d refs, want C++ failure after 8-bit tag", builder.BitsUsed(), builder.RefsUsed())
+	}
+}
+
+func TestSerializeStackTupleCellDepthBoundary(t *testing.T) {
+	atLimit := make([]any, maxStackDepth+1)
+	builder := cell.BeginCell()
+	if err := SerializeStackValue(builder, atLimit); err != nil {
+		t.Fatalf("serialize tuple at cell depth limit: %v", err)
+	}
+	encoded := builder.EndCell()
+	if encoded.Depth() != maxStackDepth {
+		t.Fatalf("tuple cell depth = %d, want %d", encoded.Depth(), maxStackDepth)
+	}
+	parsed, err := ParseStackValue(encoded.MustBeginParse())
+	if err != nil {
+		t.Fatalf("parse tuple at cell depth limit: %v", err)
+	}
+	if len(parsed.([]any)) != len(atLimit) {
+		t.Fatalf("parsed tuple length = %d, want %d", len(parsed.([]any)), len(atLimit))
+	}
+
+	overLimit := make([]any, maxStackDepth+2)
+	if err = SerializeStackValue(cell.BeginCell(), overLimit); !errors.Is(err, cell.ErrCellDepthLimit) {
+		t.Fatalf("tuple above cell depth limit error = %v, want %v", err, cell.ErrCellDepthLimit)
+	}
+}
+
+func TestStackLoadFailureClearsExistingStack(t *testing.T) {
+	stack := NewStack()
+	stack.Push(int64(1))
+
+	malformed := cell.BeginCell().MustStoreUInt(1, 24).EndCell()
+	if err := stack.LoadFromCell(malformed.MustBeginParse()); err == nil {
+		t.Fatal("malformed stack parsed successfully")
+	}
+	if stack.Depth() != 0 {
+		t.Fatalf("stack depth after failed load = %d, want 0", stack.Depth())
 	}
 }
 

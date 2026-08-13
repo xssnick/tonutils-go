@@ -14,8 +14,8 @@ import (
 func buildLayoutMessageCell(t *testing.T, withInit, initInRef, bodyInRef bool) (*cell.Cell, *tlb.InternalMessage) {
 	t.Helper()
 
-	src := address.MustParseRawAddr("0:" + "11"+"00000000000000000000000000000000000000000000000000000000000000"[:62])
-	dst := address.MustParseRawAddr("0:" + "22"+"00000000000000000000000000000000000000000000000000000000000000"[:62])
+	src := address.MustParseRawAddr("0:" + "11" + "00000000000000000000000000000000000000000000000000000000000000"[:62])
+	dst := address.MustParseRawAddr("0:" + "22" + "00000000000000000000000000000000000000000000000000000000000000"[:62])
 
 	body := cell.BeginCell().MustStoreUInt(0, 32).MustStoreStringSnake("hi").EndCell()
 
@@ -145,7 +145,7 @@ func TestPrepareParsedMessageRejectsDivergentParsedForm(t *testing.T) {
 		{
 			name: "src_addr",
 			mutate: func(m *tlb.InternalMessage) {
-				m.SrcAddr = address.MustParseRawAddr("0:" + "33"+"00000000000000000000000000000000000000000000000000000000000000"[:62])
+				m.SrcAddr = address.MustParseRawAddr("0:" + "33" + "00000000000000000000000000000000000000000000000000000000000000"[:62])
 			},
 		},
 		{

@@ -407,6 +407,7 @@ func cloneBroadcastInfo(info BroadcastInfo) BroadcastInfo {
 	return BroadcastInfo{
 		SourceID:        append([]byte(nil), info.SourceID...),
 		SourceKey:       append(ed25519.PublicKey(nil), info.SourceKey...),
+		SourceADNL:      append([]byte(nil), info.SourceADNL...),
 		ImmediatePeerID: append([]byte(nil), info.ImmediatePeerID...),
 		Trusted:         info.Trusted,
 		OverlayID:       append([]byte(nil), info.OverlayID...),
@@ -422,6 +423,7 @@ func cloneBroadcastPrecheckInfo(info BroadcastPrecheckInfo) BroadcastPrecheckInf
 	return BroadcastPrecheckInfo{
 		SourceID:         append([]byte(nil), info.SourceID...),
 		SourceKey:        append(ed25519.PublicKey(nil), info.SourceKey...),
+		SourceADNL:       append([]byte(nil), info.SourceADNL...),
 		ImmediatePeerID:  append([]byte(nil), info.ImmediatePeerID...),
 		Trusted:          info.Trusted,
 		OverlayID:        append([]byte(nil), info.OverlayID...),
@@ -432,10 +434,11 @@ func cloneBroadcastPrecheckInfo(info BroadcastPrecheckInfo) BroadcastPrecheckInf
 	}
 }
 
-func (a *ADNLOverlayWrapper) twoStepPrecheckInfo(sourceID []byte, sourceKey ed25519.PublicKey, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery, signatureChecked bool) BroadcastPrecheckInfo {
+func (a *ADNLOverlayWrapper) twoStepPrecheckInfo(sourceID []byte, sourceKey ed25519.PublicKey, sourceADNL, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery, signatureChecked bool) BroadcastPrecheckInfo {
 	return BroadcastPrecheckInfo{
 		SourceID:         sourceID,
 		SourceKey:        sourceKey,
+		SourceADNL:       sourceADNL,
 		ImmediatePeerID:  immediatePeerID,
 		Trusted:          trusted,
 		OverlayID:        a.overlayId,
@@ -446,10 +449,11 @@ func (a *ADNLOverlayWrapper) twoStepPrecheckInfo(sourceID []byte, sourceKey ed25
 	}
 }
 
-func (a *ADNLOverlayWrapper) twoStepBroadcastInfo(sourceID []byte, sourceKey ed25519.PublicKey, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery) BroadcastInfo {
+func (a *ADNLOverlayWrapper) twoStepBroadcastInfo(sourceID []byte, sourceKey ed25519.PublicKey, sourceADNL, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery) BroadcastInfo {
 	return BroadcastInfo{
 		SourceID:        sourceID,
 		SourceKey:       sourceKey,
+		SourceADNL:      sourceADNL,
 		ImmediatePeerID: immediatePeerID,
 		Trusted:         trusted,
 		OverlayID:       a.overlayId,
@@ -543,7 +547,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimpleAdmission(
 	}
 
 	trusted := checkRes == CertCheckResultTrusted
-	precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple, false)
+	precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple, false)
 	if err = a.runBroadcastPrecheck(precheck); err != nil {
 		return fmt.Errorf("two-step broadcast precheck failed: %w", err)
 	}
@@ -566,7 +570,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimpleAdmission(
 		rebroadcastErr = a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
 	}
 
-	info := a.twoStepBroadcastInfo(sourceID, sourceKey, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple)
+	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple)
 	info.Payload = t.Data
 	delivery := a.deliverTwoStepBroadcast(t.Data, info)
 	disposition = delivery.disposition
@@ -651,7 +655,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		}
 
 		trusted = checkRes == CertCheckResultTrusted
-		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, false)
+		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, false)
 		if err = a.runBroadcastPrecheck(precheck); err != nil {
 			return twoStepFECPartResult{err: fmt.Errorf("two-step broadcast precheck failed: %w", err)}
 		}
@@ -663,7 +667,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 	}
 
 	if checkedNewStream {
-		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, true)
+		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, true)
 		if err := a.runBroadcastPrecheck(precheck); err != nil {
 			return twoStepFECPartResult{err: fmt.Errorf("two-step broadcast precheck failed: %w", err)}
 		}
@@ -820,7 +824,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		return twoStepFECPartResult{err: rebroadcastErr}
 	}
 
-	info := a.twoStepBroadcastInfo(sourceID, sourceKey, srcPeerID, deliverTrusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC)
+	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, deliverTrusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC)
 	info.DecodeTime = decodeTime
 	info.Payload = decodedData
 	delivery := a.deliverTwoStepBroadcast(decodedData, info)

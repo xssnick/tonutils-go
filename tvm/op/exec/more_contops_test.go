@@ -195,7 +195,7 @@ func TestSETCONTCTRMANYVersionAndMaskChecks(t *testing.T) {
 		vmErr vmerr.VMError
 	)
 
-	if got := SETCONTCTRMANY(1).MinGlobalVersion(); got != 9 {
+	if got := SETCONTCTRMANY(1).(vm.VersionedOp).MinGlobalVersion(); got != 9 {
 		t.Fatalf("SETCONTCTRMANY min global version = %d, want 9", got)
 	}
 	if got := SETCONTCTRMANYX().MinGlobalVersion(); got != 9 {

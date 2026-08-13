@@ -83,8 +83,10 @@ func TestVirtualizationErrorsBypassC2(t *testing.T) {
 	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeVirtualization {
 		t.Fatalf("unexpected virtualization error code: %v (ok=%v), err=%v", code, ok, err)
 	}
-	if exitCode != vmerr.CodeVirtualization {
-		t.Fatalf("unexpected virtualization exit code: %d", exitCode)
+	// the uncatchable abort is reported inverted, matching the -14 convention
+	// used for unhandled out-of-gas
+	if exitCode != ^int64(vmerr.CodeVirtualization) {
+		t.Fatalf("unexpected virtualization exit code: %d, want %d", exitCode, ^int64(vmerr.CodeVirtualization))
 	}
 }
 

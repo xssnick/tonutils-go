@@ -6,12 +6,22 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
+// text names the entry without decoding anything, for a caller that only wants
+// to know which opcode sits at a prefix. Walking the table by name is something
+// only tests do, so it lives next to its user instead of in the dispatcher.
+func (e *dispatchEntry) text() string {
+	if e.arg != nil {
+		return e.arg.SerializeArgsText(0)
+	}
+	return e.get().SerializeText()
+}
+
 func markRegistered(node *trieNode, want map[string]bool) {
 	if node == nil {
 		return
 	}
 	if node.op != nil {
-		name := node.op().SerializeText()
+		name := node.op.text()
 		if _, ok := want[name]; ok {
 			want[name] = true
 		}

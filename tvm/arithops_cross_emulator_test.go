@@ -21,7 +21,6 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
-
 	maxTVMInt := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 	minTVMInt := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
@@ -1074,6 +1073,7 @@ func runArithParityCases(t *testing.T, tests []arithParityCase) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(referenceRawRunGlobalVersion)))
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1099,7 +1099,7 @@ func runArithParityCases(t *testing.T, tests []arithParityCase) {
 				assertArithSkippedGoStack(t, goRes.stack, tt.goStack)
 				t.Skip(tt.skipReference)
 			}
-			refRes, err := runReferenceCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, refStack)
+			refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
 			if err != nil {
 				t.Fatalf("reference tvm execution failed: %v", err)
 			}

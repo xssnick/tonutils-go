@@ -156,6 +156,7 @@ type FECBroadcastStats struct {
 type BroadcastInfo struct {
 	SourceID        []byte
 	SourceKey       ed25519.PublicKey
+	SourceADNL      []byte
 	ImmediatePeerID []byte
 	Trusted         bool
 	OverlayID       []byte
@@ -180,6 +181,7 @@ type BroadcastInfo struct {
 type BroadcastPrecheckInfo struct {
 	SourceID         []byte
 	SourceKey        ed25519.PublicKey
+	SourceADNL       []byte
 	ImmediatePeerID  []byte
 	Trusted          bool
 	OverlayID        []byte

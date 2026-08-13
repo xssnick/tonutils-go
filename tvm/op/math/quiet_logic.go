@@ -16,10 +16,9 @@ func init() {
 		func() vm.OP { return QXOR() },
 		func() vm.OP { return QLSHIFT() },
 		func() vm.OP { return QRSHIFT() },
-		func() vm.OP { return QLSHIFTCODE(1) },
-		func() vm.OP { return QRSHIFTCODE(1) },
 		func() vm.OP { return QPOW2() },
 	)
+	vm.ArgList = append(vm.ArgList, qlshiftCodeOp, qrshiftCodeOp)
 }
 
 func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.SimpleOP {
@@ -60,11 +59,11 @@ func quietShiftOp(name string, prefix helpers.BitPrefix, right bool) *helpers.Si
 	}
 }
 
-func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int, right bool) *helpers.AdvancedOP {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
+func quietShiftCodeOp(name string, prefix helpers.BitPrefix, right bool) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(prefix),
+		ArgBits:  8,
+		Action: func(state *vm.State, args uint64) error {
 			if err := checkStackDepth(state, 1); err != nil {
 				return err
 			}
@@ -72,25 +71,23 @@ func quietShiftCodeOp(name string, prefix helpers.BitPrefix, value int, right bo
 			if err != nil {
 				return err
 			}
+			shift := uint64(bytePlusOneValue(args))
 			if x == nil {
-				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, uint64(imm()), right), true)
+				return pushMaybeInt(state, legacyShiftNaNResultThreshold(state.GlobalVersion, 14, shift, right), true)
 			}
 
 			var res *big.Int
 			if right {
-				res = new(big.Int).Rsh(x, uint(imm()))
+				res = new(big.Int).Rsh(x, uint(shift))
 			} else {
-				res = leftShiftResult(x, uint64(imm()))
+				res = leftShiftResult(x, shift)
 			}
 			return pushMaybeInt(state, res, true)
 		},
-		BitPrefix:       prefix,
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d %s", imm(), name)
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%d %s", bytePlusOneValue(args), name)
 		},
-		DeserializeSuffix: deserializeImmediate,
-	}
+	})
 }
 
 func QAND() *helpers.SimpleOP {
@@ -175,12 +172,17 @@ func QRSHIFT() *helpers.SimpleOP {
 	return quietShiftOp("QRSHIFT", helpers.BytesPrefix(0xB7, 0xAD), true)
 }
 
-func QLSHIFTCODE(value int) *helpers.AdvancedOP {
-	return quietShiftCodeOp("QLSHIFT#", helpers.BytesPrefix(0xB7, 0xAA), value, false)
+var (
+	qlshiftCodeOp = quietShiftCodeOp("QLSHIFT#", helpers.BytesPrefix(0xB7, 0xAA), false)
+	qrshiftCodeOp = quietShiftCodeOp("QRSHIFT#", helpers.BytesPrefix(0xB7, 0xAB), true)
+)
+
+func QLSHIFTCODE(value int) vm.OP {
+	return vm.Bind(qlshiftCodeOp, bytePlusOneArg(value))
 }
 
-func QRSHIFTCODE(value int) *helpers.AdvancedOP {
-	return quietShiftCodeOp("QRSHIFT#", helpers.BytesPrefix(0xB7, 0xAB), value, true)
+func QRSHIFTCODE(value int) vm.OP {
+	return vm.Bind(qrshiftCodeOp, bytePlusOneArg(value))
 }
 
 func QPOW2() *helpers.SimpleOP {

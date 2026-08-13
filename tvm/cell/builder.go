@@ -86,6 +86,53 @@ func (b *Builder) EqualsCell(c *Cell) bool {
 	return true
 }
 
+// equalsSlice is EqualsCell against a window into an existing cell. A caller
+// that already holds the stored bits as a view uses it instead of cutting a
+// cell out of them just to have something to compare against. buf carries the
+// realigned stored bits; it belongs to the caller so the comparison itself
+// allocates nothing.
+func (b *Builder) equalsSlice(s *Slice, buf *[maxCellDataBytes]byte) bool {
+	if s == nil {
+		return false
+	}
+	if b.bitsSz != s.BitsLeft() || int(b.refsNum) != s.RefsNum() {
+		return false
+	}
+
+	if used := b.usedBytes(); used > 0 {
+		if err := s.PreloadSliceInto(buf[:], b.bitsSz); err != nil {
+			return false
+		}
+		last := used - 1
+		if !bytes.Equal(b.data[:last], buf[:last]) {
+			return false
+		}
+		// The trailing byte may carry unused low bits; compare only the
+		// significant ones, exactly as EqualsCell does.
+		mask := byte(0xFF)
+		if rem := b.bitsSz % 8; rem != 0 {
+			mask = byte(0xFF << (8 - rem))
+		}
+		if b.data[last]&mask != buf[last]&mask {
+			return false
+		}
+	}
+
+	for i, ref := range b.rawRefs() {
+		other, err := s.peekRefCellAt(i)
+		if err != nil || ref == nil || other == nil {
+			return false
+		}
+		if ref == other {
+			continue
+		}
+		if ref.HashKey() != other.HashKey() {
+			return false
+		}
+	}
+	return true
+}
+
 func validateCellRefDepthLimit(refs []*Cell) error {
 	for _, ref := range refs {
 		if ref.Depth() >= maxDepth {
@@ -867,10 +914,6 @@ func (b *Builder) storeMaybeRef(ref *Cell, checkDepth bool) error {
 		return b.StoreUInt(0, 1)
 	}
 
-	// Keep these checks before storing the presence bit, so the method is atomic.
-	if b.refsNum >= 4 {
-		return ErrTooMuchRefs
-	}
 	if b.bitsSz+1 >= 1024 {
 		return ErrNotFit1023
 	}
@@ -880,6 +923,11 @@ func (b *Builder) storeMaybeRef(ref *Cell, checkDepth bool) error {
 
 	if err := b.StoreUInt(1, 1); err != nil {
 		return err
+	}
+	// C++ store_maybe_ref commits the presence bit before attempting to store
+	// the reference. Preserve that failure-state behavior on ref overflow.
+	if b.refsNum >= 4 {
+		return ErrTooMuchRefs
 	}
 	b.refs[b.refsNum] = ref
 	b.refsNum++

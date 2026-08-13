@@ -3,7 +3,6 @@ package exec
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -11,7 +10,7 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return CALLCC() })
-	vm.List = append(vm.List, func() vm.OP { return CALLCCARGS(0, -1) })
+	vm.ArgList = append(vm.ArgList, callCCArgsOp)
 	vm.List = append(vm.List, func() vm.OP { return CALLXVARARGS() })
 	vm.List = append(vm.List, func() vm.OP { return RETVARARGS() })
 	vm.List = append(vm.List, func() vm.OP { return CALLCCVARARGS() })
@@ -30,7 +29,7 @@ func CALLCC() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = state.Stack.PushContinuation(cc); err != nil {
+			if err = state.Stack.PushOwnedContinuation(cc); err != nil {
 				return err
 			}
 
@@ -41,46 +40,44 @@ func CALLCC() *helpers.SimpleOP {
 	}
 }
 
-func CALLCCARGS(params, retvals int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			if state.Stack.Len() < params+1 {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
+var callCCArgsPrefix = helpers.BytesPrefix(0xDB, 0x36)
 
-			cont, err := state.Stack.PopContinuation()
-			if err != nil {
-				return err
-			}
+var callCCArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(callCCArgsPrefix),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		params, retvals := unpackArgPair(args)
 
-			cc, err := state.ExtractCurrentContinuation(3, params, retvals)
-			if err != nil {
-				return err
-			}
+		if state.Stack.Len() < params+1 {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
 
-			if err = state.Stack.PushContinuation(cc); err != nil {
-				return err
-			}
+		cont, err := state.Stack.PopContinuation()
+		if err != nil {
+			return err
+		}
 
-			return state.Jump(cont)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("CALLCCARGS %d,%d", params, retvals)
-		},
-		BitPrefix: helpers.BytesPrefix(0xDB, 0x36),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(encodeCopyMore(params, retvals), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			params, retvals = parseCopyMore(val)
-			return nil
-		},
-	}
+		cc, err := state.ExtractCurrentContinuation(3, params, retvals)
+		if err != nil {
+			return err
+		}
+
+		if err = state.Stack.PushOwnedContinuation(cc); err != nil {
+			return err
+		}
+
+		return state.Jump(cont)
+	},
+	Decode:     decodeCopyMore(callCCArgsPrefix.Bits),
+	Serializer: serializeCopyMore(callCCArgsPrefix),
+	Name: func(args uint64) string {
+		params, retvals := unpackArgPair(args)
+		return fmt.Sprintf("CALLCCARGS %d,%d", params, retvals)
+	},
+})
+
+func CALLCCARGS(params, retvals int) vm.OP {
+	return vm.Bind(callCCArgsOp, packArgPair(params, retvals))
 }
 
 func CALLXVARARGS() *helpers.SimpleOP {
@@ -158,7 +155,7 @@ func CALLCCVARARGS() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = state.Stack.PushContinuation(cc); err != nil {
+			if err = state.Stack.PushOwnedContinuation(cc); err != nil {
 				return err
 			}
 

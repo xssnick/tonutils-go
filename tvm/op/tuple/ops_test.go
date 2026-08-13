@@ -4,9 +4,11 @@ import (
 	"math/big"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func newState() *vm.State {
@@ -101,6 +103,84 @@ func TestIsNullDoesNotTreatNaNAsNull(t *testing.T) {
 	}
 	if boolVal {
 		t.Fatalf("expected false from ISNULL on NaN")
+	}
+}
+
+func TestIsNullDoesNotTreatTypedNullReferencesAsNull(t *testing.T) {
+	var nilCell *cell.Cell
+	var nilBuilder *cell.Builder
+	var nilSlice *cell.Slice
+
+	for _, test := range []struct {
+		name string
+		push func(*vm.Stack) error
+	}{
+		{name: "cell", push: func(s *vm.Stack) error { return s.PushCell(nilCell) }},
+		{name: "builder", push: func(s *vm.Stack) error { return s.PushBuilder(nilBuilder) }},
+		{name: "slice", push: func(s *vm.Stack) error { return s.PushSlice(nilSlice) }},
+		{name: "continuation", push: func(s *vm.Stack) error { return s.PushContinuation(nil) }},
+		{name: "tuple", push: func(s *vm.Stack) error { return s.PushTuple(tuplepkg.Tuple{}) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := newState()
+			if err := test.push(state.Stack); err != nil {
+				t.Fatalf("push typed null reference: %v", err)
+			}
+			if err := ISNULL().Interpret(state); err != nil {
+				t.Fatalf("ISNULL failed: %v", err)
+			}
+			got, err := state.Stack.PopBool()
+			if err != nil {
+				t.Fatalf("pop ISNULL result: %v", err)
+			}
+			if got {
+				t.Fatal("ISNULL returned true for typed null reference")
+			}
+		})
+	}
+}
+
+func TestTypedNullTupleOpcodeBoundaries(t *testing.T) {
+	t.Run("ISTUPLE", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushTuple(tuplepkg.Tuple{}); err != nil {
+			t.Fatalf("push typed null tuple: %v", err)
+		}
+		if err := ISTUPLE().Interpret(state); err != nil {
+			t.Fatalf("ISTUPLE failed: %v", err)
+		}
+		got, err := state.Stack.PopBool()
+		if err != nil {
+			t.Fatalf("pop ISTUPLE result: %v", err)
+		}
+		if !got {
+			t.Fatal("ISTUPLE returned false for typed null tuple")
+		}
+	})
+
+	t.Run("TLEN", func(t *testing.T) {
+		state := newState()
+		if err := state.Stack.PushTuple(tuplepkg.Tuple{}); err != nil {
+			t.Fatalf("push typed null tuple: %v", err)
+		}
+		assertTupleVMError(t, TLEN().Interpret(state), vmerr.CodeTypeCheck)
+	})
+
+	for _, test := range []struct {
+		name string
+		op   vm.OP
+	}{
+		{name: "INDEX2", op: INDEX2(0, 0)},
+		{name: "INDEX3", op: INDEX3(0, 0, 0)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			state := newState()
+			outer := tuplepkg.NewTupleValue(tuplepkg.Tuple{})
+			if err := state.Stack.PushTuple(outer); err != nil {
+				t.Fatalf("push tuple with typed null intermediate: %v", err)
+			}
+			assertTupleVMError(t, test.op.Interpret(state), vmerr.CodeTypeCheck)
+		})
 	}
 }
 

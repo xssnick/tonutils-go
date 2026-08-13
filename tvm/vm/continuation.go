@@ -11,6 +11,59 @@ type Continuation interface {
 	Copy() Continuation
 }
 
+// nullContinuation represents a t_vmcont stack entry holding a null reference.
+// It is distinct from the TVM null value and must never be executed.
+type nullContinuation struct{}
+
+var nullContinuationValue Continuation = &nullContinuation{}
+
+func (*nullContinuation) GetControlData() *ControlData {
+	return nil
+}
+
+func (*nullContinuation) Jump(*State) (Continuation, error) {
+	return nil, vmerr.Error(vmerr.CodeTypeCheck, "null continuation")
+}
+
+func (*nullContinuation) Copy() Continuation {
+	return nullContinuationValue
+}
+
+func (*nullContinuation) String() string {
+	return "null"
+}
+
+// nilContinuation lets a continuation answer for itself whether its receiver is
+// a typed nil, keeping IsNullContinuation off the reflection path for every
+// continuation defined here (Register.AdjustWith calls it four times per jump).
+type nilContinuation interface {
+	isNilContinuation() bool
+}
+
+// IsNullContinuation reports whether cont holds a null continuation reference.
+// Built-in VM continuations stay on a reflection-free path; the fallback keeps
+// the exported host boundary correct for custom typed-nil implementations.
+func IsNullContinuation(cont Continuation) bool {
+	if cont == nil {
+		return true
+	}
+	if n, ok := cont.(nilContinuation); ok {
+		return n.isNilContinuation()
+	}
+	return isNilContinuationValue(cont)
+}
+
+func (*nullContinuation) isNilContinuation() bool       { return true }
+func (c *OrdinaryContinuation) isNilContinuation() bool { return c == nil }
+func (c *ArgExtContinuation) isNilContinuation() bool   { return c == nil }
+func (c *QuitContinuation) isNilContinuation() bool     { return c == nil }
+func (c *ExcQuitContinuation) isNilContinuation() bool  { return c == nil }
+func (c *PushIntContinuation) isNilContinuation() bool  { return c == nil }
+func (c *RepeatContinuation) isNilContinuation() bool   { return c == nil }
+func (c *AgainContinuation) isNilContinuation() bool    { return c == nil }
+func (c *WhileContinuation) isNilContinuation() bool    { return c == nil }
+func (c *UntilContinuation) isNilContinuation() bool    { return c == nil }
+
 type QuitContinuation struct {
 	ExitCode int64
 }
@@ -20,6 +73,7 @@ var (
 	quitCont0       = &QuitContinuation{ExitCode: 0}
 	quitCont1       = &QuitContinuation{ExitCode: 1}
 	quitContUnknown = &QuitContinuation{ExitCode: vmerr.CodeUnknown}
+	handledErrors   = makeHandledErrors()
 )
 
 // quitContinuation returns a shared instance for hot exit codes;
@@ -39,7 +93,11 @@ func (c *QuitContinuation) GetControlData() *ControlData {
 }
 
 func (c *QuitContinuation) Jump(state *State) (Continuation, error) {
-	return nil, vmerr.Err(c.ExitCode)
+	// Jumping into a quit continuation terminates the VM directly with the
+	// stored code: the stack is preserved, no exception gas is charged and c2
+	// is never involved, so the signal must not be routed through the
+	// exception path.
+	return nil, handledError(c.ExitCode)
 }
 
 func (c *QuitContinuation) Copy() Continuation {
@@ -52,6 +110,21 @@ type ExcQuitContinuation struct{}
 
 type HandledException struct {
 	vmerr.VMError
+}
+
+func makeHandledErrors() [16]error {
+	var out [16]error
+	for code := range out {
+		out[code] = HandledException{VMError: vmerr.Error(int64(code))}
+	}
+	return out
+}
+
+func handledError(code int64) error {
+	if code >= 0 && code < int64(len(handledErrors)) {
+		return handledErrors[code]
+	}
+	return HandledException{VMError: vmerr.Error(code)}
 }
 
 func (e HandledException) Error() string {
@@ -96,10 +169,10 @@ func (c *ExcQuitContinuation) Jump(state *State) (Continuation, error) {
 		if !ok {
 			code = vmerr.CodeFatal
 		}
-		return nil, HandledException{VMError: vmerr.Error(code)}
+		return nil, handledError(code)
 	}
 
-	return nil, HandledException{VMError: vmerr.Error(v.Int64())}
+	return nil, handledError(v.Int64())
 }
 
 func (c *ExcQuitContinuation) Copy() Continuation {
@@ -112,8 +185,8 @@ type OrdinaryContinuation struct {
 	Code *cell.Slice
 }
 
-func applyContinuationCodepage(state *State, cp int) error {
-	if cp == CP || cp == state.CP {
+func forceContinuationCodepage(state *State, cp int) error {
+	if cp == state.CP {
 		return nil
 	}
 	if cp != 0 {
@@ -123,6 +196,13 @@ func applyContinuationCodepage(state *State, cp int) error {
 	return nil
 }
 
+func applyContinuationCodepage(state *State, cp int) error {
+	if cp == CP {
+		return nil
+	}
+	return forceContinuationCodepage(state, cp)
+}
+
 func (c *OrdinaryContinuation) GetControlData() *ControlData {
 	return &c.Data
 }
@@ -130,7 +210,7 @@ func (c *OrdinaryContinuation) GetControlData() *ControlData {
 func (c *OrdinaryContinuation) Jump(state *State) (Continuation, error) {
 	state.Reg.AdjustWith(&c.Data.Save)
 	state.adoptCurrentCode(c.Code)
-	if err := applyContinuationCodepage(state, c.Data.CP); err != nil {
+	if err := forceContinuationCodepage(state, c.Data.CP); err != nil {
 		return nil, err
 	}
 	return nil, nil
@@ -229,7 +309,7 @@ func (c *RepeatContinuation) Jump(state *State) (Continuation, error) {
 		state.Tracef("iteration REPEAT %d", c.Count)
 	}
 
-	if cd := c.Body.GetControlData(); cd != nil && cd.Save.C[0] != nil {
+	if cd := c.Body.GetControlData(); cd != nil && !IsNullContinuation(cd.Save.C[0]) {
 		return c.Body, nil
 	}
 
@@ -259,7 +339,7 @@ func (c *AgainContinuation) GetControlData() *ControlData {
 }
 
 func (c *AgainContinuation) Jump(state *State) (Continuation, error) {
-	if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+	if cd := c.Body.GetControlData(); cd == nil || IsNullContinuation(cd.Save.C[0]) {
 		state.Reg.C[0] = c.Copy()
 	}
 	return c.Body, nil
@@ -299,14 +379,14 @@ func (c *WhileContinuation) Jump(state *State) (Continuation, error) {
 			return c.After, nil
 		}
 
-		if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+		if cd := c.Body.GetControlData(); cd == nil || IsNullContinuation(cd.Save.C[0]) {
 			state.Reg.C[0] = c.flipped()
 		}
 
 		return c.Body, nil
 	}
 
-	if cd := c.Cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+	if cd := c.Cond.GetControlData(); cd == nil || IsNullContinuation(cd.Save.C[0]) {
 		state.Reg.C[0] = c.flipped()
 	}
 
@@ -359,7 +439,7 @@ func (c *UntilContinuation) Jump(state *State) (Continuation, error) {
 		return c.After, nil
 	}
 
-	if cd := c.Body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+	if cd := c.Body.GetControlData(); cd == nil || IsNullContinuation(cd.Save.C[0]) {
 		state.Reg.C[0] = c
 	}
 

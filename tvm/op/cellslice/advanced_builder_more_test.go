@@ -447,7 +447,7 @@ func TestAdvancedBuilderMetricsAndChecks(t *testing.T) {
 		if got := decodedImm.SerializeText(); got != "BCHKBITS 8" {
 			t.Fatalf("unexpected BCHKBITSIMM text: %q", got)
 		}
-		if got := decodedImm.InstructionBits(); got != 24 {
+		if got := cellSliceInstructionBits(t, decodedImm); got != 24 {
 			t.Fatalf("unexpected BCHKBITSIMM bits: %d", got)
 		}
 

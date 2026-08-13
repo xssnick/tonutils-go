@@ -271,6 +271,61 @@ func TestPrefixDictionary_DeleteMergesEdges(t *testing.T) {
 	}
 }
 
+func TestPrefixDictionary_DeleteResolvesSurvivorLibrary(t *testing.T) {
+	const keySize = 4
+
+	leftKey := mustPrefixKey(t, 0, 1)
+	rightKey := mustPrefixKey(t, 1, 1)
+	leftValue := mustPrefixValue(t, 0xa1, 8)
+	rightValue := mustPrefixValue(t, 0xb2, 8)
+
+	seed := NewPrefixDict(keySize)
+	if err := seed.Set(leftKey, leftValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Set(rightKey, rightValue); err != nil {
+		t.Fatal(err)
+	}
+
+	rootNode, err := parseFixedDictNode(seed.root, keySize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedSurvivor, err := rootNode.ref(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootWithLibrary, _, err := rootNode.cloneWithRef(1, libraryDictNode(t), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := newFixedDictCellResolver(resolvedSurvivor)
+	dict := (&PrefixDictionary{keySz: keySize, root: rootWithLibrary}).SetTrace(resolver.trace)
+	removed, err := dict.LoadValueAndDelete(leftKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, removed, 8); got != 0xa1 {
+		t.Fatalf("deleted value = %#x, want 0xa1", got)
+	}
+
+	expected := NewPrefixDict(keySize)
+	if err = expected.Set(rightKey, rightValue); err != nil {
+		t.Fatal(err)
+	}
+	if dict.root.HashKey() != expected.root.HashKey() {
+		t.Fatalf("merged root hash = %x, want %x", dict.root.HashKey(), expected.root.HashKey())
+	}
+	value, err := dict.LoadValue(rightKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustLoadTestValue(t, value, 8); got != 0xb2 {
+		t.Fatalf("surviving value = %#x, want 0xb2", got)
+	}
+}
+
 func TestLoadCell_LoadPrefixDictDefersMalformedForkValidation(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0, 2).MustStoreBoolBit(false).EndCell()
 

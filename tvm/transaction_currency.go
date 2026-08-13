@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"math/big"
 
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func transactionCoinsNano(coins *tlb.Coins) *big.Int {
@@ -14,6 +16,16 @@ func transactionCoinsNano(coins *tlb.Coins) *big.Int {
 		return nil
 	}
 	return coins.Nano()
+}
+
+// transactionCoinsNanoRef is the read-only sibling of transactionCoinsNano, for
+// operands that are compared, serialised or added into somebody else's
+// accumulator. The result MUST NOT be mutated.
+func transactionCoinsNanoRef(coins *tlb.Coins) *big.Int {
+	if coins == nil {
+		return nil
+	}
+	return coins.NanoRef()
 }
 
 func transactionCoinsPtr(nano *big.Int) *tlb.Coins {
@@ -24,11 +36,48 @@ func transactionCoinsPtr(nano *big.Int) *tlb.Coins {
 	return &coins
 }
 
+// transactionCoinsClonePtr is transactionCoinsPtr(transactionCoinsNano(coins))
+// with one copy instead of two: the intermediate the second copy was taken from
+// was itself freshly made and visible to nobody else.
+func transactionCoinsClonePtr(coins *tlb.Coins) *tlb.Coins {
+	if coins == nil {
+		return nil
+	}
+	nano := coins.NanoRef()
+	if nano.Sign() == 0 {
+		return nil
+	}
+	out := tlb.FromOwnedNanoTON(bigint.Set(nano))
+	return &out
+}
+
+// transactionBigOrZero returns a private copy the caller owns and may mutate in
+// place: transactionCurrencyBalance.copy feeds it straight into Add/Sub (see
+// transaction_currency.go add/sub and transaction_bounce.go), and
+// transactionSendActionFineFunds accumulates into its result. It therefore must
+// keep allocating; use transactionSharedBigOrZero for read-only c7 leaves.
 func transactionBigOrZero(v *big.Int) *big.Int {
 	if v == nil {
-		return big.NewInt(0)
+		return bigint.FromInt64(0)
 	}
-	return new(big.Int).Set(v)
+	return bigint.Set(v)
+}
+
+// transactionSharedBigOrZero is the read-only sibling of transactionBigOrZero
+// for values that are stored into a c7 tuple and never mutated. Small values
+// come from the VM's shared static pool; c7 leaves are only ever handed out by
+// tuple.Tuple.Index, which clones every *big.Int leaf, so a pooled instance
+// cannot reach an in-place mutation. The result MUST NOT be mutated.
+func transactionSharedBigOrZero(v *big.Int) *big.Int {
+	if v == nil {
+		return vm.StaticInt(0)
+	}
+	if v.IsInt64() {
+		if shared := vm.StaticInt(v.Int64()); shared != nil {
+			return shared
+		}
+	}
+	return bigint.Set(v)
 }
 
 func transactionCollectUsage(root *cell.Cell) (transactionUsage, error) {
@@ -102,10 +151,13 @@ func transactionAddUsage(a, b transactionUsage) transactionUsage {
 	}
 }
 
+// transactionZeroCurrencyBalance leaves extra nil rather than allocating an
+// empty map: every reader of extra (range, index, len, delete) treats a nil map
+// as empty, and add is the only writer — it materialises the map on demand.
+// copy already returned balances with a nil extra, so nil is not a new state.
 func transactionZeroCurrencyBalance() *transactionCurrencyBalance {
 	return &transactionCurrencyBalance{
-		grams: big.NewInt(0),
-		extra: map[uint32]*big.Int{},
+		grams: bigint.FromInt64(0),
 	}
 }
 
@@ -141,7 +193,7 @@ func (c *transactionCurrencyBalance) copy() *transactionCurrencyBalance {
 		out.extra = make(map[uint32]*big.Int, len(c.extra))
 		for id, amount := range c.extra {
 			if amount != nil {
-				out.extra[id] = new(big.Int).Set(amount)
+				out.extra[id] = bigint.Set(amount)
 			}
 		}
 	}
@@ -155,15 +207,15 @@ func (c *transactionCurrencyBalance) add(other *transactionCurrencyBalance) {
 	if other.grams != nil {
 		c.grams.Add(c.grams, other.grams)
 	}
-	if c.extra == nil {
-		c.extra = map[uint32]*big.Int{}
-	}
 	for id, amount := range other.extra {
 		if amount == nil || amount.Sign() == 0 {
 			continue
 		}
+		if c.extra == nil {
+			c.extra = make(map[uint32]*big.Int, len(other.extra))
+		}
 		if c.extra[id] == nil {
-			c.extra[id] = big.NewInt(0)
+			c.extra[id] = bigint.FromInt64(0)
 		}
 		c.extra[id].Add(c.extra[id], amount)
 	}
@@ -248,31 +300,50 @@ func (c *transactionCurrencyBalance) extraDict() (*cell.Dictionary, error) {
 	return transactionStoreExtraCurrencies(c.extra)
 }
 
+// transactionExtraDictAbsent reports a dictionary that carries no entries to
+// read at all, as opposed to one whose entries turn out to be unreadable.
+func transactionExtraDictAbsent(dict *cell.Dictionary) bool {
+	return dict == nil || dict.AsCell() == nil
+}
+
+// transactionLoadExtraCurrencies returns nil for a balance that carries no
+// extra currencies. Almost every currency balance in a block is grams-only, and
+// an empty map is a heap object per balance for nothing: readers cannot tell a
+// nil map from an empty one, and add materialises the map before writing.
 func transactionLoadExtraCurrencies(dict *cell.Dictionary) (map[uint32]*big.Int, error) {
-	if dict == nil || dict.IsEmpty() {
-		return map[uint32]*big.Int{}, nil
+	if transactionExtraDictAbsent(dict) {
+		return nil, nil
 	}
-	items, err := dict.LoadAll()
+	iterator, err := dict.Iterator(false, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 
-	out := make(map[uint32]*big.Int, len(items))
-	for _, item := range items {
-		key, err := item.Key.LoadUInt(32)
+	var out map[uint32]*big.Int
+	for iterator.Next() {
+		item := iterator.View()
+		keySlice := item.Key
+		key, err := keySlice.LoadUInt(32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load extra currency id: %w", err)
 		}
-		amount, err := item.Value.LoadVarUInt(32)
+		value := item.Value
+		amount, err := value.LoadVarUInt(32)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load extra currency amount: %w", err)
 		}
-		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+		if value.BitsLeft() != 0 || value.RefsNum() != 0 {
 			return nil, errors.New("extra currency amount has trailing data")
 		}
 		if amount.Sign() > 0 {
+			if out == nil {
+				out = make(map[uint32]*big.Int)
+			}
 			out[uint32(key)] = amount
 		}
+	}
+	if err = iterator.Err(); err != nil {
+		return nil, fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 	return out, nil
 }
@@ -296,7 +367,7 @@ func transactionStoreExtraCurrencies(extra map[uint32]*big.Int) (*cell.Dictionar
 			return nil, fmt.Errorf("failed to store extra currency %d amount: %w", id, err)
 		}
 		value := valueBuilder.EndCell()
-		if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(id)), value); err != nil {
+		if err := dict.SetIntKey(bigint.FromUint64(uint64(id)), value); err != nil {
 			return nil, fmt.Errorf("failed to store extra currency: %w", err)
 		}
 	}
@@ -338,6 +409,15 @@ func transactionCloneExtraCurrencies(dict *cell.Dictionary) (*cell.Dictionary, e
 }
 
 func transactionAddExtraCurrencies(a, b *cell.Dictionary) (*cell.Dictionary, error) {
+	// The overwhelmingly common case is two absent dictionaries, whose sum the
+	// long way round is two balances, two zero grams and a store that yields
+	// nil anyway. The test is the one transactionLoadExtraCurrencies itself
+	// uses for "nothing to read", so the shortcut cannot skip a parse that
+	// would have failed — transactionExtraDictIsEmpty would, because it reports
+	// a dictionary it could not parse as empty.
+	if transactionExtraDictAbsent(a) && transactionExtraDictAbsent(b) {
+		return nil, nil
+	}
 	left, err := transactionCurrencyFromParts(nil, a)
 	if err != nil {
 		return nil, err
@@ -367,12 +447,12 @@ func transactionCloneDictShallow(dict *cell.Dictionary) *cell.Dictionary {
 
 func transactionMinBig(a, b *big.Int) *big.Int {
 	if a == nil {
-		return big.NewInt(0)
+		return bigint.FromInt64(0)
 	}
 	if b == nil || a.Cmp(b) <= 0 {
-		return new(big.Int).Set(a)
+		return bigint.Set(a)
 	}
-	return new(big.Int).Set(b)
+	return bigint.Set(b)
 }
 
 func transactionNormalizeBits256(src []byte) []byte {

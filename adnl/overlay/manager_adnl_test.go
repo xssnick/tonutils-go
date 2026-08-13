@@ -297,10 +297,10 @@ func TestADNLManagerRoutesFECControlInternally(t *testing.T) {
 
 	unregister()
 	if err := w.customHandler(&adnl.MessageCustom{Data: FECCompleted{Hash: hash}}); err != nil {
-		t.Fatalf("root fallback failed: %v", err)
+		t.Fatalf("late control routing failed: %v", err)
 	}
-	if !rootCalled {
-		t.Fatalf("unregistered control should reach root handler")
+	if rootCalled {
+		t.Fatalf("late FEC control should stay inside overlay transport")
 	}
 }
 

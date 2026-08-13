@@ -33,7 +33,12 @@ type DictIterator struct {
 	keySz       uint
 	rev         bool
 	invertFirst bool
-	trace       *Trace
+	// lenientForkShape relaxes fork-node validation to the augmented-tree
+	// rules: extra bits after the label are legal. It is kept unpacked instead
+	// of as a whole dictWalk: an iterator resolves special nodes through its
+	// trace only, and a stored resolver would grow every iterator by a word.
+	lenientForkShape bool
+	trace            *Trace
 
 	stack   []dictIteratorFrame
 	prefix  Builder
@@ -75,20 +80,21 @@ const (
 
 type DictFilterFunc func(value *Slice, key *Cell) (DictFilterAction, error)
 
-func newDictIterator(root *Cell, keySz uint, rev, invertFirst bool, trace *Trace) (*DictIterator, error) {
+func newDictIterator(root *Cell, keySz uint, rev, invertFirst bool, walk dictWalk) (*DictIterator, error) {
 	it := &DictIterator{
-		root:        root,
-		keySz:       keySz,
-		rev:         rev,
-		invertFirst: invertFirst,
-		trace:       CombineTraces(root.Trace(), trace),
+		root:             root,
+		keySz:            keySz,
+		rev:              rev,
+		invertFirst:      invertFirst,
+		lenientForkShape: walk.lenient,
+		trace:            CombineTraces(root.Trace(), walk.trace),
 	}
 	if root == nil {
 		return it, nil
 	}
 
 	it.stack = make([]dictIteratorFrame, 0, min(int(keySz)+1, dictIteratorInitialStackDepth))
-	if err := it.push(it.root, keySz, true); err != nil {
+	if err := it.push(it.root, keySz, true, it.trace); err != nil {
 		return nil, err
 	}
 	return it, nil
@@ -153,7 +159,7 @@ func (it *DictIterator) Next() bool {
 			it.fail(err)
 			return false
 		}
-		if err = it.pushWithTrace(ref, frame.node.nextKeyBits(frame.remaining), false, childTrace); err != nil {
+		if err = it.push(ref, frame.node.nextKeyBits(frame.remaining), false, childTrace); err != nil {
 			it.fail(err)
 			return false
 		}
@@ -241,7 +247,7 @@ func (it *DictIterator) Reset() {
 	it.popNext = false
 	it.err = nil
 	if it.root != nil {
-		if err := it.push(it.root, it.keySz, true); err != nil {
+		if err := it.push(it.root, it.keySz, true, it.trace); err != nil {
 			it.err = err
 		}
 	}
@@ -257,16 +263,18 @@ func (it *DictIterator) Err() error {
 	return it.err
 }
 
-func (it *DictIterator) push(root *Cell, remaining uint, rootLevel bool) error {
-	return it.pushWithTrace(root, remaining, rootLevel, it.trace)
-}
-
-func (it *DictIterator) pushWithTrace(root *Cell, remaining uint, rootLevel bool, trace *Trace) error {
+func (it *DictIterator) push(root *Cell, remaining uint, rootLevel bool, trace *Trace) error {
 	node, err := parseFixedDictNodeWithTrace(root, remaining, trace)
 	if err != nil {
 		return err
 	}
+	if err = node.resolveIfSpecial(remaining, trace, nil); err != nil {
+		return err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return err
+	}
+	if err = node.validateForkShape(remaining, it.lenientForkShape); err != nil {
 		return err
 	}
 	return it.pushNode(node, remaining, rootLevel)
@@ -306,13 +314,14 @@ func (it *DictIterator) pushNode(node fixedDictNode, remaining uint, rootLevel b
 // <= target (< target). Keys preceding the position are skipped without their
 // subtrees being visited, so a positioned iterator loads the same cells a
 // LookupNearestKey descent would.
-func newDictIteratorAt(root *Cell, keySz uint, key *Cell, rev, invertFirst, allowEq bool, trace *Trace) (*DictIterator, error) {
+func newDictIteratorAt(root *Cell, keySz uint, key *Cell, rev, invertFirst, allowEq bool, walk dictWalk) (*DictIterator, error) {
 	it := &DictIterator{
-		root:        root,
-		keySz:       keySz,
-		rev:         rev,
-		invertFirst: invertFirst,
-		trace:       CombineTraces(root.Trace(), trace),
+		root:             root,
+		keySz:            keySz,
+		rev:              rev,
+		invertFirst:      invertFirst,
+		lenientForkShape: walk.lenient,
+		trace:            CombineTraces(root.Trace(), walk.trace),
 	}
 	if root == nil {
 		return it, nil
@@ -326,7 +335,7 @@ func newDictIteratorAt(root *Cell, keySz uint, key *Cell, rev, invertFirst, allo
 	if err := key.BeginParseInto(&target); err != nil {
 		return nil, fmt.Errorf("failed to load key: %w", err)
 	}
-	if err := it.push(it.root, keySz, true); err != nil {
+	if err := it.push(it.root, keySz, true, it.trace); err != nil {
 		return nil, err
 	}
 	if err := it.seekFromTop(&target, allowEq); err != nil {
@@ -401,7 +410,7 @@ func (it *DictIterator) seekFromTop(target *Slice, allowEq bool) error {
 		if err = it.prefix.StoreUInt(uint64(child), 1); err != nil {
 			return err
 		}
-		if err = it.pushWithTrace(ref, node.nextKeyBits(frame.remaining), false, childTrace); err != nil {
+		if err = it.push(ref, node.nextKeyBits(frame.remaining), false, childTrace); err != nil {
 			return err
 		}
 	}
@@ -525,15 +534,21 @@ func cellPrefix(key *Cell, bits uint) (*Cell, error) {
 	return prefix.EndCell(), nil
 }
 
-func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
+func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint, walk dictWalk) (*Cell, error) {
 	if root == nil || limit == 0 {
 		return BeginCell().EndCell(), nil
 	}
-	node, err := parseFixedDictNode(root, keySz)
+	node, err := parseFixedDictNodeWithTrace(root, keySz, root.Trace())
 	if err != nil {
 		return nil, err
 	}
+	if err = node.resolveIfSpecial(keySz, root.Trace(), walk.resolver); err != nil {
+		return nil, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, err
+	}
+	if err = node.validateForkShape(keySz, walk.lenient); err != nil {
 		return nil, err
 	}
 
@@ -549,7 +564,7 @@ func fixedDictCommonPrefix(root *Cell, keySz uint, limit uint) (*Cell, error) {
 	return pb.EndCell(), nil
 }
 
-func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error) {
+func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell, walk dictWalk) (bool, error) {
 	if root == nil || prefix == nil || prefix.BitsSize() == 0 {
 		return true, nil
 	}
@@ -557,23 +572,29 @@ func fixedDictHasCommonPrefix(root *Cell, keySz uint, prefix *Cell) (bool, error
 		return false, nil
 	}
 
-	common, err := fixedDictCommonPrefix(root, keySz, prefix.BitsSize())
+	common, err := fixedDictCommonPrefix(root, keySz, prefix.BitsSize(), walk)
 	if err != nil {
 		return false, err
 	}
 	return cellHasPrefix(common, prefix)
 }
 
-func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefix *Builder, rev bool, invertFirst bool, rootLevel bool) error {
+func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefix *Builder, rev bool, invertFirst bool, rootLevel bool, walk dictWalk) error {
 	if root == nil {
 		return nil
 	}
 
-	node, err := parseFixedDictNode(root, remaining)
+	node, err := parseFixedDictNodeWithTrace(root, remaining, root.Trace())
 	if err != nil {
 		return err
 	}
+	if err = node.resolveIfSpecial(remaining, root.Trace(), walk.resolver); err != nil {
+		return err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return err
+	}
+	if err = node.validateForkShape(remaining, walk.lenient); err != nil {
 		return err
 	}
 
@@ -610,7 +631,7 @@ func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefi
 	if err != nil {
 		return err
 	}
-	if err = appendFixedDictEntries(items, firstRef, nextRemaining, prefix.MustStoreUInt(uint64(first), 1), rev, invertFirst, false); err != nil {
+	if err = appendFixedDictEntries(items, firstRef, nextRemaining, prefix.MustStoreUInt(uint64(first), 1), rev, invertFirst, false, walk); err != nil {
 		return err
 	}
 	prefix.truncateBits(afterLabel)
@@ -619,26 +640,22 @@ func appendFixedDictEntries(items *[]DictItem, root *Cell, remaining uint, prefi
 	if err != nil {
 		return err
 	}
-	return appendFixedDictEntries(items, secondRef, nextRemaining, prefix.MustStoreUInt(uint64(second), 1), rev, invertFirst, false)
+	return appendFixedDictEntries(items, secondRef, nextRemaining, prefix.MustStoreUInt(uint64(second), 1), rev, invertFirst, false, walk)
 }
 
-func fixedDictRange(root *Cell, keySz uint, rev bool, invertFirst bool) ([]DictItem, error) {
+func fixedDictRange(root *Cell, keySz uint, rev bool, invertFirst bool, walk dictWalk) ([]DictItem, error) {
 	if root == nil {
 		return []DictItem{}, nil
 	}
 
 	items := make([]DictItem, 0)
-	if err := appendFixedDictEntries(&items, root, keySz, BeginCell(), rev, invertFirst, true); err != nil {
+	if err := appendFixedDictEntries(&items, root, keySz, BeginCell(), rev, invertFirst, true, walk); err != nil {
 		return nil, err
 	}
 	return items, nil
 }
 
-func fixedDictLookupNearest(root *Cell, keySz uint, key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
-	return fixedDictLookupNearestTraced(root, keySz, key, fetchNext, allowEq, invertFirst, nil)
-}
-
-func fixedDictLookupNearestTraced(root *Cell, keySz uint, key *Cell, fetchNext bool, allowEq bool, invertFirst bool, trace *Trace) (*Cell, *Slice, error) {
+func fixedDictLookupNearest(root *Cell, keySz uint, key *Cell, fetchNext bool, allowEq bool, invertFirst bool, walk dictWalk) (*Cell, *Slice, error) {
 	if root == nil {
 		return nil, nil, ErrNoSuchKeyInDict
 	}
@@ -650,10 +667,10 @@ func fixedDictLookupNearestTraced(root *Cell, keySz uint, key *Cell, fetchNext b
 	if err := key.BeginParseInto(&target); err != nil {
 		return nil, nil, fmt.Errorf("failed to load key: %w", err)
 	}
-	return fixedDictLookupNearestSliceTraced(root, keySz, &target, fetchNext, allowEq, invertFirst, trace)
+	return fixedDictLookupNearestSlice(root, keySz, &target, fetchNext, allowEq, invertFirst, walk)
 }
 
-func fixedDictLookupNearestSliceTraced(root *Cell, keySz uint, target *Slice, fetchNext bool, allowEq bool, invertFirst bool, trace *Trace) (*Cell, *Slice, error) {
+func fixedDictLookupNearestSlice(root *Cell, keySz uint, target *Slice, fetchNext bool, allowEq bool, invertFirst bool, walk dictWalk) (*Cell, *Slice, error) {
 	if root == nil {
 		return nil, nil, ErrNoSuchKeyInDict
 	}
@@ -661,7 +678,8 @@ func fixedDictLookupNearestSliceTraced(root *Cell, keySz uint, target *Slice, fe
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	item, ok, err := fixedDictLookupNearestNode(root, keySz, BeginCell(), target, fetchNext, allowEq, invertFirst, CombineTraces(root.Trace(), trace))
+	walk.trace = CombineTraces(root.Trace(), walk.trace)
+	item, ok, err := fixedDictLookupNearestNode(root, keySz, BeginCell(), target, fetchNext, allowEq, invertFirst, walk)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -671,18 +689,23 @@ func fixedDictLookupNearestSliceTraced(root *Cell, keySz uint, target *Slice, fe
 	return item.Key, item.Value, nil
 }
 
-func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, target *Slice, fetchNext bool, allowEq bool, invertFirst bool, trace *Trace) (DictItem, bool, error) {
+func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, target *Slice, fetchNext bool, allowEq bool, invertFirst bool, walk dictWalk) (DictItem, bool, error) {
 	saved := prefix.BitsUsed()
 	defer prefix.truncateBits(saved)
 
-	node, err := parseFixedDictNodeWithTrace(root, remaining, trace)
+	node, err := parseFixedDictNodeWithTrace(root, remaining, walk.trace)
 	if err != nil {
+		return DictItem{}, false, err
+	}
+	if err = node.resolveIfSpecial(remaining, walk.trace, walk.resolver); err != nil {
 		return DictItem{}, false, err
 	}
 	if err = node.rejectSpecial("dict"); err != nil {
 		return DictItem{}, false, err
 	}
-
+	if err = node.validateForkShape(remaining, walk.lenient); err != nil {
+		return DictItem{}, false, err
+	}
 	targetLabel := *target
 	if err = targetLabel.SkipBits(saved); err != nil {
 		return DictItem{}, false, err
@@ -705,10 +728,10 @@ func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, tar
 		bitOrder := fixedDictOrderBit(uint8(bit), pos, invertFirst)
 		targetOrder := fixedDictOrderBit(uint8(targetBit), pos, invertFirst)
 		if fetchNext && bitOrder > targetOrder {
-			return fixedDictBoundary(root, remaining, prefix, false, invertFirst, trace)
+			return fixedDictBoundary(root, remaining, prefix, false, invertFirst, walk)
 		}
 		if !fetchNext && bitOrder < targetOrder {
-			return fixedDictBoundary(root, remaining, prefix, true, invertFirst, trace)
+			return fixedDictBoundary(root, remaining, prefix, true, invertFirst, walk)
 		}
 		return DictItem{}, false, nil
 	}
@@ -741,7 +764,8 @@ func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, tar
 	if err = prefix.StoreUInt(uint64(targetBit), 1); err != nil {
 		return DictItem{}, false, err
 	}
-	item, ok, err := fixedDictLookupNearestNode(firstRef, nextRemaining, prefix, target, fetchNext, allowEq, invertFirst, firstTrace)
+	walk.trace = firstTrace
+	item, ok, err := fixedDictLookupNearestNode(firstRef, nextRemaining, prefix, target, fetchNext, allowEq, invertFirst, walk)
 	if err != nil || ok {
 		return item, ok, err
 	}
@@ -758,20 +782,27 @@ func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, tar
 		if err = prefix.StoreUInt(uint64(second), 1); err != nil {
 			return DictItem{}, false, err
 		}
-		return fixedDictBoundary(secondRef, nextRemaining, prefix, !fetchNext, invertFirst, secondTrace)
+		walk.trace = secondTrace
+		return fixedDictBoundary(secondRef, nextRemaining, prefix, !fetchNext, invertFirst, walk)
 	}
 	return DictItem{}, false, nil
 }
 
-func fixedDictBoundary(root *Cell, remaining uint, prefix *Builder, max bool, invertFirst bool, trace *Trace) (DictItem, bool, error) {
+func fixedDictBoundary(root *Cell, remaining uint, prefix *Builder, max bool, invertFirst bool, walk dictWalk) (DictItem, bool, error) {
 	saved := prefix.BitsUsed()
 	defer prefix.truncateBits(saved)
 
-	node, err := parseFixedDictNodeWithTrace(root, remaining, trace)
+	node, err := parseFixedDictNodeWithTrace(root, remaining, walk.trace)
 	if err != nil {
 		return DictItem{}, false, err
 	}
+	if err = node.resolveIfSpecial(remaining, walk.trace, walk.resolver); err != nil {
+		return DictItem{}, false, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return DictItem{}, false, err
+	}
+	if err = node.validateForkShape(remaining, walk.lenient); err != nil {
 		return DictItem{}, false, err
 	}
 
@@ -791,7 +822,8 @@ func fixedDictBoundary(root *Cell, remaining uint, prefix *Builder, max bool, in
 	if err = prefix.StoreUInt(uint64(refIdx), 1); err != nil {
 		return DictItem{}, false, err
 	}
-	return fixedDictBoundary(ref, node.nextKeyBits(remaining), prefix, max, invertFirst, childTrace)
+	walk.trace = childTrace
+	return fixedDictBoundary(ref, node.nextKeyBits(remaining), prefix, max, invertFirst, walk)
 }
 
 func fixedDictOrderBit(bit uint8, pos uint, invertFirst bool) uint8 {
@@ -838,16 +870,16 @@ type fixedDictFilterState struct {
 	changes    int
 	keepRest   bool
 	removeRest bool
-	trace      *Trace
+	walk       dictWalk
 }
 
-func fixedDictFilter(root *Cell, keySz uint, fn DictFilterFunc, trace *Trace) (*Cell, int, error) {
+func fixedDictFilter(root *Cell, keySz uint, fn DictFilterFunc, walk dictWalk) (*Cell, int, error) {
 	if root == nil || fn == nil {
 		return root, 0, nil
 	}
 
-	state := fixedDictFilterState{fn: fn, trace: trace}
-	filtered, _, err := filterFixedDictNode(root.withTraceCombined(trace), keySz, &state)
+	state := fixedDictFilterState{fn: fn, walk: walk}
+	filtered, _, err := filterFixedDictNode(root.withTraceCombined(walk.trace), keySz, &state)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -859,7 +891,7 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 		return root, false, nil
 	}
 	if state.removeRest {
-		count, err := countFixedDictLeaves(root, remaining)
+		count, err := countFixedDictLeavesResolved(root, remaining, state.walk)
 		if err != nil {
 			return nil, false, err
 		}
@@ -867,11 +899,17 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 		return nil, count != 0, nil
 	}
 
-	node, err := parseFixedDictNode(root, remaining)
+	node, err := parseFixedDictNodeWithTrace(root, remaining, root.Trace())
 	if err != nil {
 		return nil, false, err
 	}
+	if err = node.resolveIfSpecial(remaining, root.Trace(), state.walk.resolver); err != nil {
+		return nil, false, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return nil, false, err
+	}
+	if err = node.validateForkShape(remaining, state.walk.lenient); err != nil {
 		return nil, false, err
 	}
 
@@ -939,11 +977,11 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 		return nil, true, nil
 	}
 	if newLeft == nil {
-		merged, err := mergeFixedDictSurvivor(node, 1, newRight, remaining, state.trace)
+		merged, err := mergeFixedDictSurvivorResolved(node, 1, newRight, remaining, state.walk)
 		return merged, true, err
 	}
 	if newRight == nil {
-		merged, err := mergeFixedDictSurvivor(node, 0, newLeft, remaining, state.trace)
+		merged, err := mergeFixedDictSurvivorResolved(node, 0, newLeft, remaining, state.walk)
 		return merged, true, err
 	}
 
@@ -954,11 +992,11 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 			idx = 1
 			child = newRight
 		}
-		cloned, _, err := node.cloneWithRef(idx, child, state.trace)
+		cloned, _, err := node.cloneWithRef(idx, child, state.walk.trace)
 		return cloned, true, err
 	}
 
-	payload := BeginCell().SetTrace(state.trace)
+	payload := BeginCell().SetTrace(state.walk.trace)
 	if err = payload.StoreRefUncheckedDepth(newLeft); err != nil {
 		return nil, false, err
 	}
@@ -966,7 +1004,7 @@ func filterFixedDictNode(root *Cell, remaining uint, state *fixedDictFilterState
 		return nil, false, err
 	}
 	parentLabel := node.labelSlice()
-	rebuilt, err := storeDictNodeTraced(&parentLabel, payload, remaining, state.trace)
+	rebuilt, err := storeDictNodeTraced(&parentLabel, payload, remaining, state.walk.trace)
 	return rebuilt, true, err
 }
 
@@ -1076,12 +1114,58 @@ func countFixedDictLeaves(root *Cell, remaining uint) (int, error) {
 	return leftCount + rightCount, nil
 }
 
-func forEachPlainDictRefValue(branch *Cell, remaining uint, fn func(value *Cell) error) (int, error) {
-	node, err := parseFixedDictNode(branch, remaining)
+// countFixedDictLeavesResolved counts leaves like countFixedDictLeaves, but
+// resolves special nodes through the walk and validates every fork shape.
+func countFixedDictLeavesResolved(root *Cell, remaining uint, walk dictWalk) (int, error) {
+	node, err := parseFixedDictNodeWithTrace(root, remaining, root.Trace())
 	if err != nil {
 		return 0, err
 	}
+	if err = node.resolveIfSpecial(remaining, root.Trace(), walk.resolver); err != nil {
+		return 0, err
+	}
 	if err = node.rejectSpecial("dict"); err != nil {
+		return 0, err
+	}
+	if err = node.validateForkShape(remaining, walk.lenient); err != nil {
+		return 0, err
+	}
+	if node.isLeaf(remaining) {
+		return 1, nil
+	}
+
+	childRemaining := node.nextKeyBits(remaining)
+	left, err := node.ref(0)
+	if err != nil {
+		return 0, err
+	}
+	leftCount, err := countFixedDictLeavesResolved(left, childRemaining, walk)
+	if err != nil {
+		return 0, err
+	}
+	right, err := node.ref(1)
+	if err != nil {
+		return 0, err
+	}
+	rightCount, err := countFixedDictLeavesResolved(right, childRemaining, walk)
+	if err != nil {
+		return 0, err
+	}
+	return leftCount + rightCount, nil
+}
+
+func forEachPlainDictRefValue(branch *Cell, remaining uint, fn func(value *Cell) error, resolver DictSpecialResolver) (int, error) {
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
+	if err != nil {
+		return 0, err
+	}
+	if err = node.resolveIfSpecial(remaining, branch.Trace(), resolver); err != nil {
+		return 0, err
+	}
+	if err = node.rejectSpecial("dict"); err != nil {
+		return 0, err
+	}
+	if err = node.validateForkShape(remaining, false); err != nil {
 		return 0, err
 	}
 	if node.isLeaf(remaining) {
@@ -1109,7 +1193,7 @@ func forEachPlainDictRefValue(branch *Cell, remaining uint, fn func(value *Cell)
 	if err != nil {
 		return 0, err
 	}
-	leftCount, err := forEachPlainDictRefValue(left, childRemaining, fn)
+	leftCount, err := forEachPlainDictRefValue(left, childRemaining, fn, resolver)
 	if err != nil {
 		return 0, err
 	}
@@ -1117,7 +1201,7 @@ func forEachPlainDictRefValue(branch *Cell, remaining uint, fn func(value *Cell)
 	if err != nil {
 		return 0, err
 	}
-	rightCount, err := forEachPlainDictRefValue(right, childRemaining, fn)
+	rightCount, err := forEachPlainDictRefValue(right, childRemaining, fn, resolver)
 	if err != nil {
 		return 0, err
 	}
@@ -1133,9 +1217,33 @@ func mergeFixedDictSurvivor(parent fixedDictNode, edge uint64, survivor *Cell, r
 	if err = child.rejectSpecial("dict"); err != nil {
 		return nil, err
 	}
+	return mergeFixedDictSurvivorNode(parent, edge, child, remaining, trace)
+}
 
+// mergeFixedDictSurvivorResolved merges like mergeFixedDictSurvivor, but
+// resolves a special survivor through the walk and validates its fork shape.
+func mergeFixedDictSurvivorResolved(parent fixedDictNode, edge uint64, survivor *Cell, remaining uint, walk dictWalk) (*Cell, error) {
+	childRemaining := parent.nextKeyBits(remaining)
+	child, err := parseFixedDictNodeWithTrace(survivor, childRemaining, survivor.Trace())
+	if err != nil {
+		return nil, err
+	}
+	if err = child.resolveIfSpecial(childRemaining, survivor.Trace(), walk.resolver); err != nil {
+		return nil, err
+	}
+	if err = child.rejectSpecial("dict"); err != nil {
+		return nil, err
+	}
+	if err = child.validateForkShape(childRemaining, walk.lenient); err != nil {
+		return nil, err
+	}
+	return mergeFixedDictSurvivorNode(parent, edge, child, remaining, walk.trace)
+}
+
+func mergeFixedDictSurvivorNode(parent fixedDictNode, edge uint64, child fixedDictNode, remaining uint, trace *Trace) (*Cell, error) {
 	label := BeginCell()
 	parentLabel := parent.labelSlice()
+	var err error
 	if err = label.storeSliceFromSlice(&parentLabel, parent.labelLen); err != nil {
 		return nil, err
 	}
@@ -1152,26 +1260,26 @@ func mergeFixedDictSurvivor(parent fixedDictNode, edge uint64, survivor *Cell, r
 	return storeDictNodeTraced(builderSliceView(label), &payload, remaining, trace)
 }
 
-func extractPrefixSubdictRootTraced(root *Cell, keySz uint, prefix *Cell, removePrefix bool, trace *Trace) (*Cell, bool, error) {
+func extractPrefixSubdictRoot(root *Cell, keySz uint, prefix *Cell, removePrefix bool, walk dictWalk) (*Cell, bool, error) {
 	if root == nil {
 		return nil, false, nil
 	}
 
 	var prefixSlice Slice
 	if prefix == nil {
-		return extractPrefixSubdictRootSliceTraced(root, keySz, prefixSlice, removePrefix, trace, nil)
+		return extractPrefixSubdictRootSlice(root, keySz, prefixSlice, removePrefix, nil, walk)
 	}
 	if err := prefix.BeginParseInto(&prefixSlice); err != nil {
 		return nil, false, fmt.Errorf("failed to load prefix: %w", err)
 	}
-	return extractPrefixSubdictRootSliceTraced(root, keySz, prefixSlice, removePrefix, trace, prefix)
+	return extractPrefixSubdictRootSlice(root, keySz, prefixSlice, removePrefix, prefix, walk)
 }
 
-func extractPrefixSubdictRootSliceTraced(root *Cell, keySz uint, prefix Slice, removePrefix bool, trace *Trace, reloadPrefix *Cell) (*Cell, bool, error) {
+func extractPrefixSubdictRootSlice(root *Cell, keySz uint, prefix Slice, removePrefix bool, reloadPrefix *Cell, walk dictWalk) (*Cell, bool, error) {
 	if root == nil {
 		return nil, false, nil
 	}
-	root = root.withTraceCombined(trace)
+	root = root.withTraceCombined(walk.trace)
 
 	prefixLen := prefix.BitsLeft()
 	if prefixLen == 0 {
@@ -1189,11 +1297,17 @@ func extractPrefixSubdictRootSliceTraced(root *Cell, keySz uint, prefix Slice, r
 		if branch == nil {
 			return nil, true, nil
 		}
-		node, err := parseFixedDictNode(branch, keySz-consumed)
+		node, err := parseFixedDictNodeWithTrace(branch, keySz-consumed, branch.Trace())
 		if err != nil {
 			return nil, false, err
 		}
+		if err = node.resolveIfSpecial(keySz-consumed, branch.Trace(), walk.resolver); err != nil {
+			return nil, false, err
+		}
 		if err = node.rejectSpecial("dict"); err != nil {
+			return nil, false, err
+		}
+		if err = node.validateForkShape(keySz-consumed, walk.lenient); err != nil {
 			return nil, false, err
 		}
 
@@ -1248,7 +1362,7 @@ func extractPrefixSubdictRootSliceTraced(root *Cell, keySz uint, prefix Slice, r
 			}
 			var payload Builder
 			node.loader.ToBuilderInto(&payload)
-			subdict, err := storeDictNodeTraced(builderSliceView(combined), &payload, keySz, trace)
+			subdict, err := storeDictNodeTraced(builderSliceView(combined), &payload, keySz, walk.trace)
 			return subdict, true, err
 		}
 
@@ -1261,7 +1375,7 @@ func extractPrefixSubdictRootSliceTraced(root *Cell, keySz uint, prefix Slice, r
 		}
 		var payload Builder
 		node.loader.ToBuilderInto(&payload)
-		subdict, err := storeDictNodeTraced(suffix, &payload, keySz-prefixLen, trace)
+		subdict, err := storeDictNodeTraced(suffix, &payload, keySz-prefixLen, walk.trace)
 		return subdict, true, err
 	}
 }

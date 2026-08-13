@@ -149,10 +149,7 @@ func (l *lazyBOCLoader) init(rootsIndex []uint32, index bocCellIndex) error {
 		offset = nextOffset
 	}
 
-	if offset != len(l.payload) {
-		if indexEnabled {
-			return errors.New("invalid cell index")
-		}
+	if offset != len(l.payload) && !indexEnabled {
 		return errors.New("failed to parse cells payload, corrupted data")
 	}
 

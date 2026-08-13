@@ -12,6 +12,20 @@ type mathInterpretOp interface {
 	Interpret(*vm.State) error
 }
 
+// mathOpMinVersion and mathOpInstructionBits reach the optional parts of the
+// opcode contract that vm.OP itself does not carry.
+func mathOpMinVersion(op vm.OP) int {
+	versioned, ok := op.(vm.VersionedOp)
+	if !ok {
+		return 0
+	}
+	return versioned.MinGlobalVersion()
+}
+
+func mathOpInstructionBits(op vm.OP) int64 {
+	return op.(vm.GasPricedOp).InstructionBits()
+}
+
 func TestRoundedRightShiftNaNValueRules(t *testing.T) {
 	t.Run("DynamicShiftZeroOverflows", func(t *testing.T) {
 		for _, op := range []struct {

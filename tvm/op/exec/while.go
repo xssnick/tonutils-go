@@ -31,7 +31,7 @@ func WHILE() *helpers.SimpleOP {
 				return err
 			}
 
-			if cd := cond.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			if cd := cond.GetControlData(); cd == nil || vm.IsNullContinuation(cd.Save.C[0]) {
 				state.Reg.C[0] = &vm.WhileContinuation{
 					CheckCond: true,
 					Body:      body,

@@ -49,9 +49,9 @@ func TestCreateProofNestedMerkleProofUsesMerkleDepth(t *testing.T) {
 		t.Fatalf("nested merkle proof validation failed: %v", err)
 	}
 
-	nestedBody, err := UnwrapProof(nestedProof, innerBody.Hash())
+	nestedBody, err := nestedProof.PeekRef(0)
 	if err != nil {
-		t.Fatalf("unwrap nested proof: %v", err)
+		t.Fatalf("peek nested raw proof body: %v", err)
 	}
 
 	pruned := nestedBody.ref(1)

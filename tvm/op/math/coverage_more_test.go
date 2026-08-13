@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -666,7 +665,7 @@ func TestMathInitRegistrationsInstantiateOps(t *testing.T) {
 	}
 
 	instantiated := 0
-	for _, getter := range vm.List {
+	for _, getter := range vm.AllOps() {
 		if getter == nil {
 			continue
 		}
@@ -681,46 +680,23 @@ func TestMathInitRegistrationsInstantiateOps(t *testing.T) {
 
 func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 	t.Run("BytePlusOneImmediateRoundTrip", func(t *testing.T) {
-		get, serialize, deserialize := newBytePlusOneImmediate(3)
-		if got := get(); got != 3 {
-			t.Fatalf("initial immediate = %d, want 3", got)
+		if got := bytePlusOneArg(3); got != 2 {
+			t.Fatalf("encoded immediate = %d, want 2", got)
 		}
-
-		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
-		if err != nil {
-			t.Fatalf("load encoded immediate: %v", err)
-		}
-		if encoded != 2 {
-			t.Fatalf("encoded immediate = %d, want 2", encoded)
-		}
-
-		if err := deserialize(vmCellWithByte(t, 9)); err != nil {
-			t.Fatalf("deserialize immediate: %v", err)
-		}
-		if got := get(); got != 10 {
+		if got := bytePlusOneValue(9); got != 10 {
 			t.Fatalf("decoded immediate = %d, want 10", got)
 		}
 	})
 
 	t.Run("BytePlusOneImmediateBounds", func(t *testing.T) {
-		get, serialize, deserialize := newBytePlusOneImmediate(256)
-		if got := get(); got != 256 {
-			t.Fatalf("initial max immediate = %d, want 256", got)
+		if got := bytePlusOneArg(256); got != 255 {
+			t.Fatalf("encoded max immediate = %d, want 255", got)
 		}
-
-		encoded, err := serialize().EndCell().MustBeginParse().LoadUInt(8)
-		if err != nil {
-			t.Fatalf("load encoded immediate: %v", err)
-		}
-		if encoded != 255 {
-			t.Fatalf("encoded max immediate = %d, want 255", encoded)
-		}
-
-		if err := deserialize(vmCellWithByte(t, 255)); err != nil {
-			t.Fatalf("deserialize max immediate: %v", err)
-		}
-		if got := get(); got != 256 {
+		if got := bytePlusOneValue(255); got != 256 {
 			t.Fatalf("decoded max immediate = %d, want 256", got)
+		}
+		if got := bytePlusOneValue(bytePlusOneArg(1)); got != 1 {
+			t.Fatalf("min immediate round-trip = %d, want 1", got)
 		}
 	})
 
@@ -729,10 +705,10 @@ func TestMathImmediateAndAdvancedAliases(t *testing.T) {
 			func() {
 				defer func() {
 					if recover() == nil {
-						t.Fatalf("newBytePlusOneImmediate(%d) did not panic", value)
+						t.Fatalf("bytePlusOneArg(%d) did not panic", value)
 					}
 				}()
-				newBytePlusOneImmediate(value)
+				bytePlusOneArg(value)
 			}()
 		}
 	})
@@ -952,11 +928,6 @@ func TestMathQuietMinMaxCompareAndSignBranches(t *testing.T) {
 	})
 }
 
-func vmCellWithByte(t *testing.T, v uint64) *cell.Slice {
-	t.Helper()
-	return cell.BeginCell().MustStoreUInt(v, 8).EndCell().MustBeginParse()
-}
-
 func TestMathAdditionalWrappersAndQuietOps(t *testing.T) {
 	t.Run("PlainWrappers", func(t *testing.T) {
 		tests := []struct {
@@ -1084,7 +1055,7 @@ func TestQuietCompoundNamesMinVersionsAndInvalidSuffix(t *testing.T) {
 	}
 	type quietCompoundFamily struct {
 		name  string
-		make  func(uint8) *helpers.AdvancedOP
+		make  func(uint8) vm.OP
 		cases []quietCompoundCase
 	}
 
@@ -1163,7 +1134,7 @@ func TestQuietCompoundNamesMinVersionsAndInvalidSuffix(t *testing.T) {
 				if got := op.SerializeText(); got != tc.text {
 					t.Fatalf("args=%d text = %q, want %q", tc.args, got, tc.text)
 				}
-				if got := op.MinGlobalVersion(); got != tc.min {
+				if got := mathOpMinVersion(op); got != tc.min {
 					t.Fatalf("args=%d min version = %d, want %d", tc.args, got, tc.min)
 				}
 
@@ -1174,7 +1145,7 @@ func TestQuietCompoundNamesMinVersionsAndInvalidSuffix(t *testing.T) {
 				if got := dst.SerializeText(); got != tc.text {
 					t.Fatalf("args=%d round-trip text = %q, want %q", tc.args, got, tc.text)
 				}
-				if got := dst.MinGlobalVersion(); got != tc.min {
+				if got := mathOpMinVersion(dst); got != tc.min {
 					t.Fatalf("args=%d round-trip min version = %d, want %d", tc.args, got, tc.min)
 				}
 			}

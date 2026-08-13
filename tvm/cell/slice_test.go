@@ -103,6 +103,86 @@ func TestLoadCell_Loaders(t *testing.T) {
 	}
 }
 
+func TestSlice_LoadMaybeRefFailureDoesNotAdvance(t *testing.T) {
+	malformed := BeginCell().MustStoreBoolBit(true).EndCell()
+
+	for _, useInto := range []bool{false, true} {
+		s := malformed.MustBeginParse()
+		beforeBits, beforeRefs := s.BitsLeft(), s.RefsNum()
+		if useInto {
+			dst := *BeginCell().MustStoreUInt(0xA, 4).EndCell().MustBeginParse()
+			if ok, err := s.LoadMaybeRefInto(&dst); ok || err != ErrNoMoreRefs {
+				t.Fatalf("LoadMaybeRefInto = %v, %v, want false, %v", ok, err, ErrNoMoreRefs)
+			}
+			if dst != (Slice{}) {
+				t.Fatal("LoadMaybeRefInto did not clear destination on failed prefetch")
+			}
+		} else if ref, err := s.LoadMaybeRef(); ref != nil || err != ErrNoMoreRefs {
+			t.Fatalf("LoadMaybeRef = %v, %v, want nil, %v", ref, err, ErrNoMoreRefs)
+		}
+		if s.BitsLeft() != beforeBits || s.RefsNum() != beforeRefs {
+			t.Fatalf("failed maybe-ref load advanced slice: bits=%d refs=%d", s.BitsLeft(), s.RefsNum())
+		}
+	}
+}
+
+func TestSlice_LoadMaybeRefIntoDestinationFailureState(t *testing.T) {
+	sentinel := *BeginCell().MustStoreUInt(0xA, 4).EndCell().MustBeginParse()
+
+	empty := BeginCell().EndCell().MustBeginParse()
+	dst := sentinel
+	if ok, err := empty.LoadMaybeRefInto(&dst); ok || err == nil {
+		t.Fatalf("empty LoadMaybeRefInto = %v, %v, want false, error", ok, err)
+	}
+	if dst != sentinel {
+		t.Fatal("missing maybe tag changed destination")
+	}
+
+	absent := BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse()
+	dst = sentinel
+	if ok, err := absent.LoadMaybeRefInto(&dst); ok || err != nil {
+		t.Fatalf("absent LoadMaybeRefInto = %v, %v, want false, nil", ok, err)
+	}
+	if dst != (Slice{}) {
+		t.Fatal("absent maybe ref did not clear destination")
+	}
+	if absent.BitsLeft() != 0 {
+		t.Fatalf("absent maybe ref left %d bits, want 0", absent.BitsLeft())
+	}
+}
+
+func TestSlice_LoadMaybeRefLazySentinelErrorDoesNotAdvance(t *testing.T) {
+	child := BeginCell().MustStoreUInt(0xa5, 8).EndCell()
+	loadCalls := 0
+	lazy := mustCreateLazyPrunedRef(t, lazyRefFromCell(child), func(Hash) (*Cell, error) {
+		loadCalls++
+		return nil, ErrNoMoreRefs
+	})
+	source := BeginCell().MustStoreBoolBit(true).MustStoreRef(lazy).EndCell()
+
+	for _, useInto := range []bool{false, true} {
+		s := source.MustBeginParse()
+		beforeBits, beforeRefs := s.BitsLeft(), s.RefsNum()
+		if useInto {
+			dst := *child.MustBeginParse()
+			if ok, err := s.LoadMaybeRefInto(&dst); ok || err != ErrNoMoreRefs {
+				t.Fatalf("LoadMaybeRefInto = %v, %v, want false, %v", ok, err, ErrNoMoreRefs)
+			}
+			if dst != (Slice{}) {
+				t.Fatal("LoadMaybeRefInto did not clear destination after lazy load failure")
+			}
+		} else if ref, err := s.LoadMaybeRef(); ref != nil || err != ErrNoMoreRefs {
+			t.Fatalf("LoadMaybeRef = %v, %v, want nil, %v", ref, err, ErrNoMoreRefs)
+		}
+		if s.BitsLeft() != beforeBits || s.RefsNum() != beforeRefs {
+			t.Fatalf("lazy maybe-ref failure advanced slice: bits=%d refs=%d", s.BitsLeft(), s.RefsNum())
+		}
+	}
+	if loadCalls != 2 {
+		t.Fatalf("lazy loader calls = %d, want 2", loadCalls)
+	}
+}
+
 func TestSlice_LoadBigInt(t *testing.T) {
 	v := BeginCell().MustStoreInt(-5, 5).EndCell().MustBeginParse().MustLoadInt(5)
 	if v != -5 {

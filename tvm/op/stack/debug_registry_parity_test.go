@@ -60,20 +60,31 @@ func TestDumpStackTraceCapsHostWorkAt255Values(t *testing.T) {
 	}
 }
 
-func TestSwapOwnsCanonicalCompactPrefix(t *testing.T) {
+// registrationsAt names every opcode registered under an exact prefix, across
+// both registries.
+func registrationsAt(value uint64, bits uint) []string {
 	var names []string
-	for _, getter := range vm.List {
-		op := getter()
-		for _, prefix := range op.GetPrefixes() {
-			if prefix.BitsLeft() != 8 {
+	collect := func(prefixes []*cell.Slice, text string) {
+		for _, prefix := range prefixes {
+			if prefix.BitsLeft() != bits {
 				continue
 			}
-			value, err := prefix.PreloadUInt(8)
-			if err == nil && value == 0x01 {
-				names = append(names, op.SerializeText())
+			got, err := prefix.PreloadUInt(bits)
+			if err == nil && got == value {
+				names = append(names, text)
 			}
 		}
 	}
+
+	for _, getter := range vm.AllOps() {
+		op := getter()
+		collect(op.GetPrefixes(), op.SerializeText())
+	}
+	return names
+}
+
+func TestSwapOwnsCanonicalCompactPrefix(t *testing.T) {
+	names := registrationsAt(0x01, 8)
 
 	if len(names) != 1 || names[0] != "SWAP" {
 		t.Fatalf("compact prefix 01 registrations = %v, want [SWAP]", names)
@@ -81,19 +92,7 @@ func TestSwapOwnsCanonicalCompactPrefix(t *testing.T) {
 }
 
 func TestPushCtrHasSingleCanonicalRegistration(t *testing.T) {
-	var names []string
-	for _, getter := range vm.List {
-		op := getter()
-		for _, prefix := range op.GetPrefixes() {
-			if prefix.BitsLeft() != 16 {
-				continue
-			}
-			value, err := prefix.PreloadUInt(16)
-			if err == nil && value == 0xED40 {
-				names = append(names, op.SerializeText())
-			}
-		}
-	}
+	names := registrationsAt(0xED40, 16)
 
 	if len(names) != 1 || names[0] != "c0 PUSH" {
 		t.Fatalf("ED40 registrations = %v, want one canonical c0 PUSH", names)

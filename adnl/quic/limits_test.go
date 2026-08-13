@@ -15,6 +15,18 @@ func TestDefaultLimitsAreValid(t *testing.T) {
 	if limits.MaxIncomingStreams != defaultMaxIncomingStreams {
 		t.Fatalf("MaxIncomingStreams = %d, want %d", limits.MaxIncomingStreams, defaultMaxIncomingStreams)
 	}
+	if limits.MaxConnections != DefaultMaxConnections {
+		t.Fatalf("MaxConnections = %d, want %d", limits.MaxConnections, DefaultMaxConnections)
+	}
+	if limits.MaxConnectionsPerIP != DefaultMaxConnectionsPerIP {
+		t.Fatalf("MaxConnectionsPerIP = %d, want %d", limits.MaxConnectionsPerIP, DefaultMaxConnectionsPerIP)
+	}
+	if limits.MaxPeerPaths != DefaultMaxPeerPaths {
+		t.Fatalf("MaxPeerPaths = %d, want %d", limits.MaxPeerPaths, DefaultMaxPeerPaths)
+	}
+	if limits.OutboundPathReserve != DefaultOutboundPathReserve {
+		t.Fatalf("OutboundPathReserve = %d, want %d", limits.OutboundPathReserve, DefaultOutboundPathReserve)
+	}
 	// The per-connection cap is the gate that actually backpressures a peer, so
 	// it is what must stay below the advertised QUIC credit. The receiver-wide
 	// number is a burst pool layered on top of the per-connection guarantee and

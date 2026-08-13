@@ -7,6 +7,7 @@ import (
 
 var ErrTooBigValue = errors.New("too big value")
 var ErrLabelExceedsKeyBits = errors.New("label exceeds remaining key bits")
+var ErrInvalidDictForkNode = errors.New("invalid dictionary fork node")
 var ErrDictHasSpecialCells = errors.New("has special cells in tree structure")
 var ErrNegative = errors.New("value should be non negative")
 var ErrInvalidSize = errors.New("size should be positive")

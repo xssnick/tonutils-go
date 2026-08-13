@@ -5,16 +5,11 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return GTINT(0) })
-	// shared full-opcode variant for the common value
-	vm.List = append(vm.List, func() vm.OP { return fixedIntCmpVariant(GTINT(4)) })
+	vm.ArgList = append(vm.ArgList, gtIntOp)
 }
 
-func GTINT(value int8) *OpIntCmp {
-	return &OpIntCmp{
-		name:   "GTINT",
-		prefix: 0xC2,
-		mask:   intCmpMaskGreater,
-		value:  value,
-	}
+var gtIntOp = intCmpOp("GTINT", 0xC2, intCmpMaskGreater)
+
+func GTINT(value int8) vm.OP {
+	return vm.Bind(gtIntOp, uint64(uint8(value)))
 }

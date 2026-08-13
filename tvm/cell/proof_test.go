@@ -384,19 +384,28 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 		t.Fatalf("unwrap skeleton proof: %v", err)
 	}
 
-	proof, err := root.CreateUsageProof(NewCellUsageTree())
+	// CreateUsageProof over an empty record pruned the root itself and started the
+	// walk at the root's own level, so this is that call with the record's answer
+	// inlined: nothing was read, prune everything.
+	pruneAll, err := buildMerkleProofBodyByPruneFunc(root, func(*Cell, int, Hash) (*Cell, bool, error) {
+		return nil, true, nil
+	}, root.Level())
 	if err != nil {
-		t.Fatalf("usage proof should accept non-zero level root through raw proof generation: %v", err)
+		t.Fatalf("raw proof generation should accept non-zero level root: %v", err)
+	}
+	proof, err := CreateMerkleProof(pruneAll)
+	if err != nil {
+		t.Fatalf("wrap raw proof body: %v", err)
 	}
 	if err = validateLoadedCell(proof); err != nil {
-		t.Fatalf("usage proof validation failed: %v", err)
+		t.Fatalf("raw proof validation failed: %v", err)
 	}
 	if proof.Level() != root.Level() {
 		t.Fatalf("unexpected proof level: got %d want %d", proof.Level(), root.Level())
 	}
 	body, err := UnwrapProof(proof, root.Hash(0))
 	if err != nil {
-		t.Fatalf("unwrap usage proof: %v", err)
+		t.Fatalf("unwrap raw proof: %v", err)
 	}
 	if body.Level() != root.Level()+1 {
 		t.Fatalf("unexpected raw proof body level: got %d want %d", body.Level(), root.Level()+1)
@@ -406,7 +415,7 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 func TestPrunedProofBuilderDropsTraversalTrace(t *testing.T) {
 	leaf := BeginCell().MustStoreUInt(0xaa, 8).EndCell()
 	root := BeginCell().MustStoreUInt(0xbb, 8).MustStoreRef(leaf).EndCell()
-	traced := root.WithTrace(NewCellUsageTree().RootTrace())
+	traced := NewReadSet(root).Root()
 
 	built, err := buildMerkleProofBodyByPruneFunc(traced, nil, traced.Level())
 	if err != nil {

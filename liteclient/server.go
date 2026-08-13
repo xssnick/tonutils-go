@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/cipher"
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -27,7 +28,8 @@ const serverWriteDrainMax = 16
 var ServerClientSendQueueSize = 100
 
 type Server struct {
-	keys map[string]ed25519.PrivateKey
+	keys           map[string]ed25519.PrivateKey
+	trustedClients map[string]struct{}
 
 	mx       sync.Mutex
 	listener net.Listener
@@ -50,11 +52,30 @@ type ServerClient struct {
 
 	port uint16
 	ip   string
+
+	authMu        sync.RWMutex
+	authPayload   []byte
+	authenticated bool
+	clientID      [32]byte
 }
 
 var adnlMessageQueryID = tl.CRC("adnl.message.query query_id:int256 query:bytes = adnl.Message")
 
 func NewServer(keysList []ed25519.PrivateKey) *Server {
+	return newServer(keysList, nil)
+}
+
+// NewServerWithTrustedClients creates a server which accepts ADNL queries only
+// after the TCP client proves ownership of one of the supplied short key IDs.
+// The allowlist and all authentication state are kept in memory.
+func NewServerWithTrustedClients(
+	keysList []ed25519.PrivateKey,
+	trustedClientIDs [][32]byte,
+) *Server {
+	return newServer(keysList, trustedClientIDs)
+}
+
+func newServer(keysList []ed25519.PrivateKey, trustedClientIDs [][32]byte) *Server {
 	list := map[string]ed25519.PrivateKey{}
 	for _, k := range keysList {
 		kid, err := tl.Hash(keys.PublicKeyED25519{Key: k.Public().(ed25519.PublicKey)})
@@ -65,8 +86,14 @@ func NewServer(keysList []ed25519.PrivateKey) *Server {
 		list[string(kid)] = k
 	}
 
+	trusted := make(map[string]struct{}, len(trustedClientIDs))
+	for _, id := range trustedClientIDs {
+		trusted[string(id[:])] = struct{}{}
+	}
+
 	return &Server{
-		keys: list,
+		keys:           list,
+		trustedClients: trusted,
 	}
 }
 
@@ -114,6 +141,24 @@ func (s *Server) Listen(addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
+	}
+
+	return s.listen(listener)
+}
+
+// Serve accepts encrypted ADNL connections from listener until Close is
+// called. It lets applications bind the socket synchronously before starting
+// their lifecycle goroutine.
+func (s *Server) Serve(listener net.Listener) error {
+	if listener == nil {
+		return fmt.Errorf("listener is nil")
+	}
+
+	s.mx.Lock()
+	started := s.listener != nil
+	s.mx.Unlock()
+	if started {
+		return fmt.Errorf("already started")
 	}
 
 	return s.listen(listener)
@@ -242,6 +287,12 @@ func (s *Server) serve(client *ServerClient) {
 
 		// skip nonce
 		data = data[32:]
+		if len(s.trustedClients) > 0 && !client.isAuthenticated() {
+			if _, ok := rawADNLMessageQueryID(data); ok {
+				releasePacketBuffer(packet)
+				return
+			}
+		}
 
 		if s.queryPrecheck != nil {
 			if queryID, ok := rawADNLMessageQueryID(data); ok {
@@ -277,8 +328,13 @@ func (s *Server) serve(client *ServerClient) {
 
 			s.queryHandler(client.ctx, client, m.ID, query)
 		case TCPAuthenticate:
-			client.enqueue(TCPAuthenticationNonce{Nonce: make([]byte, 32)})
+			if !client.beginAuthentication(m.Nonce) {
+				return
+			}
 		case TCPAuthenticationComplete:
+			if !s.completeAuthentication(client, m) {
+				return
+			}
 		case TCPPing:
 			client.enqueue(TCPPong{RandomID: m.RandomID})
 		default:
@@ -286,6 +342,83 @@ func (s *Server) serve(client *ServerClient) {
 			return
 		}
 	}
+}
+
+func (s *ServerClient) beginAuthentication(clientNonce []byte) bool {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+
+	if s.authenticated || s.authPayload != nil || len(clientNonce) == 0 || len(clientNonce) > 512 {
+		return false
+	}
+
+	serverNonce := make([]byte, 256)
+	if _, err := io.ReadFull(rand.Reader, serverNonce); err != nil {
+		return false
+	}
+
+	s.authPayload = make([]byte, 0, len(clientNonce)+len(serverNonce))
+	s.authPayload = append(s.authPayload, clientNonce...)
+	s.authPayload = append(s.authPayload, serverNonce...)
+
+	if !s.enqueue(TCPAuthenticationNonce{Nonce: serverNonce}) {
+		clear(s.authPayload)
+		s.authPayload = nil
+
+		return false
+	}
+
+	return true
+}
+
+func (s *Server) completeAuthentication(client *ServerClient, complete TCPAuthenticationComplete) bool {
+	client.authMu.Lock()
+	defer client.authMu.Unlock()
+
+	if client.authenticated || client.authPayload == nil {
+		return false
+	}
+	defer func() {
+		clear(client.authPayload)
+		client.authPayload = nil
+	}()
+
+	var publicKey ed25519.PublicKey
+	switch key := complete.PublicKey.(type) {
+	case keys.PublicKeyED25519:
+		publicKey = key.Key
+	case *keys.PublicKeyED25519:
+		publicKey = key.Key
+	default:
+		return false
+	}
+	if len(publicKey) != ed25519.PublicKeySize ||
+		len(complete.Signature) != ed25519.SignatureSize ||
+		!ed25519.Verify(publicKey, client.authPayload, complete.Signature) {
+		return false
+	}
+
+	id, err := tl.Hash(keys.PublicKeyED25519{Key: publicKey})
+	if err != nil {
+		return false
+	}
+	if len(s.trustedClients) > 0 {
+		if _, ok := s.trustedClients[string(id)]; !ok {
+			return false
+		}
+	}
+
+	copy(client.clientID[:], id)
+	client.authenticated = true
+
+	return true
+}
+
+func (s *ServerClient) isAuthenticated() bool {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+
+	return s.authenticated
 }
 
 func rawADNLMessageQueryID(data []byte) ([]byte, bool) {
@@ -474,4 +607,12 @@ func (s *ServerClient) Port() uint16 {
 
 func (s *ServerClient) ServerKey() ed25519.PublicKey {
 	return s.serverKey
+}
+
+// ClientID returns the short ID of the authenticated client key.
+func (s *ServerClient) ClientID() ([32]byte, bool) {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+
+	return s.clientID, s.authenticated
 }

@@ -3,37 +3,27 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return INDEXQ(0) })
+	vm.ArgList = append(vm.ArgList, indexQOp)
 }
 
-func INDEXQ(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f6, 12),
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d INDEXQ", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execIndexQuiet(state, int(n))
-		},
-	}
+var indexQOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f6, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d INDEXQ", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execIndexQuiet(state, int(uint8(args)))
+	},
+})
+
+func INDEXQ(n uint8) vm.OP {
+	return vm.Bind(indexQOp, uint64(n))
 }
 
 func execIndexQuiet(state *vm.State, idx int) error {

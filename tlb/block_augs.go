@@ -67,9 +67,14 @@ func (f ImportFees) ToCell() (*cell.Cell, error) {
 // length plus the value bytes. Numeric decoding stays lazy for raw-copy paths.
 // Chain-validated values cannot contain a leading zero byte, so their raw and
 // canonical encodings coincide.
+//
+// The value lives in a fixed buffer — fifteen bytes is the most VarUInteger 16
+// can carry — so loading one costs no heap. The struct travels by value; the
+// Augmentation contract forbids retaining borrowed slices anyway, and a copy of
+// the bytes is what makes that safe.
 type rawGrams struct {
 	ln   uint64
-	data []byte
+	data [15]byte
 }
 
 func loadRawGrams(loader *cell.Slice) (rawGrams, error) {
@@ -80,11 +85,12 @@ func loadRawGrams(loader *cell.Slice) (rawGrams, error) {
 	if ln == 0 {
 		return rawGrams{}, nil
 	}
-	data, err := loader.LoadSlice(uint(ln) * 8)
-	if err != nil {
+	var g rawGrams
+	g.ln = ln
+	if err = loader.LoadSliceInto(g.data[:ln], uint(ln)*8); err != nil {
 		return rawGrams{}, fmt.Errorf("failed to load grams value: %w", err)
 	}
-	return rawGrams{ln: ln, data: data}, nil
+	return g, nil
 }
 
 func (g rawGrams) appendTo(b *cell.Builder) error {
@@ -94,14 +100,28 @@ func (g rawGrams) appendTo(b *cell.Builder) error {
 	if g.ln == 0 {
 		return nil
 	}
-	return b.StoreSlice(g.data, uint(g.ln)*8)
+	return b.StoreSlice(g.data[:g.ln], uint(g.ln)*8)
 }
 
 func (g rawGrams) integer() (*big.Int, error) {
 	if g.ln > 0 && g.data[0] == 0 {
 		return nil, fmt.Errorf("grams value has a leading zero byte")
 	}
-	return new(big.Int).SetBytes(g.data), nil
+	return new(big.Int).SetBytes(g.data[:g.ln]), nil
+}
+
+// value128 is integer() without the big.Int: the same canonical-form check, the
+// value as a fixed 128-bit pair.
+func (g rawGrams) value128() (gramsU128, error) {
+	if g.ln > 0 && g.data[0] == 0 {
+		return gramsU128{}, fmt.Errorf("grams value has a leading zero byte")
+	}
+	var v gramsU128
+	for i := uint64(0); i < g.ln; i++ {
+		v.hi = v.hi<<8 | v.lo>>56
+		v.lo = v.lo<<8 | uint64(g.data[i])
+	}
+	return v, nil
 }
 
 func loadCanonicalGrams(loader *cell.Slice) (*big.Int, error) {
@@ -156,25 +176,35 @@ func storeCanonicalGrams(b *cell.Builder, v *big.Int) error {
 // dictionaries are merged by key with VarUIntegerPos addition, while subtrees
 // unique to one side are reused as-is.
 func addCurrencyCollectionSlices(b *cell.Builder, left, right *cell.Slice) error {
-	lg, err := loadCanonicalGrams(left)
-	if err != nil {
-		return fmt.Errorf("failed to load left grams: %w", err)
+	if err := addGramsSlices(b, left, right); err != nil {
+		return err
 	}
+
+	// Nearly every amount that exists carries no extra currencies, and merging
+	// two absent dictionaries yields one zero bit — exactly what StoreDict
+	// writes for an empty one. Taking that shortcut avoids building two
+	// Dictionary values only to throw them away.
+	absent, err := bothExtraDictsAbsent(left, right)
+	if err != nil {
+		return err
+	}
+	if absent {
+		if _, err = left.LoadBoolBit(); err != nil {
+			return fmt.Errorf("failed to load left extra currencies: %w", err)
+		}
+		if _, err = right.LoadBoolBit(); err != nil {
+			return fmt.Errorf("failed to load right extra currencies: %w", err)
+		}
+		return b.StoreUInt(0, 1)
+	}
+
 	ld, err := left.LoadDict(32)
 	if err != nil {
 		return fmt.Errorf("failed to load left extra currencies: %w", err)
 	}
-	rg, err := loadCanonicalGrams(right)
-	if err != nil {
-		return fmt.Errorf("failed to load right grams: %w", err)
-	}
 	rd, err := right.LoadDict(32)
 	if err != nil {
 		return fmt.Errorf("failed to load right extra currencies: %w", err)
-	}
-
-	if err = storeCanonicalGrams(b, new(big.Int).Add(lg, rg)); err != nil {
-		return fmt.Errorf("failed to store grams sum: %w", err)
 	}
 
 	extra, err := addExtraCurrencyDicts(ld, rd)
@@ -215,7 +245,7 @@ func skipMaybeAnycast(s *cell.Slice) (uint64, error) {
 	if depth == 0 || depth > 30 {
 		return 0, fmt.Errorf("anycast depth %d is outside 1..30", depth)
 	}
-	if _, err = s.LoadSlice(uint(depth)); err != nil {
+	if err = s.SkipBits(uint(depth)); err != nil {
 		return 0, fmt.Errorf("failed to skip anycast rewrite prefix: %w", err)
 	}
 	return depth, nil
@@ -233,7 +263,7 @@ func skipMsgAddressIntGetDepth(s *cell.Slice) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if _, err = s.LoadSlice(8 + 256); err != nil {
+		if err = s.SkipBits(8 + 256); err != nil {
 			return 0, fmt.Errorf("failed to skip std address body: %w", err)
 		}
 		return depth, nil
@@ -246,7 +276,7 @@ func skipMsgAddressIntGetDepth(s *cell.Slice) (uint64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to load var address length: %w", err)
 		}
-		if _, err = s.LoadSlice(32 + uint(addrLen)); err != nil {
+		if err = s.SkipBits(32 + uint(addrLen)); err != nil {
 			return 0, fmt.Errorf("failed to skip var address body: %w", err)
 		}
 		return depth, nil
@@ -275,7 +305,7 @@ func skipMsgAddressExt(s *cell.Slice) error {
 		if err != nil {
 			return fmt.Errorf("failed to load external address length: %w", err)
 		}
-		if _, err = s.LoadSlice(uint(ln)); err != nil {
+		if err = s.SkipBits(uint(ln)); err != nil {
 			return fmt.Errorf("failed to skip external address: %w", err)
 		}
 		return nil
@@ -295,27 +325,32 @@ type intMsgInfoView struct {
 	ihrFee     rawGrams
 }
 
-func (v intMsgInfoView) valueWithRemainingFee(remaining *big.Int, globalVersion uint32) (*big.Int, error) {
-	value, err := v.valueGrams.integer()
+func (v intMsgInfoView) valueWithRemainingFee(remaining gramsU128, globalVersion uint32) (gramsU128, error) {
+	value, err := v.valueGrams.value128()
 	if err != nil {
-		return nil, fmt.Errorf("message value: %w", err)
+		return gramsU128{}, fmt.Errorf("message value: %w", err)
 	}
 
 	if globalVersion < messageExtraFlagsVersion {
-		ihrFee, err := v.ihrFee.integer()
+		ihrFee, err := v.ihrFee.value128()
 		if err != nil {
-			return nil, fmt.Errorf("message ihr fee: %w", err)
+			return gramsU128{}, fmt.Errorf("message ihr fee: %w", err)
 		}
-		value.Add(value, ihrFee)
+		if value, err = value.add(ihrFee); err != nil {
+			return gramsU128{}, err
+		}
 	}
-	return value.Add(value, remaining), nil
+	return value.add(remaining)
 }
 
 func parseIntMsgInfoView(msg *cell.Cell) (intMsgInfoView, error) {
-	s, err := msg.BeginParse()
-	if err != nil {
+	// Nothing the view carries points back at the slice — rawGrams is a fixed
+	// array and rawExtraDict keeps a cell — so the loader stays local.
+	var sv cell.Slice
+	if err := msg.BeginParseInto(&sv); err != nil {
 		return intMsgInfoView{}, fmt.Errorf("failed to parse message: %w", err)
 	}
+	s := &sv
 
 	flags, err := s.LoadUInt(4) // int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool
 	if err != nil {
@@ -396,10 +431,10 @@ func messageCreatedLT(msg *cell.Cell) (uint64, error) {
 		if err = skipCurrencyCollectionBoundary(s); err != nil {
 			return 0, fmt.Errorf("failed to skip value: %w", err)
 		}
-		if _, err = s.LoadBigCoins(); err != nil { // ihr_fee
+		if err = skipGrams(s); err != nil { // ihr_fee
 			return 0, fmt.Errorf("failed to skip ihr fee: %w", err)
 		}
-		if _, err = s.LoadBigCoins(); err != nil { // fwd_fee
+		if err = skipGrams(s); err != nil { // fwd_fee
 			return 0, fmt.Errorf("failed to skip fwd fee: %w", err)
 		}
 		return loadMsgCreatedLTAndAt(s)
@@ -427,7 +462,7 @@ func messageCreatedLT(msg *cell.Cell) (uint64, error) {
 // metadata after the message reference.
 type msgEnvelopeView struct {
 	fwdFeeRemaining rawGrams
-	fwdFeeValue     *big.Int
+	fwdFeeValue     gramsU128
 	msg             *cell.Cell
 	emittedLT       uint64
 	hasEmittedLT    bool
@@ -509,7 +544,7 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 	if err != nil {
 		return view, err
 	}
-	view.fwdFeeValue, err = view.fwdFeeRemaining.integer()
+	view.fwdFeeValue, err = view.fwdFeeRemaining.value128()
 	if err != nil {
 		return msgEnvelopeView{}, fmt.Errorf("remaining forward fee: %w", err)
 	}
@@ -580,15 +615,14 @@ func (AugShardAccounts) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 	value.CopyInto(&v)
 	// ShardAccount: account_descr$_ account:^Account last_trans_hash:bits256
 	// last_trans_lt:uint64. The account ref is read without consuming inline bits.
-	account, err := v.PeekRefCell()
-	if err != nil {
+	// Parsing the ref straight into a local slice keeps the child trace on the
+	// slice: peeking the cell first would copy it only to carry that trace, and
+	// parsing it would allocate a second time.
+	var sv cell.Slice
+	if err := v.PreloadRefInto(&sv); err != nil {
 		return fmt.Errorf("failed to load account ref of shard account: %w", err)
 	}
-
-	s, err := account.BeginParse()
-	if err != nil {
-		return fmt.Errorf("failed to parse account: %w", err)
-	}
+	s := &sv
 
 	isAccount, err := s.LoadBoolBit()
 	if err != nil {
@@ -617,10 +651,10 @@ func (AugShardAccounts) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 
 	// storage_stat:StorageInfo contains StorageUsed cells/bits as VarUInteger 7,
 	// StorageExtraInfo, last_paid, and an optional due_payment.
-	if _, err = loadVarUInt(s, 7); err != nil {
+	if err = skipVarUInt(s, 7); err != nil {
 		return fmt.Errorf("failed to skip storage cells used: %w", err)
 	}
-	if _, err = loadVarUInt(s, 7); err != nil {
+	if err = skipVarUInt(s, 7); err != nil {
 		return fmt.Errorf("failed to skip storage bits used: %w", err)
 	}
 	storageExtraTag, err := s.LoadUInt(3)
@@ -630,7 +664,7 @@ func (AugShardAccounts) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 	switch storageExtraTag {
 	case 0b000: // storage_extra_none$000
 	case 0b001: // storage_extra_info$001 dict_hash:uint256
-		if _, err = s.LoadSlice(256); err != nil {
+		if err = s.SkipBits(256); err != nil {
 			return fmt.Errorf("failed to skip storage extra dict hash: %w", err)
 		}
 	default:
@@ -644,7 +678,7 @@ func (AugShardAccounts) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		return fmt.Errorf("failed to load due payment flag: %w", err)
 	}
 	if hasDue {
-		if _, err = s.LoadBigCoins(); err != nil {
+		if err = skipGrams(s); err != nil {
 			return fmt.Errorf("failed to skip due payment: %w", err)
 		}
 	}
@@ -719,7 +753,7 @@ func skipAccountState(s *cell.Slice) error {
 		return fmt.Errorf("failed to load account state tag: %w", err)
 	}
 	if frozen { // account_frozen$01 state_hash:bits256
-		if _, err = s.LoadSlice(256); err != nil {
+		if err = s.SkipBits(256); err != nil {
 			return fmt.Errorf("failed to skip frozen state hash: %w", err)
 		}
 	}
@@ -797,7 +831,7 @@ func (AugShardAccountBlocks) LeafExtra(value *cell.Slice, dst *cell.Builder) err
 	if _, err := v.LoadUInt(4); err != nil {
 		return fmt.Errorf("failed to skip account block tag: %w", err)
 	}
-	if _, err := v.LoadSlice(256); err != nil {
+	if err := v.SkipBits(256); err != nil {
 		return fmt.Errorf("failed to skip account block address: %w", err)
 	}
 
@@ -826,7 +860,7 @@ func (AugShardAccountBlocks) CombineExtra(leftExtra, rightExtra *cell.Slice, dst
 // storeCanonicalCurrencyCollectionFromSlice re-encodes a CurrencyCollection read
 // from the slice: canonical grams plus the original extra dictionary root.
 func storeCanonicalCurrencyCollectionFromSlice(s *cell.Slice, dst *cell.Builder) error {
-	grams, err := loadCanonicalGrams(s)
+	grams, err := loadGramsU128(s)
 	if err != nil {
 		return fmt.Errorf("failed to load grams: %w", err)
 	}
@@ -835,7 +869,7 @@ func storeCanonicalCurrencyCollectionFromSlice(s *cell.Slice, dst *cell.Builder)
 		return fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 
-	if err = storeCanonicalGrams(dst, grams); err != nil {
+	if err = grams.storeTo(dst); err != nil {
 		return err
 	}
 	if err = extra.appendTo(dst); err != nil {
@@ -872,15 +906,13 @@ func (AugAccountTransactions) EmptyExtra(dst *cell.Builder) error {
 func (AugAccountTransactions) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 	var v cell.Slice
 	value.CopyInto(&v)
-	tx, err := v.PeekRefCell() // value is ^Transaction
-	if err != nil {
+	// value is ^Transaction; see AugShardAccounts.LeafExtra on why the ref is
+	// parsed straight into a local slice rather than peeked as a cell first.
+	var sv cell.Slice
+	if err := v.PreloadRefInto(&sv); err != nil {
 		return fmt.Errorf("failed to load transaction ref: %w", err)
 	}
-
-	s, err := tx.BeginParse()
-	if err != nil {
-		return fmt.Errorf("failed to parse transaction: %w", err)
-	}
+	s := &sv
 
 	// Validate the constructor before locating total_fees after the header.
 	tag, err := s.LoadUInt(4)
@@ -892,7 +924,7 @@ func (AugAccountTransactions) LeafExtra(value *cell.Slice, dst *cell.Builder) er
 	}
 	// account_addr:bits256 lt:uint64 prev_trans_hash:bits256 prev_trans_lt:uint64
 	// now:uint32 outmsg_cnt:uint15
-	if _, err = s.LoadSlice(256 + 64 + 256 + 64 + 32 + 15); err != nil {
+	if err = s.SkipBits(256 + 64 + 256 + 64 + 32 + 15); err != nil {
 		return fmt.Errorf("failed to skip transaction header: %w", err)
 	}
 	// orig_status:AccountStatus end_status:AccountStatus (2 bits each)
@@ -932,7 +964,7 @@ type AugInMsgDescr struct {
 }
 
 func (AugInMsgDescr) SkipExtra(loader *cell.Slice) error {
-	if _, err := loader.LoadBigCoins(); err != nil { // fees_collected:Grams
+	if err := skipGrams(loader); err != nil { // fees_collected:Grams
 		return err
 	}
 	return skipCurrencyCollectionBoundary(loader) // value_imported:CurrencyCollection
@@ -1018,11 +1050,11 @@ func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		if _, err = v.LoadRefCell(); err != nil { // transaction
 			return err
 		}
-		fwdFee, err := loadCanonicalGrams(&v)
+		fwdFee, err := loadGramsU128(&v)
 		if err != nil {
 			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
-		if fwdFee.Cmp(env.fwdFeeValue) != 0 {
+		if fwdFee != env.fwdFeeValue {
 			return fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
 				fwdFee, env.fwdFeeValue)
 		}
@@ -1039,7 +1071,7 @@ func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		if err != nil {
 			return err
 		}
-		if err = storeCanonicalGrams(dst, sum); err != nil {
+		if err = sum.storeTo(dst); err != nil {
 			return err
 		}
 		if err = info.valueExtra.appendTo(dst); err != nil {
@@ -1063,11 +1095,11 @@ func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		if _, err = v.LoadRefCell(); err != nil { // out_msg
 			return err
 		}
-		transitFee, err := loadCanonicalGrams(&v)
+		transitFee, err := loadGramsU128(&v)
 		if err != nil {
 			return fmt.Errorf("failed to load transit fee: %w", err)
 		}
-		if transitFee.Cmp(env.fwdFeeValue) > 0 {
+		if transitFee.greater(env.fwdFeeValue) {
 			return fmt.Errorf("transit fee %s is above envelope remaining fee %s",
 				transitFee, env.fwdFeeValue)
 		}
@@ -1076,7 +1108,7 @@ func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 			return fmt.Errorf("failed to parse enveloped message: %w", err)
 		}
 		// fees_collected := transit_fee (canonical encoding)
-		if err = storeCanonicalGrams(dst, transitFee); err != nil {
+		if err = transitFee.storeTo(dst); err != nil {
 			return err
 		}
 		// value_imported := msg.value + pre-v12 ihr_fee + fwd_fee_remaining
@@ -1084,7 +1116,7 @@ func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		if err != nil {
 			return err
 		}
-		if err = storeCanonicalGrams(dst, sum); err != nil {
+		if err = sum.storeTo(dst); err != nil {
 			return err
 		}
 		if err = info.valueExtra.appendTo(dst); err != nil {
@@ -1169,11 +1201,11 @@ func augInMsgDescrDeferredLeaf(v *cell.Slice, rest uint64, globalVersion uint32,
 	}
 
 	if rest == 0 { // msg_import_deferred_fin
-		fwdFee, err := loadCanonicalGrams(v)
+		fwdFee, err := loadGramsU128(v)
 		if err != nil {
 			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
-		if fwdFee.Cmp(env.fwdFeeValue) != 0 {
+		if fwdFee != env.fwdFeeValue {
 			return fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
 				fwdFee, env.fwdFeeValue)
 		}
@@ -1193,7 +1225,7 @@ func augInMsgDescrDeferredLeaf(v *cell.Slice, rest uint64, globalVersion uint32,
 	if err != nil {
 		return err
 	}
-	if err = storeCanonicalGrams(dst, sum); err != nil {
+	if err = sum.storeTo(dst); err != nil {
 		return err
 	}
 	if err = info.valueExtra.appendTo(dst); err != nil {
@@ -1203,22 +1235,10 @@ func augInMsgDescrDeferredLeaf(v *cell.Slice, rest uint64, globalVersion uint32,
 }
 
 func (AugInMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
-	lg, err := loadCanonicalGrams(leftExtra)
-	if err != nil {
-		return fmt.Errorf("failed to load left fees collected: %w", err)
+	if err := addGramsSlices(dst, leftExtra, rightExtra); err != nil {
+		return fmt.Errorf("failed to combine fees collected: %w", err)
 	}
-	rg, err := loadCanonicalGrams(rightExtra)
-	if err != nil {
-		return fmt.Errorf("failed to load right fees collected: %w", err)
-	}
-
-	if err = storeCanonicalGrams(dst, new(big.Int).Add(lg, rg)); err != nil {
-		return err
-	}
-	if err = addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil {
-		return err
-	}
-	return nil
+	return addCurrencyCollectionSlices(dst, leftExtra, rightExtra)
 }
 
 // ===========================================================================
@@ -1315,7 +1335,7 @@ func (a AugOutMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 		if err != nil {
 			return err
 		}
-		if err = storeCanonicalGrams(dst, sum); err != nil {
+		if err = sum.storeTo(dst); err != nil {
 			return err
 		}
 		if err = info.valueExtra.appendTo(dst); err != nil {

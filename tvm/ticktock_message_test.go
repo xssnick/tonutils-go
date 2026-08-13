@@ -355,4 +355,13 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 			t.Fatal("expected missing shard account to fail")
 		}
 	})
+
+	t.Run("RejectsNonExistingAccount", func(t *testing.T) {
+		_, err := testEmulateTickTockTransaction(NewTVM(), buildTransactionTestNoneShardAccount(t), false, testTxParams{
+			Address: tickTockTestAddr,
+		})
+		if err == nil {
+			t.Fatal("expected account_none to fail")
+		}
+	})
 }

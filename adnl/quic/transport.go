@@ -41,7 +41,6 @@ const (
 	defaultMaxStreamReceiveWindow         = 6 << 20
 	defaultInitialConnectionReceiveWindow = 4 << 20
 	defaultMaxConnectionReceiveWindow     = 24 << 20
-	defaultMaxConnectionsPerIP            = 1000
 	directWriteObjectThreshold            = 32 << 10
 )
 

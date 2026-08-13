@@ -3,41 +3,30 @@ package exec
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return JMPXARGS(0) })
+	vm.ArgList = append(vm.ArgList, jmpXArgsOp)
 }
 
-func JMPXARGS(params int) *helpers.AdvancedOP {
-	op := &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			cont, err := state.Stack.PopContinuation()
-			if err != nil {
-				return err
-			}
+var jmpXArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(12, []byte{0xDB, 0x10})),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		cont, err := state.Stack.PopContinuation()
+		if err != nil {
+			return err
+		}
 
-			return state.JumpArgs(cont, params)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("JMPXARGS %d", params)
-		},
-		BitPrefix:     helpers.SlicePrefix(12, []byte{0xDB, 0x10}),
-		FixedSizeBits: 4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(params), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			params = int(val)
-			return nil
-		},
-	}
-	return op
+		return state.JumpArgs(cont, int(int32(args)))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("JMPXARGS %d", int32(args))
+	},
+})
+
+func JMPXARGS(params int) vm.OP {
+	return vm.Bind(jmpXArgsOp, uint64(uint32(params)))
 }

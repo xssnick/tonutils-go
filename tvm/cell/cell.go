@@ -93,6 +93,19 @@ func (c *Cell) beginParseWithTrace(trace *Trace) (*Slice, error) {
 	return s, nil
 }
 
+// prunedParseDetector, when set, is notified every time a pruned branch is
+// parsed as if it were content. Parsing one never fails — the boundary's own
+// payload decodes as data, optional fields read as absent — so this is the only
+// way to see the mistake on this side rather than on the far side of a proof.
+var prunedParseDetector func(*Cell)
+
+// SetPrunedParseDetector installs that notifier. It is a diagnostic, not a gate:
+// legitimate readers parse boundaries (proof unwrapping, merkle updates), so the
+// notifier decides what to do rather than the parser.
+func SetPrunedParseDetector(fn func(*Cell)) {
+	prunedParseDetector = fn
+}
+
 func (c *Cell) beginParseIntoWithTrace(dst *Slice, trace *Trace) error {
 	// Keep the active trace on the Slice so reference descent does not clone
 	// otherwise immutable cells just to attach trace metadata.
@@ -101,7 +114,17 @@ func (c *Cell) beginParseIntoWithTrace(dst *Slice, trace *Trace) error {
 		return err
 	}
 
-	trace.NotifyLoad(loaded)
+	// The special flag is already in the cell's own word and is false for every
+	// ordinary parse, so an inactive detector costs one bit test on the hottest
+	// path in the package.
+	if loaded.IsSpecial() && prunedParseDetector != nil && loaded.GetType() == PrunedCellType {
+		prunedParseDetector(loaded)
+	}
+	if trace != nil {
+		if err = trace.NotifyLoadError(loaded); err != nil {
+			return err
+		}
+	}
 	*dst = Slice{
 		cell:   loaded,
 		trace:  trace,
@@ -146,6 +169,17 @@ func (c *Cell) WithTrace(trace *Trace) *Cell {
 	}
 	if c.Trace() == trace {
 		return c
+	}
+	if trace != nil && c.meta == nil {
+		// A cell without metadata gaining a trace is by far the most repeated
+		// cell operation in a traced collation, and going through copy() would
+		// allocate the cell and then its metadata as two separate objects. The
+		// resulting object graph is identical either way.
+		fused := new(cellWithMeta)
+		fused.c = *c
+		fused.m.trace = trace
+		fused.c.meta = &fused.m
+		return &fused.c
 	}
 	cp := c.copy()
 	if trace != nil {
@@ -227,6 +261,28 @@ func (c *Cell) PeekRef(i int) (*Cell, error) {
 		return ref, err
 	}
 	return ref.WithTrace(trace.Child(i)), nil
+}
+
+// MustRefHashAt returns the hash of the i-th reference exactly as PeekRef would
+// report it, without materializing a view of the child. PeekRef has to attach
+// the parent's child trace to what it returns, which copies the cell and creates
+// a trace node; callers that only want the identity of a reference — proof and
+// size accounting walk every reference of every loaded cell — should not pay for
+// a view they immediately discard. It panics on an out-of-range index, like
+// MustPeekRef.
+func (c *Cell) MustRefHashAt(i int) Hash {
+	if i < 0 || i >= c.refsCount() {
+		panic(ErrNoMoreRefs)
+	}
+	refView := newCellRefView(c)
+	ref, err := refView.boundaryRef(i)
+	if err != nil {
+		panic(err)
+	}
+	if ref == nil {
+		panic(ErrNoMoreRefs)
+	}
+	return ref.HashKey()
 }
 
 const defaultDumpLimit = uint64(16 << 30)
@@ -407,7 +463,11 @@ const _DataCellMaxLevel = 3
 func (c *Cell) Hash(level ...int) []byte {
 	hash := make([]byte, hashSize)
 	if len(level) > 0 {
-		copy(hash, c.getHash(level[0]))
+		requested := level[0]
+		if requested < 0 {
+			requested = _DataCellMaxLevel
+		}
+		copy(hash, c.getHash(requested))
 		return hash
 	}
 	copy(hash, c.getHash(_DataCellMaxLevel))
@@ -415,18 +475,31 @@ func (c *Cell) Hash(level ...int) []byte {
 }
 
 func (c *Cell) HashKey(level ...int) Hash {
-	var key Hash
 	if len(level) > 0 {
-		copy(key[:], c.getHash(level[0]))
-		return key
+		return c.HashKeyAt(level[0])
 	}
-	copy(key[:], c.getHash(_DataCellMaxLevel))
+	return c.HashKeyAt(_DataCellMaxLevel)
+}
+
+// HashKeyAt is HashKey for one explicit level. The variadic form heap-allocates
+// its argument slice at every call site that passes a level, which the merkle
+// walks do once or twice per visited node; this form takes the level directly.
+func (c *Cell) HashKeyAt(level int) Hash {
+	var key Hash
+	if level < 0 {
+		level = _DataCellMaxLevel
+	}
+	copy(key[:], c.getHash(level))
 	return key
 }
 
 func (c *Cell) Depth(level ...int) uint16 {
 	if len(level) > 0 {
-		return c.getDepth(level[0])
+		requested := level[0]
+		if requested < 0 {
+			requested = _DataCellMaxLevel
+		}
+		return c.getDepth(requested)
 	}
 	return c.getDepth(_DataCellMaxLevel)
 }

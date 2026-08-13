@@ -11,7 +11,7 @@ import (
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return TRY() })
-	vm.List = append(vm.List, func() vm.OP { return TRYARGS(0, 0) })
+	vm.ArgList = append(vm.ArgList, tryArgsOp)
 }
 
 func TRY() (op *helpers.SimpleOP) {
@@ -24,29 +24,37 @@ func TRY() (op *helpers.SimpleOP) {
 	}
 }
 
-func TRYARGS(params, retvals int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			return executeTry(state, params, retvals)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("TRYARGS %d,%d", params, retvals)
-		},
-		BitPrefix: helpers.UIntPrefix(0xF3, 8),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(((params&0x0F)<<4)|(retvals&0x0F)), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			params = int((val >> 4) & 0x0F)
-			retvals = int(val & 0x0F)
-			return nil
-		},
-	}
+var tryArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xF3, 8)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		params, retvals := unpackArgPair(args)
+		return executeTry(state, params, retvals)
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(8); err != nil {
+			return 0, err
+		}
+		val, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, err
+		}
+		return packArgPair(int((val>>4)&0x0F), int(val&0x0F)), nil
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		params, retvals := unpackArgPair(args)
+		return cell.BeginCell().
+			MustStoreUInt(0xF3, 8).
+			MustStoreUInt(uint64(((params&0x0F)<<4)|(retvals&0x0F)), 8)
+	},
+	Name: func(args uint64) string {
+		params, retvals := unpackArgPair(args)
+		return fmt.Sprintf("TRYARGS %d,%d", params, retvals)
+	},
+})
+
+func TRYARGS(params, retvals int) vm.OP {
+	return vm.Bind(tryArgsOp, packArgPair(params, retvals))
 }
 
 func executeTry(state *vm.State, params, retvals int) error {

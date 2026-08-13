@@ -206,7 +206,7 @@ func TestStateCallArgsPassesTopElements(t *testing.T) {
 	cont := &OrdinaryContinuation{
 		Data: ControlData{
 			NumArgs: 2,
-			CP:      CP,
+			CP:      state.CP,
 		},
 		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}
@@ -241,7 +241,7 @@ func TestStateCallArgsWithCapturedStackPreservesClosureStack(t *testing.T) {
 		Data: ControlData{
 			Stack:   closureStack,
 			NumArgs: 2,
-			CP:      CP,
+			CP:      state.CP,
 		},
 		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}
@@ -276,7 +276,7 @@ func TestStateJumpArgsWithCapturedStackUsesClosureStack(t *testing.T) {
 		Data: ControlData{
 			Stack:   closureStack,
 			NumArgs: 2,
-			CP:      CP,
+			CP:      state.CP,
 		},
 		Code: cell.BeginCell().EndCell().MustBeginParse(),
 	}

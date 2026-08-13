@@ -11,13 +11,12 @@ import (
 
 func init() {
 	for args := uint8(0); args < 16; args++ {
-		a := args
-		vm.List = append(vm.List,
-			func() vm.OP { return qDivModFamily(a) },
-			func() vm.OP { return qShrModFamily(a) },
-			func() vm.OP { return qMulDivModFamily(a) },
-			func() vm.OP { return qMulShrModFamily(a) },
-			func() vm.OP { return qShlDivModFamily(a) },
+		vm.ArgList = append(vm.ArgList,
+			qDivModOp(args),
+			qShrModOp(args),
+			qMulDivModOp(args),
+			qMulShrModOp(args),
+			qShlDivModOp(args),
 		)
 	}
 
@@ -124,17 +123,21 @@ func qShift256Value(x *big.Int) (uint, bool) {
 	return uint(v), true
 }
 
-func qCompoundOP(name func(uint8) string, prefix helpers.BitPrefix, args uint8, action func(*vm.State, uint8) error) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
+// qCompoundOP builds one member of a quiet compound family. The four-bit
+// selector stays part of the opcode prefix instead of becoming a decoded
+// operand: the minimum global version depends on it, and below that version the
+// prefix must still dispatch — and be charged for — before it is rejected.
+func qCompoundOP(name func(uint8) string, prefix helpers.BitPrefix, args uint8, action func(*vm.State, uint8) error) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed:   helpers.SinglePrefixed(qCompoundFullPrefix(prefix, args)),
 		MinVersion: qCompoundMinVersion(args),
-		Action: func(state *vm.State) error {
+		Action: func(state *vm.State, _ uint64) error {
 			return action(state, args)
 		},
-		NameSerializer: func() string {
+		Name: func(uint64) string {
 			return name(args)
 		},
-		BitPrefix: qCompoundFullPrefix(prefix, args),
-	}
+	})
 }
 
 func qCompoundFullPrefix(prefix helpers.BitPrefix, args uint8) helpers.BitPrefix {
@@ -180,7 +183,11 @@ func qDivModName(args uint8) string {
 	return name + suffix
 }
 
-func qDivModFamily(args uint8) *helpers.AdvancedOP {
+func qDivModFamily(args uint8) vm.OP {
+	return vm.Bind(qDivModOp(args), 0)
+}
+
+func qDivModOp(args uint8) *helpers.ArgOP {
 	return qCompoundOP(qDivModName, helpers.UIntPrefix(0xB7A90, 20), args, func(state *vm.State, args uint8) error {
 		if _, err := qFamilySuffix(args); err != nil {
 			return err
@@ -248,7 +255,11 @@ func qShrModName(args uint8) string {
 	}
 }
 
-func qShrModFamily(args uint8) *helpers.AdvancedOP {
+func qShrModFamily(args uint8) vm.OP {
+	return vm.Bind(qShrModOp(args), 0)
+}
+
+func qShrModOp(args uint8) *helpers.ArgOP {
 	return qCompoundOP(qShrModName, helpers.UIntPrefix(0xB7A92, 20), args, func(state *vm.State, args uint8) error {
 		if _, err := qFamilySuffix(args); err != nil {
 			return err
@@ -330,7 +341,11 @@ func qMulDivModName(args uint8) string {
 	return name + suffix
 }
 
-func qMulDivModFamily(args uint8) *helpers.AdvancedOP {
+func qMulDivModFamily(args uint8) vm.OP {
+	return vm.Bind(qMulDivModOp(args), 0)
+}
+
+func qMulDivModOp(args uint8) *helpers.ArgOP {
 	return qCompoundOP(qMulDivModName, helpers.UIntPrefix(0xB7A98, 20), args, func(state *vm.State, args uint8) error {
 		if _, err := qFamilySuffix(args); err != nil {
 			return err
@@ -402,7 +417,11 @@ func qMulShrModName(args uint8) string {
 	}
 }
 
-func qMulShrModFamily(args uint8) *helpers.AdvancedOP {
+func qMulShrModFamily(args uint8) vm.OP {
+	return vm.Bind(qMulShrModOp(args), 0)
+}
+
+func qMulShrModOp(args uint8) *helpers.ArgOP {
 	return qCompoundOP(qMulShrModName, helpers.UIntPrefix(0xB7A9A, 20), args, func(state *vm.State, args uint8) error {
 		if _, err := qFamilySuffix(args); err != nil {
 			return err
@@ -485,7 +504,11 @@ func qShlDivModName(args uint8) string {
 	}
 }
 
-func qShlDivModFamily(args uint8) *helpers.AdvancedOP {
+func qShlDivModFamily(args uint8) vm.OP {
+	return vm.Bind(qShlDivModOp(args), 0)
+}
+
+func qShlDivModOp(args uint8) *helpers.ArgOP {
 	return qCompoundOP(qShlDivModName, helpers.UIntPrefix(0xB7A9C, 20), args, func(state *vm.State, args uint8) error {
 		if _, err := qFamilySuffix(args); err != nil {
 			return err

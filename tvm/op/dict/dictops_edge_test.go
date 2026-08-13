@@ -114,7 +114,7 @@ func TestPrefixDictGetAndSubdictEdgeBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0)); err != nil {
 		t.Fatalf("push empty subdict prefix bits: %v", err)
 	}
-	if err := pushMaybeCell(state.Stack, nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push empty subdict root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
@@ -150,7 +150,7 @@ func TestDictHelperEdgeBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := pushMaybeCell(state.Stack, nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push nil dict root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(4)); err != nil {

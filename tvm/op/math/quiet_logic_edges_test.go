@@ -5,12 +5,11 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-func quietShiftCodeFromSuffix(t *testing.T, right bool, suffix uint8) mathInterpretOp {
+func quietShiftCodeFromSuffix(t *testing.T, right bool, suffix uint8) vm.OP {
 	t.Helper()
 
 	prefix := uint64(0xB7AA)
@@ -73,7 +72,7 @@ func TestQuietImmediateShiftCodeFiniteAndBoundaryEdges(t *testing.T) {
 		}
 
 		op := quietShiftCodeFromSuffix(t, true, 255)
-		if got := op.(*helpers.AdvancedOP).SerializeText(); got != "256 QRSHIFT#" {
+		if got := op.SerializeText(); got != "256 QRSHIFT#" {
 			t.Fatalf("QRSHIFT# text = %q, want 256 QRSHIFT#", got)
 		}
 	})
@@ -102,7 +101,7 @@ func TestQuietImmediateShiftCodeErrorEdges(t *testing.T) {
 
 	for _, tt := range []struct {
 		name   string
-		op     mathInterpretOp
+		op     vm.OP
 		prefix uint64
 	}{
 		{name: "QLSHIFT#ShortSuffix", op: QLSHIFTCODE(1), prefix: 0xB7AA},
@@ -110,7 +109,7 @@ func TestQuietImmediateShiftCodeErrorEdges(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			code := cell.BeginCell().MustStoreUInt(tt.prefix, 16).EndCell().MustBeginParse()
-			if err := tt.op.(*helpers.AdvancedOP).Deserialize(code); err == nil {
+			if err := tt.op.Deserialize(code); err == nil {
 				t.Fatalf("expected short suffix to fail")
 			}
 		})

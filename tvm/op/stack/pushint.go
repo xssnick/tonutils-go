@@ -60,6 +60,16 @@ func PUSHINT(value *big.Int) *OpPUSHINT {
 func (op *OpPUSHINT) Deserialize(code *cell.Slice) error {
 	prefix, err := code.LoadUInt(8)
 	if err != nil {
+		// consensus-critical: gas for a truncated opcode follows the
+		// zero-padded opcode-table entry, not the undecoded default
+		switch helpers.PeekZeroPaddedOpcode(code, 8) {
+		case 0x80:
+			op.instructionBits = 16
+		case 0x81:
+			op.instructionBits = 24
+		case 0x82:
+			op.instructionBits = 13
+		}
 		return err
 	}
 

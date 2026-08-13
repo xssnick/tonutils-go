@@ -209,7 +209,15 @@ func (d *PrefixDictionary) lookupPrefixSliceInto(keySlice *Slice, value *Slice) 
 			return matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
 		}
 		if branchSlice.cell.IsSpecial() {
-			return matched, fmt.Errorf("prefix dict %w", ErrDictHasSpecialCells)
+			resolved, err := resolveDictNodeCell(branchSlice.cell, branchTrace, nil, "prefix dict")
+			if err != nil {
+				return matched, err
+			}
+			branchTrace = CombineTraces(resolved.Trace(), branchTrace)
+			if err = resolved.BeginParseIntoWithTrace(&branchSlice, nil); err != nil {
+				return matched, fmt.Errorf("failed to load prefix dict branch: %w", err)
+			}
+			branchSlice.SetTrace(branchTrace)
 		}
 
 		labelLen, commonPrefix, err := matchLabelPrefix(remaining, &branchSlice, keySlice)
@@ -496,9 +504,12 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return leaf, err == nil, err
 	}
 
-	node, err := parseFixedDictNode(branch, remaining)
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to load label: %w", err)
+	}
+	if err = node.resolveIfSpecial(remaining, branch.Trace(), nil); err != nil {
+		return nil, false, err
 	}
 	if err = node.rejectSpecial("prefix dict"); err != nil {
 		return nil, false, err
@@ -562,12 +573,12 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return leaf, true, nil
 	}
 
-	if remaining == node.labelLen {
-		return nil, false, fmt.Errorf("a fork node in a prefix code dictionary with zero remaining key length")
-	}
 	if node.loader.BitsLeft() != 0 || node.loader.RefsNum() != 2 {
 		return nil, false, fmt.Errorf("invalid fork node in a prefix code dictionary")
 	}
+	// A fork whose label consumes the whole key (or a key that ran out) means
+	// the key is a proper prefix of longer entries: the set returns the tree
+	// unchanged instead of failing.
 	if key.BitsLeft() == 0 {
 		return node.cell, false, nil
 	}
@@ -590,7 +601,17 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		return node.cell, false, nil
 	}
 
-	return node.cloneWithRef(int(idx), child, d.trace)
+	canonical, decided := node.canonicalLabelFast(remaining)
+	if !decided {
+		canonical, err = node.hasCanonicalLabel(remaining)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	if canonical {
+		return node.cloneWithRef(int(idx), child, d.trace)
+	}
+	return d.rebuildNonCanonicalPrefixForkWithRef(&node, int(idx), child, remaining)
 }
 
 func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint) (*Slice, *Cell, bool, error) {
@@ -601,9 +622,12 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return nil, nil, false, nil
 	}
 
-	node, err := parseFixedDictNode(branch, remaining)
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load label: %w", err)
+	}
+	if err = node.resolveIfSpecial(remaining, branch.Trace(), nil); err != nil {
+		return nil, nil, false, err
 	}
 	if err = node.rejectSpecial("prefix dict"); err != nil {
 		return nil, nil, false, err
@@ -631,12 +655,10 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return node.value(), nil, true, nil
 	}
 
-	if remaining == node.labelLen {
-		return nil, nil, false, fmt.Errorf("a fork node in a prefix code dictionary with zero remaining key length")
-	}
 	if node.loader.BitsLeft() != 0 || node.loader.RefsNum() != 2 {
 		return nil, nil, false, fmt.Errorf("invalid fork node in a prefix code dictionary")
 	}
+	// a fork consuming the whole key is "not found", not an error
 	if key.BitsLeft() == 0 {
 		return nil, nil, false, nil
 	}
@@ -666,7 +688,18 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 	}
 
 	if newChild != nil && otherChild != nil {
-		cloned, changed, err := node.cloneWithRef(int(idx), newChild, d.trace)
+		canonical, decided := node.canonicalLabelFast(remaining)
+		if !decided {
+			canonical, err = node.hasCanonicalLabel(remaining)
+			if err != nil {
+				return nil, nil, false, err
+			}
+		}
+		if canonical {
+			cloned, changed, err := node.cloneWithRef(int(idx), newChild, d.trace)
+			return oldValue, cloned, changed, err
+		}
+		cloned, changed, err := d.rebuildNonCanonicalPrefixForkWithRef(&node, int(idx), newChild, remaining)
 		return oldValue, cloned, changed, err
 	}
 
@@ -681,28 +714,58 @@ func (d *PrefixDictionary) lookupDelete(branch *Cell, key *Slice, remaining uint
 		return oldValue, nil, true, nil
 	}
 
-	survivorSlice, err := survivor.BeginParse()
+	childRemaining := remaining - (node.labelLen + 1)
+	survivorNode, err := parseFixedDictNodeWithTrace(survivor, childRemaining, survivor.Trace())
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to load survivor branch: %w", err)
 	}
-
-	_, survivorLabel, err := loadLabel(remaining-(node.labelLen+1), survivorSlice, BeginCell())
-	if err != nil {
-		return nil, nil, false, fmt.Errorf("failed to load survivor label: %w", err)
+	if err = survivorNode.resolveIfSpecial(childRemaining, survivor.Trace(), nil); err != nil {
+		return nil, nil, false, err
 	}
-
-	mergedLabel, err := node.mergedEdgeLabel(uint64(survivorBit), survivorLabel, "survivor")
-	if err != nil {
+	if err = survivorNode.rejectSpecial("prefix dict"); err != nil {
 		return nil, nil, false, err
 	}
 
+	var mergedLabel Builder
+	baseLabel := node.labelSlice()
+	if err = mergedLabel.storeSliceFromSlice(&baseLabel, node.labelLen); err != nil {
+		return nil, nil, false, fmt.Errorf("failed to append survivor base label: %w", err)
+	}
+	if err = mergedLabel.StoreUInt(uint64(survivorBit), 1); err != nil {
+		return nil, nil, false, fmt.Errorf("failed to append survivor edge bit: %w", err)
+	}
+	survivorLabel := survivorNode.labelSlice()
+	if err = mergedLabel.storeSliceFromSlice(&survivorLabel, survivorNode.labelLen); err != nil {
+		return nil, nil, false, fmt.Errorf("failed to append survivor label: %w", err)
+	}
+
 	var survivorPayload Builder
-	survivorSlice.ToBuilderInto(&survivorPayload)
-	merged, err := d.storePrefixNode(mergedLabel, &survivorPayload, remaining)
+	survivorNode.loader.ToBuilderInto(&survivorPayload)
+	merged, err := d.storePrefixNode(builderSliceView(&mergedLabel), &survivorPayload, remaining)
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to merge prefix edges: %w", err)
 	}
 	return oldValue, merged, true, nil
+}
+
+func (d *PrefixDictionary) rebuildNonCanonicalPrefixForkWithRef(node *fixedDictNode, i int, ref *Cell, remaining uint) (*Cell, bool, error) {
+	left, err := node.ref(0)
+	if err != nil {
+		return nil, false, err
+	}
+	right, err := node.ref(1)
+	if err != nil {
+		return nil, false, err
+	}
+	if i == 0 {
+		left = ref
+	} else {
+		right = ref
+	}
+
+	label := node.labelSlice()
+	rebuilt, err := d.storePrefixFork(&label, left, right, remaining)
+	return rebuilt, err == nil, err
 }
 
 func (d *PrefixDictionary) storePrefixNode(label *Slice, payload *Builder, remaining uint) (*Cell, error) {

@@ -52,6 +52,31 @@ func NewAddress(flags byte, workchain byte, data []byte) *Address {
 	}
 }
 
+// addrWithStdData combines a standard address with its 32 data bytes in one
+// size-classed allocation. A standard address is always exactly 256 bits, and
+// nothing here grows a.data — the slice is capped to its length, so any append
+// reallocates — which makes pointing it at the embedded array safe.
+type addrWithStdData struct {
+	a   Address
+	buf [32]byte
+}
+
+// NewStdAddressBuffer allocates a standard address together with its data and
+// returns the address plus the buffer the caller must fill with the 32 address
+// bytes. Parsing an address otherwise costs two objects where one will do, and
+// addresses are parsed once per message on the collation's hot path.
+func NewStdAddressBuffer(flags byte, workchain byte) (*Address, []byte) {
+	x := new(addrWithStdData)
+	x.a = Address{
+		flags:     parseFlags(flags),
+		addrType:  StdAddress,
+		workchain: int32(int8(workchain)),
+		bitsLen:   256,
+		data:      x.buf[:],
+	}
+	return &x.a, x.buf[:]
+}
+
 func NewAnycast(depth uint, prefix []byte) *Anycast {
 	return &Anycast{
 		depth:  depth,

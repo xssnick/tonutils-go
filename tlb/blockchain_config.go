@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sort"
 
+	"github.com/xssnick/tonutils-go/internal/fee"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -157,7 +158,8 @@ func (c BlockchainConfig) ComputeStorageFee(masterchain bool, lastPaid, now uint
 		upto = entries[0].ValidSince
 	}
 
-	total := big.NewInt(0)
+	var fixed fee.U128
+	var wide *big.Int // set once a window leaves the fixed-width range, see ComputeStorageFee
 	for ; i < len(entries) && upto < now; i++ {
 		validUntil := now
 		if i < len(entries)-1 && entries[i+1].ValidSince < validUntil {
@@ -167,11 +169,29 @@ func (c BlockchainConfig) ComputeStorageFee(masterchain bool, lastPaid, now uint
 			continue
 		}
 
-		total.Add(total, blockchainConfigStorageFeeRaw(entries[i], masterchain, uint64(validUntil-upto), bits, cells))
+		delta := uint64(validUntil - upto)
 		upto = validUntil
+
+		bitPrice, cellPrice := entries[i].storagePricesFor(masterchain)
+		if wide == nil {
+			part, fits := configStorageFeeRaw(cells, cellPrice, bits, bitPrice, delta)
+			if fits {
+				if sum, fits := fixed.Add(part); fits {
+					fixed = sum
+					continue
+				}
+			}
+			wide = fixed.Big()
+		}
+
+		wide.Add(wide, configStorageFeeRawBig(cells, cellPrice, bits, bitPrice, delta))
 	}
 
-	return configPricesCeilShiftRight(total, 16), nil
+	if wide == nil {
+		return fixed.CeilShr(16).Big(), nil
+	}
+
+	return configPricesCeilShiftRight(wide, 16), nil
 }
 
 func (c BlockchainConfig) getStoragePricesEntries() ([]ConfigStoragePrices, error) {
@@ -209,20 +229,6 @@ func (c BlockchainConfig) getStoragePricesEntries() ([]ConfigStoragePrices, erro
 		return prices[i].ValidSince < prices[j].ValidSince
 	})
 	return prices, nil
-}
-
-func blockchainConfigStorageFeeRaw(price ConfigStoragePrices, masterchain bool, delta, bits, cells uint64) *big.Int {
-	bitPrice := price.BitPrice
-	cellPrice := price.CellPrice
-	if masterchain {
-		bitPrice = price.MCBitPrice
-		cellPrice = price.MCCellPrice
-	}
-
-	total := new(big.Int).Mul(new(big.Int).SetUint64(cells), new(big.Int).SetUint64(cellPrice))
-	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(bits), new(big.Int).SetUint64(bitPrice)))
-	total.Mul(total, new(big.Int).SetUint64(delta))
-	return total
 }
 
 func (c BlockchainConfig) GetGasPrices(masterchain bool) (*ConfigGasLimitsPrices, error) {

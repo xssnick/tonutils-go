@@ -5,14 +5,11 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return EQINT(0) })
+	vm.ArgList = append(vm.ArgList, eqIntOp)
 }
 
-func EQINT(value int8) *OpIntCmp {
-	return &OpIntCmp{
-		name:   "EQINT",
-		prefix: 0xC0,
-		mask:   intCmpMaskEqual,
-		value:  value,
-	}
+var eqIntOp = intCmpOp("EQINT", 0xC0, intCmpMaskEqual)
+
+func EQINT(value int8) vm.OP {
+	return vm.Bind(eqIntOp, uint64(uint8(value)))
 }

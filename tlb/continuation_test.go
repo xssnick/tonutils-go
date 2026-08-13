@@ -224,6 +224,26 @@ func TestContinuationCPPFixtures(t *testing.T) {
 	}
 }
 
+func TestParseContinuationRefRejectsSpecialCell(t *testing.T) {
+	library, err := cell.BeginCell().
+		MustStoreUInt(uint64(cell.LibraryCellType), 8).
+		MustStoreSlice(make([]byte, 32), 256).
+		EndCellSpecial(true)
+	if err != nil {
+		t.Fatalf("build library cell: %v", err)
+	}
+
+	loader := cell.BeginCell().MustStoreRef(library).EndCell().MustBeginParse()
+	if _, err = parseContinuationRef(loader); err == nil {
+		t.Fatal("special continuation cell parsed successfully")
+	} else if !strings.Contains(err.Error(), "special cell") {
+		t.Fatalf("parse error = %v, want special-cell load failure", err)
+	}
+	if loader.RefsNum() != 0 {
+		t.Fatalf("outer refs left = %d, want fetched reference consumed", loader.RefsNum())
+	}
+}
+
 func TestContinuationRichControlDataRoundTrip(t *testing.T) {
 	codeRef0 := cell.BeginCell().MustStoreUInt(0xaa, 8).EndCell()
 	codeRef1 := cell.BeginCell().MustStoreUInt(0xbb, 8).EndCell()
@@ -439,6 +459,40 @@ func TestContinuationRejectsMalformedValues(t *testing.T) {
 	}
 }
 
+func TestContinuationRejectsMalformedSaveListForkShape(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		extraBit bool
+		extraRef bool
+	}{
+		{name: "fork payload bit", extraBit: true},
+		{name: "third fork ref", extraRef: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded := malformedSaveListForkContinuation(t, test.extraBit, test.extraRef)
+			if _, err := ParseStackValue(encoded.MustBeginParse()); err == nil {
+				t.Fatal("continuation with malformed save-list fork parsed successfully")
+			}
+		})
+	}
+}
+
+func TestContinuationSaveListFromLazyBOC(t *testing.T) {
+	encoded := malformedSaveListForkContinuation(t, false, false)
+	lazy, err := cell.FromBOCWithOptions(encoded.ToBOC(), cell.BOCParseOptions{Lazy: true})
+	if err != nil {
+		t.Fatalf("parse lazy continuation BOC: %v", err)
+	}
+
+	loader := lazy.MustBeginParse()
+	if _, err = ParseStackValue(loader); err != nil {
+		t.Fatalf("parse continuation with lazy save-list: %v", err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		t.Fatalf("continuation has trailing data: %d bits, %d refs", loader.BitsLeft(), loader.RefsNum())
+	}
+}
+
 func TestContinuationSerializerValidation(t *testing.T) {
 	tests := []struct {
 		name string
@@ -484,6 +538,25 @@ func TestContinuationSerializerValidation(t *testing.T) {
 		After: shared,
 	}); err != nil {
 		t.Fatalf("shared acyclic continuation rejected: %v", err)
+	}
+}
+
+func TestContinuationSerializerSkipsTypedNilSavedRegister(t *testing.T) {
+	withoutSaved := minimalOrdinaryContinuation(vm.ControlData{NumArgs: -1, CP: -1})
+	withTypedNil := minimalOrdinaryContinuation(vm.ControlData{NumArgs: -1, CP: -1})
+	var nullC2 *vm.QuitContinuation
+	withTypedNil.Data.Save.C[2] = nullC2
+
+	want := cell.BeginCell()
+	if err := SerializeStackValue(want, withoutSaved); err != nil {
+		t.Fatalf("serialize continuation without saved c2: %v", err)
+	}
+	got := cell.BeginCell()
+	if err := SerializeStackValue(got, withTypedNil); err != nil {
+		t.Fatalf("serialize continuation with typed-nil saved c2: %v", err)
+	}
+	if !bytes.Equal(got.EndCell().Hash(), want.EndCell().Hash()) {
+		t.Fatal("typed-nil saved c2 was serialized as a present control register")
 	}
 }
 
@@ -664,6 +737,49 @@ func malformedSavedRegisterContinuation(t *testing.T, index uint64, value any) *
 		MustStoreBoolBit(false).
 		MustStoreDict(dict).
 		MustStoreBoolBit(false).
+		EndCell()
+}
+
+func malformedSaveListForkContinuation(t *testing.T, extraBit, extraRef bool) *cell.Cell {
+	t.Helper()
+
+	dict := cell.NewDict(4)
+	for _, index := range []uint64{0, 2} {
+		value := cell.BeginCell()
+		if err := SerializeStackValue(value, &vm.ExcQuitContinuation{}); err != nil {
+			t.Fatalf("serialize saved continuation: %v", err)
+		}
+		if err := dict.SetBuilder(cell.BeginCell().MustStoreUInt(index, 4).EndCell(), value); err != nil {
+			t.Fatalf("store saved continuation c%d: %v", index, err)
+		}
+	}
+
+	root := dict.AsCell()
+	rootSlice := root.MustBeginParse()
+	malformedRoot := cell.BeginCell().MustStoreSlice(rootSlice.MustLoadSlice(root.BitsSize()), root.BitsSize())
+	if extraBit {
+		malformedRoot.MustStoreBoolBit(true)
+	}
+	for rootSlice.RefsNum() > 0 {
+		ref, err := rootSlice.LoadRefCell()
+		if err != nil {
+			t.Fatalf("load valid save-list fork ref: %v", err)
+		}
+		malformedRoot.MustStoreRef(ref)
+	}
+	if extraRef {
+		malformedRoot.MustStoreRef(cell.BeginCell().EndCell())
+	}
+
+	return cell.BeginCell().
+		MustStoreUInt(0x06, 8).
+		MustStoreUInt(0, 2).
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(false).
+		MustStoreMaybeRef(malformedRoot.EndCell()).
+		MustStoreBoolBit(false).
+		MustStoreRef(cell.BeginCell().EndCell()).
+		MustStoreUInt(0, 26).
 		EndCell()
 }
 

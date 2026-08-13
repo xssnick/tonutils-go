@@ -3,59 +3,42 @@ package stack
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return PUSH2(0, 0) })
+	vm.ArgList = append(vm.ArgList, push2Op)
 }
 
-// constant prefix, computed once instead of on every decode
-var push2Prefix = helpers.BytesPrefix(0x53)
+var push2Op = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0x53)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		i, j := unpackArgs2(args)
+		if err := requireStackDepth(state, 0, i, j); err != nil {
+			return err
+		}
 
-func PUSH2(i, j uint8) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			if err := requireStackDepth(state, 0, int(i), int(j)); err != nil {
-				return err
-			}
+		val, err := state.Stack.Get(i)
+		if err != nil {
+			return err
+		}
+		if err := state.Stack.PushAny(val); err != nil {
+			return err
+		}
+		val, err = state.Stack.Get(j + 1)
+		if err != nil {
+			return err
+		}
+		return state.Stack.PushAny(val)
+	},
+	Name: func(args uint64) string {
+		i, j := unpackArgs2(args)
+		return fmt.Sprintf("%d,%d PUSH2", i, j)
+	},
+})
 
-			val, err := state.Stack.Get(int(i))
-			if err != nil {
-				return err
-			}
-			if err := state.Stack.PushAny(val); err != nil {
-				return err
-			}
-			val, err = state.Stack.Get(int(j) + 1)
-			if err != nil {
-				return err
-			}
-			return state.Stack.PushAny(val)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d,%d PUSH2", i, j)
-		},
-		BitPrefix: push2Prefix,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			ival, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			jval, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			i = uint8(ival)
-			j = uint8(jval)
-			return nil
-		},
-	}
-	return op
+func PUSH2(i, j uint8) vm.OP {
+	return vm.Bind(push2Op, packArgs2(i, j))
 }

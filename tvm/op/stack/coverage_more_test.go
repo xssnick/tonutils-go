@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -41,7 +40,7 @@ func TestRegisteredStackOpsInstantiate(t *testing.T) {
 		t.Fatal("expected stack package to register op getters")
 	}
 
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -65,7 +64,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 		if got := dst.SerializeText(); got != "s1 PUSH" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 8 {
+		if got := instructionBits(t, dst); got != 8 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 
@@ -87,7 +86,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 		if got := dst.SerializeText(); got != "s1 POP" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 8 {
+		if got := instructionBits(t, dst); got != 8 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 
@@ -103,7 +102,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 	t.Run("XchgRoundTripVariants", func(t *testing.T) {
 		tests := []struct {
 			name string
-			src  *OpXCHG
+			src  vm.OP
 			text string
 			bits int64
 		}{
@@ -121,7 +120,7 @@ func TestPushPopAndXchgRoundTrip(t *testing.T) {
 				if got := dst.SerializeText(); got != tt.text {
 					t.Fatalf("unexpected text: %q", got)
 				}
-				if got := dst.InstructionBits(); got != tt.bits {
+				if got := instructionBits(t, dst); got != tt.bits {
 					t.Fatalf("unexpected bits: %d", got)
 				}
 			})
@@ -357,7 +356,7 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 		if got := dst.SerializeText(); got != "c4 PUSH" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 
@@ -502,7 +501,7 @@ func TestPushCtrDictAndLongOps(t *testing.T) {
 		if pushDst.SerializeText() != "s2 PUSH" || popDst.SerializeText() != "s1 POP" {
 			t.Fatal("unexpected long op text")
 		}
-		if pushDst.InstructionBits() != 16 || popDst.InstructionBits() != 16 {
+		if instructionBits(t, pushDst) != 16 || instructionBits(t, popDst) != 16 {
 			t.Fatal("unexpected long op bits")
 		}
 
@@ -659,8 +658,8 @@ func TestMultiOpsAndAliases(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		op       *helpers.AdvancedOP
-		decoded  *helpers.AdvancedOP
+		op       vm.OP
+		decoded  vm.OP
 		text     string
 		bits     int64
 		expected func([]int64) []int64
@@ -778,7 +777,7 @@ func TestMultiOpsAndAliases(t *testing.T) {
 			if got := tt.decoded.SerializeText(); got != tt.text {
 				t.Fatalf("unexpected text: %q", got)
 			}
-			if got := tt.decoded.InstructionBits(); got != tt.bits {
+			if got := instructionBits(t, tt.decoded); got != tt.bits {
 				t.Fatalf("unexpected bits: %d", got)
 			}
 
@@ -814,7 +813,7 @@ func TestMultiOpsAndAliases(t *testing.T) {
 func TestMultiOpsDeserializeTruncatedSuffixes(t *testing.T) {
 	tests := []struct {
 		name       string
-		op         *helpers.AdvancedOP
+		op         vm.OP
 		prefix     uint64
 		prefixBits uint
 		suffixBits []uint
@@ -874,8 +873,8 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		op       *helpers.AdvancedOP
-		decoded  *helpers.AdvancedOP
+		op       vm.OP
+		decoded  vm.OP
 		text     string
 		bits     int64
 		expected func([]int64) []int64
@@ -1013,7 +1012,7 @@ func TestAdditionalPermutationAndBlockOps(t *testing.T) {
 			if got := tt.decoded.SerializeText(); got != tt.text {
 				t.Fatalf("unexpected text: %q", got)
 			}
-			if got := tt.decoded.InstructionBits(); got != tt.bits {
+			if got := instructionBits(t, tt.decoded); got != tt.bits {
 				t.Fatalf("unexpected bits: %d", got)
 			}
 

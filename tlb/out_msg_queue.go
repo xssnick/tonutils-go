@@ -684,6 +684,5 @@ func skipIntermediateAddress(loader *cell.Slice) error {
 	if isExt {
 		sz = 32 + 64 // interm_addr_ext$11
 	}
-	_, err = loader.LoadSlice(sz)
-	return err
+	return loader.SkipBits(sz)
 }

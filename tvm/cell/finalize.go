@@ -23,6 +23,16 @@ type cellWithBuf128 struct {
 	buf [maxCellDataBytes]byte
 }
 
+// cellWithMeta fuses a cell with the metadata it is known to need, on the same
+// reasoning as the buffers above. Attaching a trace to an untraced cell is the
+// single most repeated cell operation a traced collation performs, and it
+// otherwise costs two objects where one will do — the collector charges by
+// object count, not by bytes.
+type cellWithMeta struct {
+	c Cell
+	m cellMeta
+}
+
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	c, err := buildCellShellFromBuilder(builder, special)
 	if err != nil {

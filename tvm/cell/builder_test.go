@@ -443,7 +443,7 @@ func TestBuilder_StoreBigCoinsVarUIntAndString(t *testing.T) {
 	}
 }
 
-func TestBuilder_StoreMaybeRefAtomicity(t *testing.T) {
+func TestBuilder_StoreMaybeRefFailureState(t *testing.T) {
 	ref := BeginCell().EndCell()
 
 	b := BeginCell().
@@ -457,8 +457,8 @@ func TestBuilder_StoreMaybeRefAtomicity(t *testing.T) {
 	if err := b.StoreMaybeRef(ref); err != ErrTooMuchRefs {
 		t.Fatalf("expected ErrTooMuchRefs, got %v", err)
 	}
-	if b.BitsUsed() != beforeBits || b.RefsUsed() != beforeRefs {
-		t.Fatalf("store maybe-ref should be atomic on ref overflow, bits=%d refs=%d", b.BitsUsed(), b.RefsUsed())
+	if b.BitsUsed() != beforeBits+1 || b.RefsUsed() != beforeRefs {
+		t.Fatalf("store maybe-ref should commit its tag before ref overflow, bits=%d refs=%d", b.BitsUsed(), b.RefsUsed())
 	}
 
 	fullBits := BeginCell().MustStoreSlice(data1024, 1023)
@@ -468,7 +468,7 @@ func TestBuilder_StoreMaybeRefAtomicity(t *testing.T) {
 		t.Fatalf("expected ErrNotFit1023, got %v", err)
 	}
 	if fullBits.BitsUsed() != beforeBits || fullBits.RefsUsed() != beforeRefs {
-		t.Fatalf("store maybe-ref should be atomic on bit overflow, bits=%d refs=%d", fullBits.BitsUsed(), fullBits.RefsUsed())
+		t.Fatalf("store maybe-ref should not mutate on tag overflow, bits=%d refs=%d", fullBits.BitsUsed(), fullBits.RefsUsed())
 	}
 }
 

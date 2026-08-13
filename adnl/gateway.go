@@ -547,15 +547,21 @@ func closePeers(peers []*peerConn) {
 // MaxIdlePeerPairs bounds how many idle peer pairs the gateway keeps alive,
 // mirroring the C++ reference (MAX_IDLE_PEER_PAIRS). Idle pairs above the
 // bound are closed oldest-first; pairs with recent traffic are never touched.
+// It is read unsynchronized by the idle checker of every started gateway, on
+// every tick, so assigning it once at process startup is safe and writing it
+// while any gateway is running is a data race.
 var MaxIdlePeerPairs = 2048
 
-// markIdlePeerPairTimeout is how long a pair must stay quiet in BOTH
-// directions before it counts as idle, mirroring the C++ MARK_IDLE_TIMEOUT.
+// IdlePeerPairTimeout is how long a pair must stay quiet in BOTH directions
+// before it counts as idle, mirroring the C++ MARK_IDLE_TIMEOUT. Like
+// MaxIdlePeerPairs it is read unsynchronized by the idle checker of every
+// started gateway, on every tick: set it before starting gateways, writing it
+// while any gateway is running is a data race.
 // The previous behavior closed the whole peer once its channel saw no inbound
 // packets for 10 minutes — even while we kept sending to it — which
 // black-holed everything the remote later pushed into the dead channel until
 // its own reinit noticed the silence (~15s of loss per victim).
-const markIdlePeerPairTimeout = 130 * time.Second
+var IdlePeerPairTimeout = 130 * time.Second
 
 func (g *Gateway) startOldPeersChecker() {
 	t := time.NewTicker(10 * time.Second)
@@ -589,7 +595,7 @@ type idlePeerPair struct {
 }
 
 // collectIdlePeerPairs removes and returns the pairs to close: pairs quiet in
-// both directions for markIdlePeerPairTimeout, oldest first, and only the
+// both directions for IdlePeerPairTimeout, oldest first, and only the
 // excess above MaxIdlePeerPairs. Stats are read outside the gateway lock, so
 // each victim is re-checked for identity before removal.
 func (g *Gateway) collectIdlePeerPairs(snapshot []*peerConn, now time.Time) []*peerConn {
@@ -598,7 +604,7 @@ func (g *Gateway) collectIdlePeerPairs(snapshot []*peerConn, now time.Time) []*p
 		return nil
 	}
 
-	cutoff := now.Add(-markIdlePeerPairTimeout)
+	cutoff := now.Add(-IdlePeerPairTimeout)
 	idle := make([]idlePeerPair, 0, len(snapshot)-limit)
 	for _, peer := range snapshot {
 		stats := peer.client.Stats()
@@ -930,8 +936,4 @@ func (p *peerConn) RemoteAddr() string {
 
 func (p *peerConn) Close() {
 	p.client.Close()
-}
-
-func (p *peerConn) processPacket(packet *PacketContent, fromChannel bool) (err error) {
-	return p.client.processPacket(packet, fromChannel)
 }

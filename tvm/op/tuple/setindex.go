@@ -3,38 +3,28 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SETINDEX(0) })
+	vm.ArgList = append(vm.ArgList, setIndexOp)
 }
 
-func SETINDEX(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f5, 12),
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d SETINDEX", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execSetIndex(state, int(n))
-		},
-	}
+var setIndexOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f5, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d SETINDEX", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execSetIndex(state, int(uint8(args)))
+	},
+})
+
+func SETINDEX(n uint8) vm.OP {
+	return vm.Bind(setIndexOp, uint64(n))
 }
 
 func execSetIndex(state *vm.State, idx int) error {

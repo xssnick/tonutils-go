@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 // PreparedAccount is an account state parsed once into the representation the
@@ -92,6 +95,22 @@ func parseTransactionAccountStateExact(state *tlb.AccountState, root *cell.Cell)
 	}
 	return nil
 }
+
+// transactionValidateOpsBudget is the operation budget the reference threads
+// through this very walk: block::tlb::t_ShardAccount.validate_csr(10000, ...)
+// (validator/impl/validate-query.cpp:3085). One operation buys entry into one
+// cell -- TLB::validate_ref_internal refuses to descend once the budget is
+// exhausted (crypto/tl/tlblib.cpp:128-147) -- so the ceiling is a cell count,
+// not a field count.
+//
+// Only two places in the walk descend into a cell. The ^Account reference is
+// the first, and the extra-currency dictionary spends one per hashmap node
+// (HashmapE::validate -> Hashmap::validate_skip -> HashmapNode::validate_skip,
+// crypto/block/block-parse.cpp:495-525). StateInit code/data/library are
+// ^Cell, i.e. RefAnything, whose inherited TLB::validate never follows the
+// reference (crypto/tl/tlblib.hpp:1026-1034), so they cost nothing on either
+// side and bounding the dictionary bounds the whole walk.
+const transactionValidateOpsBudget = 10000
 
 // validateTransactionAccountStructure checks shard-account structure and the
 // stricter stored-account address rule. StateInit.library remains opaque here;
@@ -225,12 +244,62 @@ func validateTransactionExtraCurrencies(loader *cell.Slice) error {
 	if err != nil {
 		return err
 	}
+	// The dictionary walk below is the only unbounded traversal of this
+	// validation; charge it against the same budget the reference spends, minus
+	// the one operation the ^Account reference already cost, so a dictionary too
+	// large for validate_csr(10000) is refused before it is walked instead of
+	// after.
+	if err = transactionSpendCellBudget(root, transactionValidateOpsBudget-1); err != nil {
+		return fmt.Errorf("invalid extra currencies dictionary: %w", err)
+	}
 	ok, err := root.AsDict(32).ValidateCheck(validateTransactionExtraCurrencyValue, false)
 	if err != nil {
 		return fmt.Errorf("invalid extra currencies dictionary: %w", err)
 	}
 	if !ok {
 		return errors.New("invalid extra currencies dictionary")
+	}
+	return nil
+}
+
+// transactionSpendCellBudget charges one operation per cell entered in the tree
+// rooted at root, the way TLB::validate_ref_internal does: a subtree reachable
+// by several references is charged once per reference, and the walk stops as
+// soon as the budget would go negative.
+//
+// Every reference is followed, which for a well-formed dictionary is exactly
+// the set of hashmap nodes: leaves hold VarUInteger 32 inline and forks are
+// required to hold nothing but their two branches, since validate_ref_internal
+// only accepts a cell it consumed completely (cs.empty_ext()). A dictionary the
+// reference accepts therefore costs the same here as it does there.
+//
+// The walk is deliberately trace-free: the account structure is also validated
+// through the usage-traced root that builds the collated proof, and counting
+// cells must not widen that read set.
+func transactionSpendCellBudget(root *cell.Cell, budget int) error {
+	if root == nil {
+		return nil
+	}
+
+	// A dictionary an account really carries is a handful of nodes deep, so the
+	// pending set stays on the goroutine stack for everything but an attack.
+	var pending [32]*cell.Cell
+	stack := append(pending[:0], root.WithoutTrace())
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if budget <= 0 {
+			return fmt.Errorf("exceeds the %d cell validation budget", transactionValidateOpsBudget)
+		}
+		budget--
+
+		for i := 0; i < int(current.RefsNum()); i++ {
+			ref, err := current.PeekRef(i)
+			if err != nil {
+				return err
+			}
+			stack = append(stack, ref)
+		}
 	}
 	return nil
 }
@@ -339,6 +408,63 @@ func (a *PreparedAccount) Address() *address.Address {
 	return a.runtime.addr
 }
 
+// ComputeAccountStorageStat builds and binds the content-addressed storage-stat
+// dictionary for account. The binding records that this executor computed the
+// dictionary from this exact state, including states without storage_dict_hash.
+func (b *BlockContext) ComputeAccountStorageStat(account *PreparedAccount) (*cell.Cell, error) {
+	storage, err := transactionOldAccountStorageForConfig(&account.runtime, b.cfg)
+	if err != nil {
+		return nil, err
+	}
+	_, root, err := transactionComputeAccountStorageStat(storage)
+	if err != nil {
+		return nil, err
+	}
+	if root != nil && storage != nil {
+		account.runtime.accountStorageStat = root
+		account.runtime.statBoundTo = storage.HashKey()
+	}
+	return root, nil
+}
+
+func transactionBindAccountStorageStat(acc *transactionRuntimeAccount, root *cell.Cell, cfg *PreparedBlockchainConfig) error {
+	storage, err := transactionOldAccountStorageForConfig(acc, cfg)
+	if err != nil {
+		return err
+	}
+	stat, err := transactionInitAccountStorageStat(
+		root,
+		storage,
+		acc.storageInfo.StorageUsed,
+		transactionStorageExtraDictHash(acc.storageInfo.StorageExtra),
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	if stat == nil {
+		return errors.New("account state does not authenticate the storage stat")
+	}
+
+	acc.accountStorageStat = root
+	acc.statBoundTo = storage.HashKey()
+	return nil
+}
+
+func transactionUseAccountStorageStat(acc *transactionRuntimeAccount, root *cell.Cell, cfg *PreparedBlockchainConfig) error {
+	if acc.accountStorageStat != nil && acc.accountStorageStat.HashKey() == root.HashKey() {
+		// Keep the established state binding, but use the caller's traced view
+		// so storage-stat dictionary reads enter its Merkle proof.
+		acc.accountStorageStat = root
+		return nil
+	}
+	return transactionBindAccountStorageStat(acc, root, cfg)
+}
+
+func transactionOldAccountStorageForConfig(acc *transactionRuntimeAccount, cfg *PreparedBlockchainConfig) (*cell.Cell, error) {
+	return transactionOldAccountStorageForStat(acc, cfg.globalVersion() >= 10)
+}
+
 // runtimeForExecution returns the runtime account view for one emulation. The
 // hot path hands out a copy of the pre-parsed representation; the proof path
 // re-reads the account through a fresh usage-traced root so that state loads
@@ -362,6 +488,8 @@ func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRunt
 	if err != nil {
 		return nil, nil, err
 	}
+	runtime.accountStorageStat = a.runtime.accountStorageStat
+	runtime.statBoundTo = a.runtime.statBoundTo
 	return runtime, proof, nil
 }
 
@@ -369,7 +497,6 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	out := &transactionRuntimeAccount{
 		status:          tlb.AccountStatusNonExist,
 		storageInfo:     tlb.StorageInfo{StorageExtra: tlb.StorageExtraNone{}},
-		balance:         big.NewInt(0),
 		prevTxHash:      append([]byte(nil), shard.LastTransHash...),
 		prevTxLT:        shard.LastTransLT,
 		originalCell:    shard.Account,
@@ -379,6 +506,9 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		return nil, err
 	}
 	if !acc.IsValid {
+		// A non-existing account holds nothing; an existing one overwrites this
+		// below with its own balance, so only one of the two is ever allocated.
+		out.balance = bigint.FromInt64(0)
 		if out.addr == nil {
 			return nil, errors.New("account address is required for non-existing shard account")
 		}
@@ -388,6 +518,8 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	}
 
 	fallbackIdentity := out.addr
+	out.nonCanonicalMyAddr = acc.Address != nil && acc.Address.Type() == address.StdAddress &&
+		acc.Address.Workchain() == 127 && acc.Address.Anycast() != nil
 	if err := out.setAddressIdentity(acc.Address); err != nil {
 		return nil, err
 	}
@@ -403,7 +535,8 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 	if out.storageInfo.StorageExtra == nil {
 		out.storageInfo.StorageExtra = tlb.StorageExtraNone{}
 	}
-	out.balance = new(big.Int).Set(acc.Balance.Nano())
+	// Nano already hands back a private copy; Set on top of it copied twice.
+	out.balance = acc.Balance.Nano()
 	out.extraCurrencies = acc.ExtraCurrencies
 	out.storageLT = acc.LastTransactionLT
 	// Existing accounts require max(storage.last_trans_lt, 1) to be later than
@@ -417,7 +550,7 @@ func loadTransactionRuntimeAccountState(shard *tlb.ShardAccount, acc *tlb.Accoun
 		out.stateHash = append([]byte(nil), out.addr.Data()...)
 	}
 	if buildStorageCell {
-		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.Nano(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
+		storageCell, err := buildTransactionAccountStorageCell(acc.Status, acc.LastTransactionLT, acc.Balance.NanoRef(), acc.ExtraCurrencies, acc.StateInit, acc.StateHash)
 		if err != nil {
 			return nil, fmt.Errorf("failed to serialize original account storage: %w", err)
 		}
@@ -465,6 +598,27 @@ func (a *transactionRuntimeAccount) forgetAddressRewrite() {
 	a.addrRewriteDepth = 0
 }
 
+// applyPreV9OriginalBalance computes the RAWRESERVE mode&4 base used below
+// global version 9: the balance the account held before the transaction minus
+// the fees collected so far (the inbound forward fee and the storage fees).
+// Going negative invalidates the value, which later fails the reserve action.
+func (p *transactionPreparedPhases) applyPreV9OriginalBalance(acc *transactionRuntimeAccount, inFwdFee *big.Int) error {
+	before, err := transactionCurrencyFromParts(acc.balance, acc.extraCurrencies)
+	if err != nil {
+		return err
+	}
+
+	if inFwdFee != nil {
+		before.grams.Sub(before.grams, inFwdFee)
+	}
+	if p.storagePhase != nil {
+		before.grams.Sub(before.grams, p.storagePhase.StorageFeesCollected.NanoRef())
+	}
+	p.originalBalance = before
+	p.originalBalanceValid = before.grams.Sign() >= 0
+	return nil
+}
+
 func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
 	globalVersion := cfg.globalVersion()
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
@@ -472,12 +626,11 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		return nil, err
 	}
 	prepared := &transactionPreparedPhases{
-		balance:         new(big.Int).Set(acc.balance),
+		balance:         bigint.Set(acc.balance),
 		extraCurrencies: extraCurrencies,
-		msgBalance:      transactionZeroCurrencyBalance(),
 		creditFirst:     true,
 		status:          transactionInitialComputeStatus(acc.status),
-		duePayment:      transactionCoinsPtr(transactionCoinsNano(acc.storageInfo.DuePayment)),
+		duePayment:      transactionCoinsClonePtr(acc.storageInfo.DuePayment),
 		lastPaid:        acc.storageInfo.LastPaid,
 	}
 
@@ -497,6 +650,10 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		return nil
 	}
 
+	// msgBalance is whatever the branch below decides: an internal message
+	// carries one, anything else leaves the account with an empty one. Building
+	// a zero balance up front only to replace it is an allocation per internal
+	// message for nothing.
 	switch msg.MsgType {
 	case tlb.MsgTypeInternal:
 		in := msg.AsInternal()
@@ -506,10 +663,10 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 			return nil, err
 		}
 		if globalVersion < 12 {
-			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, in.IHRFee.Nano())
+			prepared.msgBalance.grams.Add(prepared.msgBalance.grams, in.IHRFee.NanoRef())
 		}
 		if cfg.isBlackHoleAccount(acc.addr) {
-			prepared.blackholeBurned = new(big.Int).Set(prepared.msgBalance.grams)
+			prepared.blackholeBurned = bigint.Set(prepared.msgBalance.grams)
 			prepared.msgBalance.grams.SetInt64(0)
 		}
 		if prepared.creditFirst {
@@ -524,6 +681,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 			}
 		}
 	case tlb.MsgTypeExternalIn:
+		prepared.msgBalance = transactionZeroCurrencyBalance()
 		if importFee.Sign() > 0 {
 			if prepared.balance.Cmp(importFee) < 0 {
 				return nil, errors.New("external import fees exceed account balance")
@@ -535,15 +693,20 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		return nil, fmt.Errorf("unsupported input message type %s", msg.MsgType)
 	}
 
+	if globalVersion < 9 {
+		if err = prepared.applyPreV9OriginalBalance(acc, importFee); err != nil {
+			return nil, err
+		}
+	}
 	return prepared, nil
 }
 
 func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAccount, storageFee *big.Int, now uint32, globalVersion uint32, limits transactionStorageDueLimits, adjustMsgValue bool) {
-	collected := big.NewInt(0)
-	due := big.NewInt(0)
+	collected := bigint.FromInt64(0)
+	due := bigint.FromInt64(0)
 	statusChange := tlb.AccStatusChange{Type: tlb.AccStatusChangeUnchanged}
 
-	p.duePayment = transactionCoinsPtr(transactionCoinsNano(acc.storageInfo.DuePayment))
+	p.duePayment = transactionCoinsClonePtr(acc.storageInfo.DuePayment)
 	p.lastPaid = now
 	if storageFee != nil && storageFee.Sign() > 0 {
 		if storageFee.Cmp(p.balance) <= 0 {
@@ -584,7 +747,8 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 	}
 
 	p.storagePhase = &tlb.StoragePhase{
-		StorageFeesCollected: tlb.FromNanoTON(collected),
+		// collected was built by this function and is dead after this line.
+		StorageFeesCollected: tlb.FromOwnedNanoTON(collected),
 		StorageFeesDue:       transactionCoinsPtr(due),
 		StatusChange:         statusChange,
 	}
@@ -605,13 +769,13 @@ type builtTransactionAccount struct {
 	storageCellForStat *cell.Cell
 }
 
-func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, removeAnycast bool, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (*builtTransactionAccount, error) {
+func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, removeAnycast bool, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell, loaded *vm.LoadedCells) (*builtTransactionAccount, error) {
 	if status == tlb.AccountStatusNonExist {
 		accountState := &tlb.AccountState{
 			IsValid: false,
 			AccountStorage: tlb.AccountStorage{
 				Status:  tlb.AccountStatusNonExist,
-				Balance: tlb.FromNanoTON(big.NewInt(0)),
+				Balance: tlb.FromNanoTON(bigint.FromInt64(0)),
 			},
 		}
 		return &builtTransactionAccount{
@@ -619,13 +783,11 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 			state: accountState,
 		}, nil
 	}
-
-	stateDepth := transactionCloneUint64(acc.stateDepth)
-	rewriteDepth := acc.rewriteDepth()
-	if cfg.globalVersion() < 10 && rewriteDepth != 0 {
-		depth := rewriteDepth
-		stateDepth = &depth
+	if acc.nonCanonicalMyAddr {
+		return nil, errors.New("final account address is not canonical")
 	}
+
+	stateDepth := transactionFinalStateDepth(acc, cfg)
 
 	stateInit := &tlb.StateInit{
 		Depth:    stateDepth,
@@ -680,15 +842,15 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 		}
 	}
 
-	usage, storageExtra, storageExtraDictHash, nextStorageStat, nextStorageStatBound, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat)
+	usage, storageExtra, storageExtraDictHash, nextStorageStat, nextStorageStatBound, err := transactionAccountStorageInfo(acc, storageCellForStat, cfg, accountStorageStat, loaded)
 	if err != nil {
 		return nil, err
 	}
 
 	storageInfo := tlb.StorageInfo{
 		StorageUsed: tlb.StorageUsed{
-			CellsUsed: new(big.Int).SetUint64(usage.cells),
-			BitsUsed:  new(big.Int).SetUint64(usage.bits),
+			CellsUsed: bigint.FromUint64(usage.cells),
+			BitsUsed:  bigint.FromUint64(usage.bits),
 		},
 		StorageExtra: storageExtra,
 		LastPaid:     lastPaid,
@@ -742,7 +904,7 @@ func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
 // storage-stat dict it hands back is bound to the state it describes, i.e.
 // whether the next transaction of this account may reuse it without a
 // storage_dict_hash.
-func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell) (transactionUsage, any, []byte, *cell.Cell, bool, error) {
+func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell, loaded *vm.LoadedCells) (transactionUsage, any, []byte, *cell.Cell, bool, error) {
 	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
@@ -759,12 +921,19 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 	// cost several times a full recompute (measured ~5x on a 5-cell state), and
 	// that threshold is the same one that decides whether a dict is worth
 	// storing at all.
+	oldDictHash := transactionStorageExtraDictHash(acc.storageInfo.StorageExtra)
 	var zeroHash cell.Hash
-	statBound := accountStorageStat != nil && acc.statBoundTo != zeroHash &&
-		oldStorageForStat != nil && acc.statBoundTo == oldStorageForStat.HashKey() &&
+	bindingMatches := accountStorageStat != nil && acc.statBoundTo != zeroHash &&
+		oldStorageForStat != nil && acc.statBoundTo == oldStorageForStat.HashKey()
+	hashMatches := false
+	if accountStorageStat != nil && oldDictHash != nil && !transactionHashIsZero(oldDictHash) {
+		rootHash := accountStorageStat.HashKey()
+		hashMatches = bytes.Equal(rootHash[:], oldDictHash)
+	}
+	statAuthenticated := bindingMatches || hashMatches
+	useIncrementalStat := statAuthenticated &&
 		transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed) >= transactionGetSizeLimits(cfg).accStateCellsForStorageDict
 
-	oldDictHash := transactionStorageExtraDictHash(acc.storageInfo.StorageExtra)
 	storageRefsUnchanged, err := transactionAccountStorageRefsUnchanged(oldStorageForStat, storageCellForStat)
 	if err != nil {
 		return transactionUsage{}, nil, nil, nil, false, err
@@ -772,7 +941,7 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 	storageRefsChanged := !storageRefsUnchanged
 	needMissingDict := storeStorageDictHash && oldDictHash == nil && transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed) > 25
 	if storageRefsChanged || needMissingDict {
-		stat, err := transactionInitAccountStorageStat(accountStorageStat, oldStorageForStat, acc.storageInfo.StorageUsed, oldDictHash, statBound)
+		stat, err := transactionInitAccountStorageStat(accountStorageStat, oldStorageForStat, acc.storageInfo.StorageUsed, oldDictHash, useIncrementalStat)
 		if err != nil {
 			return transactionUsage{}, nil, nil, nil, false, err
 		}
@@ -780,9 +949,25 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 		var usage transactionUsage
 		var nextStorageStat *cell.Cell
 		if stat != nil {
+			if loaded != nil {
+				if err = stat.addHint(*loaded); err != nil {
+					return transactionUsage{}, nil, nil, nil, false, err
+				}
+			}
 			usage, nextStorageStat, err = stat.replaceStorage(storageCellForStat)
 		} else {
-			usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat)
+			// Measure first and build the dictionary only if this state turns
+			// out to be one that keeps it. The threshold decides both whether
+			// the account records a dict hash and whether the next transaction
+			// may go incremental, so below it the dictionary has no reader;
+			// above it the measurement is repeated once, which is the rare
+			// case and still leaves the common one a single cheap walk.
+			dictThreshold := transactionGetSizeLimits(cfg).accStateCellsForStorageDict
+			var needsDict bool
+			usage, needsDict, err = transactionCountAccountStorageUsage(storageCellForStat, dictThreshold)
+			if err == nil && needsDict {
+				usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat)
+			}
 		}
 		if err != nil {
 			return transactionUsage{}, nil, nil, nil, false, err
@@ -811,7 +996,7 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 	}
 	// The refs are identical, so the dict still describes the new state --
 	// but only re-point the binding when the dict was trusted coming in.
-	return usage, storageExtra, storageExtraDictHash, accountStorageStat, statBound && accountStorageStat != nil, nil
+	return usage, storageExtra, storageExtraDictHash, accountStorageStat, statAuthenticated, nil
 }
 
 func transactionOldAccountStorageForStat(acc *transactionRuntimeAccount, extraCurrencyV2 bool) (*cell.Cell, error) {
@@ -861,7 +1046,7 @@ func transactionOldAccountStorageForStat(acc *transactionRuntimeAccount, extraCu
 }
 
 func transactionAccountStorageWithoutExtraCurrencies(storage tlb.AccountStorage) (*cell.Cell, error) {
-	storageCell, err := buildTransactionAccountStorageCell(storage.Status, storage.LastTransactionLT, storage.Balance.Nano(), nil, storage.StateInit, storage.StateHash)
+	storageCell, err := buildTransactionAccountStorageCell(storage.Status, storage.LastTransactionLT, storage.Balance.NanoRef(), nil, storage.StateInit, storage.StateHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize account storage without extra currencies: %w", err)
 	}
@@ -879,19 +1064,24 @@ func transactionStorageExtraDictHash(extra any) []byte {
 }
 
 type transactionAccountStorageStatEntry struct {
-	loaded         bool
-	refCount       uint32
-	maxMerkleDepth uint32
-	dirty          bool
+	existsKnown         bool
+	exists              bool
+	refCountKnown       bool
+	refCount            uint32
+	refCountDiff        int64
+	maxMerkleDepthKnown bool
+	maxMerkleDepth      uint32
+	hintGeneration      uint32
 }
 
 type transactionAccountStorageStat struct {
-	dict       *cell.Dictionary
-	roots      [4]*cell.Cell
-	rootsNum   int
-	entries    map[cell.Hash]*transactionAccountStorageStatEntry
-	totalCells uint64
-	totalBits  uint64
+	dict           *cell.Dictionary
+	roots          [4]*cell.Cell
+	rootsNum       int
+	entries        map[cell.Hash]*transactionAccountStorageStatEntry
+	totalCells     uint64
+	totalBits      uint64
+	hintGeneration uint32
 }
 
 // transactionInitAccountStorageStat adopts a carried-in storage-stat dict.
@@ -991,26 +1181,124 @@ func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUs
 	return usage, dictRoot, nil
 }
 
+// transactionCountAccountStorageUsage measures the account state the way
+// transactionComputeAccountStorageStat does, without assembling the
+// storage-stat dictionary that measurement normally carries along.
+//
+// Only a state at or above accStateCellsForStorageDict keeps such a dictionary:
+// below that the account records StorageExtraNone, and the following
+// transaction refuses the incremental path on the very same threshold, so the
+// dictionary built for a small account is written nowhere and read by nobody.
+// Real accounts sit far below the threshold — a wallet is a handful of cells —
+// which makes that the common case rather than the exceptional one.
+//
+// The traversal is deliberately identical, including loading each cell through
+// BeginParseInto rather than its untraced sibling: these loads are what a
+// candidate's proof is built from, so measuring the state must touch exactly
+// the cells the full computation touches or the proof changes.
+// The walk stops as soon as the state is known to reach the threshold, because
+// from there the dictionary has to be built anyway and the exact count comes
+// from that build. Bounding it that way bounds the set of visited hashes too,
+// so it fits an array the walk carries on its stack and the measurement costs
+// no allocation at all. Linear search over a few dozen 32-byte keys is cheaper
+// here than hashing them into a map.
+const transactionStorageCountInlineCap = 48
+
+func transactionCountAccountStorageUsage(storageCell *cell.Cell, limit uint64) (transactionUsage, bool, error) {
+	if limit > transactionStorageCountInlineCap {
+		return transactionUsage{}, true, nil
+	}
+
+	counter := transactionStorageUsageCounter{limit: limit}
+	if storageCell != nil {
+		loadedStorage, roots, rootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
+		if err != nil {
+			return transactionUsage{}, false, err
+		}
+		for i := 0; i < rootsNum; i++ {
+			if err = counter.add(roots[i]); err != nil {
+				return transactionUsage{}, false, err
+			}
+			if counter.exceeded {
+				return transactionUsage{}, true, nil
+			}
+		}
+		storageCell = loadedStorage
+	}
+
+	usage := transactionUsage{cells: counter.cells, bits: counter.bits}
+	if storageCell != nil {
+		usage.cells++
+		usage.bits += uint64(storageCell.BitsSize())
+	}
+	if usage.cells >= limit {
+		return transactionUsage{}, true, nil
+	}
+	return usage, false, nil
+}
+
+type transactionStorageUsageCounter struct {
+	seen     [transactionStorageCountInlineCap]cell.Hash
+	seenNum  int
+	limit    uint64
+	cells    uint64
+	bits     uint64
+	exceeded bool
+}
+
+func (c *transactionStorageUsageCounter) add(cl *cell.Cell) error {
+	if cl == nil || c.exceeded {
+		return nil
+	}
+	key := cl.HashKey()
+	for i := 0; i < c.seenNum; i++ {
+		if c.seen[i] == key {
+			return nil
+		}
+	}
+	if c.seenNum == len(c.seen) {
+		c.exceeded = true
+		return nil
+	}
+	c.seen[c.seenNum] = key
+	c.seenNum++
+
+	var sl cell.Slice
+	if err := cl.BeginParseInto(&sl); err != nil {
+		return err
+	}
+	loaded := sl.BaseCell()
+	refsNum := sl.RefsNum()
+	for i := 0; i < refsNum; i++ {
+		ref, err := sl.LoadRefCell()
+		if err != nil {
+			return err
+		}
+		if err = c.add(ref); err != nil {
+			return err
+		}
+		if c.exceeded {
+			return nil
+		}
+	}
+	c.cells++
+	c.bits += uint64(loaded.BitsSize())
+	if c.cells >= c.limit {
+		c.exceeded = true
+	}
+	return nil
+}
+
 func (s *transactionAccountStorageStat) replaceStorage(storageCell *cell.Cell) (transactionUsage, *cell.Cell, error) {
 	loadedStorage, newRoots, newRootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
 	if err != nil {
 		return transactionUsage{}, nil, err
 	}
 	storageCell = loadedStorage
-	toAdd, toAddNum, toDel, toDelNum := transactionAccountStorageRootDiff(s.roots, s.rootsNum, newRoots, newRootsNum)
 
-	for i := 0; i < toAddNum; i++ {
-		if _, err := s.addCell(toAdd[i]); err != nil {
-			return transactionUsage{}, nil, err
-		}
+	if _, err = s.replaceRoots(newRoots, newRootsNum); err != nil {
+		return transactionUsage{}, nil, err
 	}
-	for i := 0; i < toDelNum; i++ {
-		if err := s.removeCell(toDel[i]); err != nil {
-			return transactionUsage{}, nil, err
-		}
-	}
-	s.roots = newRoots
-	s.rootsNum = newRootsNum
 
 	usage := transactionUsage{cells: s.totalCells, bits: s.totalBits}
 	if storageCell != nil {
@@ -1025,39 +1313,131 @@ func (s *transactionAccountStorageStat) replaceStorage(storageCell *cell.Cell) (
 	return usage, dictRoot, nil
 }
 
+// replaceRoots applies the same hash-sorted root diff as the reference
+// AccountStorageStat and returns the greatest Merkle depth among added roots.
+// Unchanged roots are deliberately never traversed.
+func (s *transactionAccountStorageStat) replaceRoots(newRoots [4]*cell.Cell, newRootsNum int) (uint32, error) {
+	toAdd, toAddNum, toDel, toDelNum := transactionAccountStorageRootDiff(s.roots, s.rootsNum, newRoots, newRootsNum)
+	var maxMerkleDepth uint32
+	for i := 0; i < toAddNum; i++ {
+		depth, err := s.addCell(toAdd[i])
+		if err != nil {
+			return 0, err
+		}
+		if depth > maxMerkleDepth {
+			maxMerkleDepth = depth
+		}
+	}
+	for i := 0; i < toDelNum; i++ {
+		if err := s.removeCell(toDel[i]); err != nil {
+			return 0, err
+		}
+	}
+	s.roots = newRoots
+	s.rootsNum = newRootsNum
+	return maxMerkleDepth, nil
+}
+
+// addHint mirrors AccountStorageStat::add_hint. A VM-loaded zero-depth
+// predecessor subtree is known to exist, so root replacement may reuse its
+// descendants without looking up their reference counts in the stat dict.
+// This read set is consensus-relevant for sparse collated proofs.
+func (s *transactionAccountStorageStat) addHint(loaded vm.LoadedCells) error {
+	s.hintGeneration++
+	if s.hintGeneration == 0 {
+		for _, entry := range s.entries {
+			entry.hintGeneration = 0
+		}
+		s.hintGeneration = 1
+	}
+	generation := s.hintGeneration
+	var visit func(*cell.Cell, bool) error
+	visit = func(c *cell.Cell, root bool) error {
+		key := c.HashKey()
+		entry := s.entry(key)
+		if entry.hintGeneration == generation {
+			return nil
+		}
+		entry.hintGeneration = generation
+
+		entry.existsKnown = true
+		entry.exists = true
+		if root {
+			if err := s.fetchEntry(key, entry); err != nil {
+				return err
+			}
+			if entry.maxMerkleDepthKnown && entry.maxMerkleDepth != 0 {
+				return nil
+			}
+		}
+		entry.maxMerkleDepthKnown = true
+		entry.maxMerkleDepth = 0
+		if !loaded.Contains(key) {
+			return nil
+		}
+
+		var sl cell.Slice
+		if err := c.BeginParseInto(&sl); err != nil {
+			return err
+		}
+		for sl.RefsNum() > 0 {
+			child, err := sl.LoadRefCell()
+			if err != nil {
+				return err
+			}
+			if err = visit(child, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := 0; i < s.rootsNum; i++ {
+		if err := visit(s.roots[i], true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 	if c == nil {
 		return 0, nil
 	}
 
-	var sl cell.Slice
-	err := c.BeginParseIntoWithoutTrace(&sl)
-	if err != nil {
-		return 0, err
+	key := c.HashKey()
+	entry := s.entry(key)
+	if !entry.existsKnown {
+		if err := s.fetchEntry(key, entry); err != nil {
+			return 0, err
+		}
+	}
+	if entry.refCountDiff == math.MaxInt64 {
+		return 0, errors.New("account storage cell refcount overflow")
+	}
+	entry.refCountDiff++
+	if entry.exists || entry.refCountDiff > 1 {
+		if !entry.maxMerkleDepthKnown {
+			if err := s.fetchEntry(key, entry); err != nil {
+				return 0, err
+			}
+		}
+		return entry.maxMerkleDepth, nil
 	}
 
+	var sl cell.Slice
+	if err := c.BeginParseInto(&sl); err != nil {
+		return 0, err
+	}
 	loaded := sl.BaseCell()
 	var refs [4]*cell.Cell
 	refsNum := sl.RefsNum()
 	for i := 0; i < refsNum; i++ {
-		refs[i], err = sl.LoadRefCell()
+		ref, err := sl.LoadRefCell()
 		if err != nil {
 			return 0, err
 		}
-	}
-
-	key := loaded.HashKey()
-	entry, err := s.entry(key)
-	if err != nil {
-		return 0, err
-	}
-	if entry.refCount == math.MaxUint32 {
-		return 0, errors.New("account storage cell refcount overflow")
-	}
-	entry.refCount++
-	entry.dirty = true
-	if entry.refCount > 1 {
-		return entry.maxMerkleDepth, nil
+		refs[i] = ref
 	}
 
 	var maxDepth uint32
@@ -1079,44 +1459,50 @@ func (s *transactionAccountStorageStat) addCell(c *cell.Cell) (uint32, error) {
 	}
 
 	entry.maxMerkleDepth = maxDepth
+	entry.maxMerkleDepthKnown = true
 	s.totalCells++
 	s.totalBits += uint64(loaded.BitsSize())
 	return maxDepth, nil
 }
 
 func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
-	var sl cell.Slice
-	err := c.BeginParseIntoWithoutTrace(&sl)
-	if err != nil {
-		return err
+	key := c.HashKey()
+	entry := s.entry(key)
+	if !entry.existsKnown {
+		if err := s.fetchEntry(key, entry); err != nil {
+			return err
+		}
+	}
+	if !entry.exists {
+		return fmt.Errorf("account storage stat cannot remove absent cell %x", key)
+	}
+	entry.refCountDiff--
+	if entry.refCountDiff < 0 && !entry.refCountKnown {
+		if err := s.fetchEntry(key, entry); err != nil {
+			return err
+		}
+	}
+	if entry.refCountDiff >= 0 || int64(entry.refCount)+entry.refCountDiff != 0 {
+		return nil
 	}
 
+	var sl cell.Slice
+	if err := c.BeginParseInto(&sl); err != nil {
+		return err
+	}
 	loaded := sl.BaseCell()
 	var refs [4]*cell.Cell
 	refsNum := sl.RefsNum()
 	for i := 0; i < refsNum; i++ {
-		refs[i], err = sl.LoadRefCell()
+		ref, err := sl.LoadRefCell()
 		if err != nil {
 			return err
 		}
-	}
-
-	key := loaded.HashKey()
-	entry, err := s.entry(key)
-	if err != nil {
-		return err
-	}
-	if entry.refCount == 0 {
-		return fmt.Errorf("account storage stat cannot remove absent cell %x", key)
-	}
-	entry.refCount--
-	entry.dirty = true
-	if entry.refCount > 0 {
-		return nil
+		refs[i] = ref
 	}
 
 	for i := 0; i < refsNum; i++ {
-		if err = s.removeCell(refs[i]); err != nil {
+		if err := s.removeCell(refs[i]); err != nil {
 			return err
 		}
 	}
@@ -1132,34 +1518,53 @@ func (s *transactionAccountStorageStat) removeCell(c *cell.Cell) error {
 	return nil
 }
 
-func (s *transactionAccountStorageStat) entry(key cell.Hash) (*transactionAccountStorageStatEntry, error) {
+func (s *transactionAccountStorageStat) entry(key cell.Hash) *transactionAccountStorageStatEntry {
 	entry := s.entries[key]
 	if entry != nil {
-		return entry, nil
+		return entry
 	}
 
-	entry = &transactionAccountStorageStatEntry{loaded: true}
+	entry = &transactionAccountStorageStatEntry{}
 	s.entries[key] = entry
+	return entry
+}
+
+func (s *transactionAccountStorageStat) fetchEntry(key cell.Hash, entry *transactionAccountStorageStatEntry) error {
+	if entry.existsKnown && entry.refCountKnown && (!entry.exists || entry.maxMerkleDepthKnown) {
+		return nil
+	}
 	if s.dict == nil || s.dict.IsEmpty() {
-		return entry, nil
+		entry.existsKnown = true
+		entry.exists = false
+		entry.refCountKnown = true
+		entry.refCount = 0
+		return nil
 	}
 
 	value, err := s.dict.LoadValueByBytesKey(key[:])
 	if errors.Is(err, cell.ErrNoSuchKeyInDict) {
-		return entry, nil
+		entry.existsKnown = true
+		entry.exists = false
+		entry.refCountKnown = true
+		entry.refCount = 0
+		return nil
 	}
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("load account storage stat record %x: %w", key, err)
 	}
 	if value.BitsLeft() != 34 || value.RefsNum() != 0 {
-		return nil, fmt.Errorf("invalid account storage stat record for cell %x", key)
+		return fmt.Errorf("invalid account storage stat record for cell %x", key)
 	}
 	entry.refCount = uint32(value.MustLoadUInt(32))
 	entry.maxMerkleDepth = uint32(value.MustLoadUInt(2))
 	if entry.refCount == 0 {
-		return nil, fmt.Errorf("invalid zero account storage stat refcount for cell %x", key)
+		return fmt.Errorf("invalid zero account storage stat refcount for cell %x", key)
 	}
-	return entry, nil
+	entry.existsKnown = true
+	entry.exists = true
+	entry.refCountKnown = true
+	entry.maxMerkleDepthKnown = true
+	return nil
 }
 
 func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
@@ -1167,24 +1572,48 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 		return s.dictRootFromScratch()
 	}
 
+	dirtyKeys := make([]cell.Hash, 0, min(len(s.entries), 16))
 	for key, entry := range s.entries {
-		if !entry.dirty {
+		if entry.refCountDiff == 0 {
 			continue
 		}
-		if entry.refCount == 0 {
+		dirtyKeys = append(dirtyKeys, key)
+	}
+	slices.SortFunc(dirtyKeys, func(left, right cell.Hash) int {
+		return bytes.Compare(left[:], right[:])
+	})
+
+	for _, key := range dirtyKeys {
+		entry := s.entries[key]
+		if err := s.fetchEntry(key, entry); err != nil {
+			return nil, err
+		}
+		refCount := int64(entry.refCount) + entry.refCountDiff
+		if refCount < 0 || refCount > math.MaxUint32 {
+			return nil, fmt.Errorf("invalid account storage stat refcount for cell %x", key)
+		}
+		if refCount == 0 {
 			if err := s.dict.DeleteByBytesKey(key[:]); err != nil {
 				return nil, err
 			}
-			entry.dirty = false
+			entry.exists = false
+			entry.refCount = 0
+			entry.refCountDiff = 0
 			continue
 		}
+		if !entry.maxMerkleDepthKnown {
+			return nil, fmt.Errorf("unknown account storage stat Merkle depth for cell %x", key)
+		}
 		value := cell.BeginCell().
-			MustStoreUInt(uint64(entry.refCount), 32).
+			MustStoreUInt(uint64(refCount), 32).
 			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
 		if err := s.dict.SetBuilderByBytesKey(key[:], value); err != nil {
 			return nil, err
 		}
-		entry.dirty = false
+		entry.exists = true
+		entry.refCount = uint32(refCount)
+		entry.refCountKnown = true
+		entry.refCountDiff = 0
 	}
 	return s.dict.AsCell(), nil
 }
@@ -1197,14 +1626,27 @@ func (s *transactionAccountStorageStat) dictRootFromScratch() (*cell.Cell, error
 	keys := make([]cell.Hash, 0, len(s.entries))
 	items := make([]cell.DictBulkKV, 0, len(s.entries))
 	for key, entry := range s.entries {
-		entry.dirty = false
-		if entry.refCount == 0 {
+		if err := s.fetchEntry(key, entry); err != nil {
+			return nil, err
+		}
+		refCount := int64(entry.refCount) + entry.refCountDiff
+		if refCount < 0 || refCount > math.MaxUint32 {
+			return nil, fmt.Errorf("invalid account storage stat refcount for cell %x", key)
+		}
+		entry.refCountDiff = 0
+		entry.refCount = uint32(refCount)
+		entry.refCountKnown = true
+		entry.exists = refCount != 0
+		if refCount == 0 {
 			continue
+		}
+		if !entry.maxMerkleDepthKnown {
+			return nil, fmt.Errorf("unknown account storage stat Merkle depth for cell %x", key)
 		}
 
 		keys = append(keys, key)
 		value := cell.BeginCell().
-			MustStoreUInt(uint64(entry.refCount), 32).
+			MustStoreUInt(uint64(refCount), 32).
 			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
 		items = append(items, cell.DictBulkKV{Key: keys[len(keys)-1][:], Value: value})
 	}
@@ -1356,14 +1798,12 @@ func transactionAccountStorageUsageWithSameRefs(old tlb.StorageUsed, oldStorage,
 
 	oldRootBits := uint64(loadedOldStorage.BitsSize())
 	newRootBits := uint64(loadedNewStorage.BitsSize())
-	switch {
-	case newRootBits >= oldRootBits:
-		bits += newRootBits - oldRootBits
-	case bits >= oldRootBits-newRootBits:
-		bits -= oldRootBits - newRootBits
-	default:
-		bits = 0
-	}
+	// AccountStorage::storage_used uses uint64 counters in the reference. Keep
+	// both operations separate so a malformed underreported input wraps before
+	// the new root size is added; serialization rejects it if it no longer fits
+	// VarUInteger 7.
+	bits -= oldRootBits
+	bits += newRootBits
 	return transactionUsage{cells: cells, bits: bits}, nil
 }
 
@@ -1384,6 +1824,19 @@ func transactionCloneUint64(v *uint64) *uint64 {
 	out := *v
 	return &out
 }
+
+func transactionFinalStateDepth(acc *transactionRuntimeAccount, cfg *PreparedBlockchainConfig) *uint64 {
+	if cfg.globalVersion() >= 10 {
+		return transactionCloneUint64(acc.stateDepth)
+	}
+
+	depth := acc.rewriteDepth()
+	if depth == 0 {
+		return nil
+	}
+	return &depth
+}
+
 func transactionInitialComputeStatus(status tlb.AccountStatus) tlb.AccountStatus {
 	if status == tlb.AccountStatusNonExist {
 		return tlb.AccountStatusUninit
@@ -1416,7 +1869,7 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 
 	if len(stateHash) == 0 {
 		stateInit := &tlb.StateInit{
-			Depth:    transactionCloneUint64(acc.stateDepth),
+			Depth:    transactionFinalStateDepth(acc, cfg),
 			TickTock: acc.tickTock,
 			Code:     code,
 			Data:     data,
@@ -1489,13 +1942,15 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	case tlb.AccountStatusFrozen:
+		if acc.status != tlb.AccountStatusFrozen {
+			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+		}
 		var stateDepth uint64
 		if stateInit.Depth != nil {
 			stateDepth = *stateInit.Depth
 		}
-		var accountDepth uint64
-		accountDepth = acc.rewriteDepth()
-		if stateDepth != accountDepth {
+		accountDepth := acc.rewriteDepth()
+		if cfg.globalVersion() < 16 && stateDepth != accountDepth {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 		stateHash := stateCell.HashKey()
@@ -1511,8 +1966,14 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 	if cfg.globalVersion() >= 15 && (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist) && stateInit.Lib != nil && !stateInit.Lib.IsEmpty() {
 		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 	}
-	if status == tlb.AccountStatusUninit && transactionIsMasterchain(acc.addr) && transactionPublicLibrariesCount(stateInit.Lib) > 0 {
-		return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+	if status == tlb.AccountStatusUninit && transactionIsMasterchain(acc.addr) {
+		publicLibraries, err := transactionPublicLibrariesCountChecked(stateInit.Lib)
+		if err != nil {
+			return nil, false, nil, fmt.Errorf("failed to validate message state libraries: %w", err)
+		}
+		if publicLibraries > 0 {
+			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
+		}
 	}
 	exceedsLimits, err := transactionAccountStateExceedsLimits(acc, stateInit.Code, stateInit.Data, stateInit.Lib, cfg, false)
 	if err != nil {
@@ -1592,24 +2053,28 @@ func transactionMessageStateInit(msg *tlb.Message) *tlb.StateInit {
 
 func transactionValidateMessageStateInitLibs(msg *tlb.Message) error {
 	state := transactionMessageStateInit(msg)
-	if state == nil || state.Lib == nil || state.Lib.IsEmpty() {
+	if state == nil || state.Lib == nil || state.Lib.AsCell() == nil {
 		return nil
 	}
 
-	items, err := state.Lib.LoadAll()
+	iterator, err := state.Lib.Iterator(false, false)
 	if err != nil {
 		return err
 	}
-	for _, item := range items {
-		if _, err = item.Value.LoadBoolBit(); err != nil {
+	for iterator.Next() {
+		value := iterator.View().Value
+		if _, err = value.LoadBoolBit(); err != nil {
 			return fmt.Errorf("invalid StateInit library entry: %w", err)
 		}
-		if _, err = item.Value.LoadRefCell(); err != nil {
+		if _, err = value.LoadRefCell(); err != nil {
 			return fmt.Errorf("invalid StateInit library entry: %w", err)
 		}
-		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+		if value.BitsLeft() != 0 || value.RefsNum() != 0 {
 			return errors.New("invalid StateInit library entry")
 		}
+	}
+	if err = iterator.Err(); err != nil {
+		return err
 	}
 	return nil
 }

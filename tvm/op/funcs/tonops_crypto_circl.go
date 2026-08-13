@@ -1459,6 +1459,7 @@ func BLS_PAIRING() *helpers.SimpleOP {
 
 			var acc circlbls.Gt
 			acc.SetIdentity()
+			aggregated := 0
 			for i := 0; i < count; i++ {
 				p1, err := parseBLSG1OnCurve(p1Data[i])
 				if err != nil {
@@ -1468,10 +1469,21 @@ func BLS_PAIRING() *helpers.SimpleOP {
 				if err != nil {
 					return blsUnknown("invalid bls pairing input", err)
 				}
+				// a pair of two points at infinity contributes nothing and is
+				// skipped entirely
+				if p1.IsIdentity() && p2.IsIdentity() {
+					continue
+				}
+				aggregated++
 				pair := circlbls.Pair(p1, p2)
 				var next circlbls.Gt
 				next.Mul(&acc, pair)
 				acc = next
+			}
+			if aggregated == 0 {
+				// with nothing aggregated the verification reports false
+				// rather than the identity check's true
+				return state.Stack.PushBool(false)
 			}
 			return state.Stack.PushBool(acc.IsIdentity())
 		},

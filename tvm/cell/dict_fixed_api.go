@@ -9,7 +9,7 @@ func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
 	}
-	items, err := fixedDictRange(d.tracedRoot(), d.keySz, rev, sgnd)
+	items, err := fixedDictRange(d.tracedRoot(), d.keySz, rev, sgnd, dictWalk{})
 	if err != nil {
 		return nil, err
 	}
@@ -20,9 +20,9 @@ func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 // fails after construction, Next returns false and Err reports that failure.
 func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
+	return newDictIterator(d.root, d.keySz, rev, sgnd, dictWalk{trace: d.trace})
 }
 
 // IteratorAt creates a lazy iterator positioned at the nearest key to `key`
@@ -31,9 +31,9 @@ func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 // Reset rewinds to the full range, not to the seek position.
 func (d *Dictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, dictWalk{trace: d.trace})
 }
 
 // ForEachBorrowed visits every item in iterator order without materializing a
@@ -69,7 +69,7 @@ func (d *Dictionary) ForEachRefValue(fn func(value *Cell) error) (int, error) {
 	if d.root == nil {
 		return 0, nil
 	}
-	return forEachPlainDictRefValue(d.root.withTraceCombined(d.trace), d.keySz, fn)
+	return forEachPlainDictRefValue(d.root.withTraceCombined(d.trace), d.keySz, fn, nil)
 }
 
 func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -80,7 +80,7 @@ func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, i
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	return fixedDictLookupNearestTraced(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, d.trace)
+	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
 }
 
 // LookupNearestKeyBySlice is LookupNearestKey using the first key-size
@@ -93,7 +93,7 @@ func (d *Dictionary) LookupNearestKeyBySlice(key *Slice, fetchNext bool, allowEq
 	if err != nil {
 		return nil, nil, err
 	}
-	return fixedDictLookupNearestSliceTraced(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, d.trace)
+	return fixedDictLookupNearestSlice(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
 }
 
 // LookupNearestKeyByInt is LookupNearestKey using stack-local integer key
@@ -106,14 +106,14 @@ func (d *Dictionary) LookupNearestKeyByInt(key *big.Int, fetchNext bool, allowEq
 	initIntKeyBuilder(key, d.keySz, &builder)
 	keyCell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	target := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
-	return fixedDictLookupNearestSliceTraced(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, d.trace)
+	return fixedDictLookupNearestSlice(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
 }
 
 func (d *Dictionary) HasCommonPrefix(prefix *Cell) (bool, error) {
 	if d == nil {
 		return true, nil
 	}
-	return fixedDictHasCommonPrefix(d.tracedRoot(), d.keySz, prefix)
+	return fixedDictHasCommonPrefix(d.tracedRoot(), d.keySz, prefix, dictWalk{})
 }
 
 func (d *Dictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
@@ -124,14 +124,14 @@ func (d *Dictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
 	if len(limit) > 0 && limit[0] < maxLen {
 		maxLen = limit[0]
 	}
-	return fixedDictCommonPrefix(d.tracedRoot(), d.keySz, maxLen)
+	return fixedDictCommonPrefix(d.tracedRoot(), d.keySz, maxLen, dictWalk{})
 }
 
 func (d *Dictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefix bool) (*Cell, error) {
 	if d == nil {
 		return nil, nil
 	}
-	root, _, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, _, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace})
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (d *Dictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) (bool, er
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace})
 	if err != nil {
 		return false, err
 	}
@@ -195,7 +195,7 @@ func (d *Dictionary) cutPrefixSubdictBySlice(prefix Slice, removePrefix bool) (b
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRootSliceTraced(d.root, d.keySz, prefix, removePrefix, d.trace, nil)
+	root, changed, err := extractPrefixSubdictRootSlice(d.root, d.keySz, prefix, removePrefix, nil, dictWalk{trace: d.trace})
 	if err != nil {
 		return false, err
 	}
@@ -232,7 +232,7 @@ func (d *Dictionary) CheckForEach(fn DictForeachFunc, invertFirst bool, shuffle 
 		}
 		return true, nil
 	}
-	items, err := fixedDictRange(d.tracedRoot(), d.keySz, false, invertFirst)
+	items, err := fixedDictRange(d.tracedRoot(), d.keySz, false, invertFirst, dictWalk{})
 	if err != nil {
 		return false, err
 	}
@@ -260,7 +260,7 @@ func (d *Dictionary) Filter(fn DictFilterFunc) (int, error) {
 	if d == nil || d.root == nil {
 		return 0, nil
 	}
-	root, changes, err := fixedDictFilter(d.root, d.keySz, fn, d.trace)
+	root, changes, err := fixedDictFilter(d.root, d.keySz, fn, dictWalk{trace: d.trace})
 	if err != nil {
 		return 0, err
 	}

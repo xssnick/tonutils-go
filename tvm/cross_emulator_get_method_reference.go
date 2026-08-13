@@ -64,12 +64,18 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 		cfg.RandSeed = referenceDefaultTonopsSeed
 	}
 
-	codeB64 := base64.StdEncoding.EncodeToString(code.ToBOC())
-	dataB64 := base64.StdEncoding.EncodeToString(data.ToBOC())
 	stackCell, err := stackToCell(stack)
 	if err != nil {
 		return nil, err
 	}
+	return runReferenceCrossCodeViaEmulatorStackCell(code, data, stackCell, cfg)
+}
+
+// runReferenceCrossCodeViaEmulatorStackCell keeps malformed input-stack
+// fixtures byte-exact instead of round-tripping them through vm.Stack.
+func runReferenceCrossCodeViaEmulatorStackCell(code, data, stackCell *cell.Cell, cfg referenceGetMethodConfig) (*crossRunResult, error) {
+	codeB64 := base64.StdEncoding.EncodeToString(code.ToBOC())
+	dataB64 := base64.StdEncoding.EncodeToString(data.ToBOC())
 	stackB64 := base64.StdEncoding.EncodeToString(stackCell.ToBOC())
 
 	cCode := C.CString(codeB64)
@@ -129,7 +135,7 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 	defer C.free(unsafe.Pointer(resPtr))
 
 	var raw referenceRunGetMethodJSON
-	if err = json.Unmarshal([]byte(C.GoString(resPtr)), &raw); err != nil {
+	if err := json.Unmarshal([]byte(C.GoString(resPtr)), &raw); err != nil {
 		return nil, err
 	}
 	if !raw.Success {
@@ -148,11 +154,16 @@ func runReferenceCrossCodeViaEmulator(code, data *cell.Cell, stack *vm.Stack, cf
 	if err != nil {
 		return nil, err
 	}
+	missingLibrary, err := parseCrossMissingLibrary(raw.MissingLib)
+	if err != nil {
+		return nil, err
+	}
 
 	return &crossRunResult{
-		exitCode: raw.VMExitCode,
-		gasUsed:  gasUsed,
-		stack:    stackOut,
+		exitCode:       raw.VMExitCode,
+		gasUsed:        gasUsed,
+		stack:          stackOut,
+		missingLibrary: missingLibrary,
 	}, nil
 }
 

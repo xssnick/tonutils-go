@@ -5,16 +5,11 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return LESSINT(0) })
-	// shared full-opcode variant for the common value
-	vm.List = append(vm.List, func() vm.OP { return fixedIntCmpVariant(LESSINT(5)) })
+	vm.ArgList = append(vm.ArgList, lessIntOp)
 }
 
-func LESSINT(value int8) *OpIntCmp {
-	return &OpIntCmp{
-		name:   "LESSINT",
-		prefix: 0xC1,
-		mask:   intCmpMaskLess,
-		value:  value,
-	}
+var lessIntOp = intCmpOp("LESSINT", 0xC1, intCmpMaskLess)
+
+func LESSINT(value int8) vm.OP {
+	return vm.Bind(lessIntOp, uint64(uint8(value)))
 }

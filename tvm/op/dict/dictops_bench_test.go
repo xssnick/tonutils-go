@@ -74,7 +74,7 @@ func BenchmarkDICTGetInterpret(b *testing.B) {
 				if err := bm.pushKey(state.Stack); err != nil {
 					b.Fatal(err)
 				}
-				if err := pushMaybeCell(state.Stack, benchRoot); err != nil {
+				if err := state.Stack.PushMaybeCell(benchRoot); err != nil {
 					b.Fatal(err)
 				}
 				if err := state.Stack.PushSmallInt(keyBits); err != nil {
@@ -105,7 +105,7 @@ func BenchmarkDICTUSetInterpret(b *testing.B) {
 		if err := state.Stack.PushInt(key); err != nil {
 			b.Fatal(err)
 		}
-		if err := pushMaybeCell(state.Stack, root); err != nil {
+		if err := state.Stack.PushMaybeCell(root); err != nil {
 			b.Fatal(err)
 		}
 		if err := state.Stack.PushSmallInt(keyBits); err != nil {
@@ -156,7 +156,7 @@ func BenchmarkSUBDICTInterpret(b *testing.B) {
 				if err := state.Stack.PushSmallInt(prefixBits); err != nil {
 					b.Fatal(err)
 				}
-				if err := pushMaybeCell(state.Stack, root); err != nil {
+				if err := state.Stack.PushMaybeCell(root); err != nil {
 					b.Fatal(err)
 				}
 				if err := state.Stack.PushSmallInt(keyBits); err != nil {

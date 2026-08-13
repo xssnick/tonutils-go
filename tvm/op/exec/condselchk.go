@@ -33,9 +33,9 @@ func CONDSELCHK() *helpers.SimpleOP {
 				return err
 			}
 			if cond {
-				return state.Stack.PushAny(x)
+				return state.Stack.PushOwnedValue(x)
 			}
-			return state.Stack.PushAny(y)
+			return state.Stack.PushOwnedValue(y)
 		},
 		Name:      "CONDSELCHK",
 		BitPrefix: helpers.BytesPrefix(0xE3, 0x05),

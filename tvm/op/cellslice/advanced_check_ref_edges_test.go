@@ -172,7 +172,7 @@ func TestAdvancedRefPreloadEdges(t *testing.T) {
 		if got := op.SerializeText(); got != "PLDREFIDX 3" {
 			t.Fatalf("PLDREFIDX text = %q, want PLDREFIDX 3", got)
 		}
-		if got := op.InstructionBits(); got != 16 {
+		if got := cellSliceInstructionBits(t, op); got != 16 {
 			t.Fatalf("PLDREFIDX instruction bits = %d, want 16", got)
 		}
 

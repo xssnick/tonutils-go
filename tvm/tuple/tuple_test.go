@@ -104,14 +104,12 @@ func TestTupleTypedNilLeavesCloneWithoutPanic(t *testing.T) {
 	var builderVal *cell.Builder
 
 	tup := NewTupleValue(intVal, sliceVal, builderVal)
-	for _, i := range []int{0, 2} {
-		got, err := tup.Index(i)
-		if err != nil {
-			t.Fatalf("index typed nil %d: %v", i, err)
-		}
-		if got != nil {
-			t.Fatalf("typed nil %d normalized to %T, want nil", i, got)
-		}
+	gotInt, err := tup.Index(0)
+	if err != nil {
+		t.Fatalf("index typed nil integer: %v", err)
+	}
+	if gotInt != nil {
+		t.Fatalf("typed nil integer normalized to %T, want nil", gotInt)
 	}
 
 	gotSlice, err := tup.Index(1)
@@ -121,13 +119,20 @@ func TestTupleTypedNilLeavesCloneWithoutPanic(t *testing.T) {
 	if reflect.TypeOf(gotSlice) != reflect.TypeOf(sliceVal) || !reflect.ValueOf(gotSlice).IsNil() {
 		t.Fatalf("typed nil slice = %#v, want typed nil slice", gotSlice)
 	}
+	gotBuilder, err := tup.Index(2)
+	if err != nil {
+		t.Fatalf("index typed nil builder: %v", err)
+	}
+	if reflect.TypeOf(gotBuilder) != reflect.TypeOf(builderVal) || !reflect.ValueOf(gotBuilder).IsNil() {
+		t.Fatalf("typed nil builder = %#v, want typed nil builder", gotBuilder)
+	}
 
 	got, err := tup.PopLast()
 	if err != nil {
 		t.Fatalf("pop typed nil builder: %v", err)
 	}
-	if got != nil {
-		t.Fatalf("popped typed nil builder = %#v, want nil", got)
+	if reflect.TypeOf(got) != reflect.TypeOf(builderVal) || !reflect.ValueOf(got).IsNil() {
+		t.Fatalf("popped typed nil builder = %#v, want typed nil builder", got)
 	}
 }
 

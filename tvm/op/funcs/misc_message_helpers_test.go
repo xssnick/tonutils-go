@@ -888,14 +888,29 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	}
 
 	st = newFuncTestState(t, map[int]any{8: addrSlice})
-	myAddr, err := getMyAddr(st)
-	if err != nil || myAddr.StringRaw() != address.NewAddress(0, 0, stdData).StringRaw() {
-		t.Fatalf("getMyAddr = (%v, %v)", myAddr, err)
+	myAddrSlice, err := sendMsgMyAddrSlice(st)
+	if err != nil {
+		t.Fatalf("sendMsgMyAddrSlice = (%v, %v)", myAddrSlice, err)
+	}
+	// the workchain is read loosely, without validating the rest of the
+	// address
+	if wc, err := sendMsgAddrWorkchain(myAddrSlice.Copy()); err != nil || wc != 0 {
+		t.Fatalf("sendMsgAddrWorkchain = (%v, %v), want 0", wc, err)
+	}
+	// a truncated slice is not an error: it collapses to workchain 0
+	truncated := cell.BeginCell().MustStoreUInt(0b10, 2).ToSlice()
+	if wc, err := sendMsgAddrWorkchain(truncated); err != nil || wc != 0 {
+		t.Fatalf("sendMsgAddrWorkchain(truncated) = (%v, %v), want 0", wc, err)
+	}
+	// masterchain is detected from the raw workchain field
+	mc := cell.BeginCell().MustStoreUInt(0b100, 3).MustStoreUInt(0xFF, 8).ToSlice()
+	if wc, err := sendMsgAddrWorkchain(mc); err != nil || wc != -1 {
+		t.Fatalf("sendMsgAddrWorkchain(masterchain) = (%v, %v), want -1", wc, err)
 	}
 
 	cfg := tuple.NewTupleValue(
 		nil, nil, nil, nil, nil, nil,
-		cell.BeginCell().MustStoreUInt(0x01, 8).MustStoreUInt(7, 32).MustStoreUInt(123, 32).ToSlice(),
+		sizeLimitsV1Slice(7, 123),
 	)
 	st = newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: cfg})
 	if maxCells, err := getSizeLimitsMaxMsgCells(st); err != nil || maxCells != 123 {
@@ -914,7 +929,7 @@ func TestMessageAddressHelpersAndOps(t *testing.T) {
 	}
 	cfg = tuple.NewTupleValue(
 		nil, nil, nil, nil, nil, nil,
-		cell.BeginCell().MustStoreUInt(0x02, 8).MustStoreUInt(9, 32).MustStoreUInt(321, 32).ToSlice(),
+		sizeLimitsV2Slice(9, 321),
 	)
 	st = newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: cfg})
 	if maxCells, err := getSizeLimitsMaxMsgCells(st); err != nil || maxCells != 321 {
@@ -1229,4 +1244,39 @@ func TestSendMsgFeeOnlyMovesInlineBodyWhenRewrittenRootOverflows(t *testing.T) {
 	if want := big.NewInt(502); fee.Cmp(want) != 0 {
 		t.Fatalf("unexpected SENDMSG fee: want %v, got %v", want, fee)
 	}
+}
+
+// sizeLimitsV1Slice builds a complete first-version size-limits record; the
+// config slice must be consumed exactly.
+func sizeLimitsV1Slice(maxMsgBits, maxMsgCells uint32) *cell.Slice {
+	return cell.BeginCell().
+		MustStoreUInt(0x01, 8).
+		MustStoreUInt(uint64(maxMsgBits), 32).
+		MustStoreUInt(uint64(maxMsgCells), 32).
+		MustStoreUInt(1000, 32).  // max_library_cells
+		MustStoreUInt(512, 16).   // max_vm_data_depth
+		MustStoreUInt(65535, 32). // max_ext_msg_size
+		MustStoreUInt(512, 16).   // max_ext_msg_depth
+		ToSlice()
+}
+
+// sizeLimitsV2Slice builds a complete second-version size-limits record.
+func sizeLimitsV2Slice(maxMsgBits, maxMsgCells uint32) *cell.Slice {
+	return cell.BeginCell().
+		MustStoreUInt(0x02, 8).
+		MustStoreUInt(uint64(maxMsgBits), 32).
+		MustStoreUInt(uint64(maxMsgCells), 32).
+		MustStoreUInt(1000, 32).  // max_library_cells
+		MustStoreUInt(512, 16).   // max_vm_data_depth
+		MustStoreUInt(65535, 32). // max_ext_msg_size
+		MustStoreUInt(512, 16).   // max_ext_msg_depth
+		MustStoreUInt(1<<16, 32). // max_acc_state_cells
+		MustStoreUInt(1<<11, 32). // max_mc_acc_state_cells
+		MustStoreUInt(256, 32).   // max_acc_public_libraries
+		MustStoreUInt(256, 32).   // defer_out_queue_size_limit
+		MustStoreUInt(2, 32).     // max_msg_extra_currencies
+		MustStoreUInt(8, 8).      // max_acc_fixed_prefix_length
+		MustStoreUInt(2, 32).     // acc_state_cells_for_storage_dict
+		MustStoreUInt(0, 1).      // max_transaction_library_loads: nothing
+		ToSlice()
 }

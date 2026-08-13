@@ -211,6 +211,13 @@ func assertMessageSendMatchesReference(t *testing.T, goRes *MessageExecutionResu
 	if goRes.GasUsed != refRes.gasUsed {
 		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
 	}
+	switch {
+	case goRes.MissingLibrary == nil && refRes.missingLibrary == nil:
+	case goRes.MissingLibrary == nil || refRes.missingLibrary == nil:
+		t.Fatalf("missing library presence mismatch: go=%v reference=%v", goRes.MissingLibrary, refRes.missingLibrary)
+	case *goRes.MissingLibrary != *refRes.missingLibrary:
+		t.Fatalf("missing library mismatch: go=%x reference=%x", *goRes.MissingLibrary, *refRes.missingLibrary)
+	}
 	if goRes.Code == nil || refRes.code == nil || !bytes.Equal(goRes.Code.Hash(), refRes.code.Hash()) {
 		t.Fatalf("code mismatch:\ngo=%v\nreference=%v", goRes.Code, refRes.code)
 	}

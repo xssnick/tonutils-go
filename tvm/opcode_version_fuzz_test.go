@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 640
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "fc495b540d3e0021db2a3b3f226fab705281ce809c8bb342cf6d5b8b93a1b0cf"
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 595
+	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "6b46e418a6136bf5f5573cf456ae5c071d20fbe32b8a30516f30282e0853b079"
 )
 
 func fuzzOpcodeVersion(raw int64) int {
@@ -75,7 +75,7 @@ func TestTVMRegisteredOpcodeAvailabilityPartitionsVersionedOpcodes(t *testing.T)
 	}
 
 	versionedCases := opcodeMinGlobalVersionCaseMap(t)
-	for idx, opGetter := range vmcore.List {
+	for idx, opGetter := range vmcore.AllOps() {
 		op := opGetter()
 		_, serializable := registeredOpcodeAvailabilityAuditCode(op)
 		name := registeredOpcodeAvailabilityAuditName(idx, op.SerializeText())

@@ -4,6 +4,18 @@ import "testing"
 
 var benchmarkTracePairSink *Trace
 
+func BenchmarkTraceDetachListener(b *testing.B) {
+	listener := new(detachTestTraceListener)
+	var trace Trace
+
+	b.ReportAllocs()
+	for b.Loop() {
+		trace.backend = listener
+		trace.kind = traceKindListener
+		trace.DetachListener()
+	}
+}
+
 func BenchmarkCombineTracePair(b *testing.B) {
 	left := NewTrace(TraceHooks{OnLoad: func(*Cell) {}})
 	right := NewTrace(TraceHooks{OnCreate: func() {}})

@@ -145,13 +145,17 @@ func (it *AugDictIterator) Err() error {
 }
 
 func validateAugmentedDictionary(d *AugmentedDictionary) error {
+	return validateAugmentedDictionaryWithTrace(d, false)
+}
+
+func validateAugmentedDictionaryWithTrace(d *AugmentedDictionary, preserveTrace bool) error {
 	if d == nil {
 		return nil
 	}
 	if !d.wrapped {
-		return validateAugmentedDictRoot(d.root, d.keySz, d.aug)
+		return validateAugmentedDictRootWithTrace(d.root, d.keySz, d.aug, preserveTrace)
 	}
-	if err := validateAugmentedDictRoot(d.root, d.keySz, d.aug); err != nil {
+	if err := validateAugmentedDictRootWithTrace(d.root, d.keySz, d.aug, preserveTrace); err != nil {
 		return err
 	}
 
@@ -174,7 +178,7 @@ func (d *AugmentedDictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
 	}
-	items, err := fixedDictRange(d.root, d.keySz, rev, sgnd)
+	items, err := fixedDictRange(d.root, d.keySz, rev, sgnd, dictWalk{lenient: true})
 	if err != nil {
 		return nil, err
 	}
@@ -211,9 +215,9 @@ func (d *AugmentedDictionary) ForEachValueExtra(fn func(value, extra *Slice) (bo
 // after Next returns false to catch failures discovered in deeper children.
 func (d *AugmentedDictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
+	return newDictIterator(d.root, d.keySz, rev, sgnd, dictWalk{trace: d.trace, lenient: true})
 }
 
 func (d *AugmentedDictionary) RangeExtra(rev bool, sgnd bool) ([]AugDictItem, error) {
@@ -273,9 +277,9 @@ func (d *AugmentedDictionary) ForEachBorrowed(rev bool, sgnd bool, fn AugDictBor
 // (< key). Reset rewinds to the full range, not to the seek position.
 func (d *AugmentedDictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, dictWalk{trace: d.trace, lenient: true})
 }
 
 // IteratorExtraAt is IteratorAt with values decomposed into value and extra.
@@ -299,7 +303,7 @@ func (d *AugmentedDictionary) LookupNearestKey(key *Cell, fetchNext bool, allowE
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst)
+	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, dictWalk{lenient: true})
 }
 
 // LookupNearestKeyExtra is LookupNearestKey with the leaf decomposed into the
@@ -320,7 +324,7 @@ func (d *AugmentedDictionary) HasCommonPrefix(prefix *Cell) (bool, error) {
 	if d == nil {
 		return true, nil
 	}
-	return fixedDictHasCommonPrefix(d.root, d.keySz, prefix)
+	return fixedDictHasCommonPrefix(d.root, d.keySz, prefix, dictWalk{lenient: true})
 }
 
 func (d *AugmentedDictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
@@ -331,14 +335,14 @@ func (d *AugmentedDictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
 	if len(limit) > 0 && limit[0] < maxLen {
 		maxLen = limit[0]
 	}
-	return fixedDictCommonPrefix(d.root, d.keySz, maxLen)
+	return fixedDictCommonPrefix(d.root, d.keySz, maxLen, dictWalk{lenient: true})
 }
 
 func (d *AugmentedDictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefix bool) (*Cell, error) {
 	if d == nil {
 		return nil, nil
 	}
-	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace, lenient: true})
 	if err != nil {
 		return nil, err
 	}
@@ -356,7 +360,7 @@ func (d *AugmentedDictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) 
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace, lenient: true})
 	if err != nil {
 		return false, err
 	}
@@ -398,7 +402,7 @@ func (d *AugmentedDictionary) CheckForEach(fn DictForeachFunc, invertFirst bool,
 		}
 		return true, nil
 	}
-	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst)
+	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst, dictWalk{lenient: true})
 	if err != nil {
 		return false, err
 	}
@@ -416,6 +420,74 @@ func (d *AugmentedDictionary) ValidateCheck(fn DictForeachFunc, invertFirst bool
 
 func (d *AugmentedDictionary) ValidateAll() bool {
 	return validateAugmentedDictionary(d) == nil
+}
+
+// Validate verifies the HashmapAugE wrapper and the root node extra while
+// preserving attached usage traces. This matches the reference VM's
+// AugmentedDictionary::validate: descendants are checked only by ValidateAll.
+func (d *AugmentedDictionary) Validate() error {
+	if d == nil {
+		return nil
+	}
+	if err := validateDictKeySize(d.keySz); err != nil {
+		return err
+	}
+	if d.aug == nil {
+		return fmt.Errorf("augmentation is nil")
+	}
+
+	if d.root == nil {
+		if !d.wrapped {
+			return nil
+		}
+		if d.rootExtra == nil {
+			return fmt.Errorf("augmented dict empty extra is absent")
+		}
+
+		var expected Builder
+		if err := d.aug.EmptyExtra(&expected); err != nil {
+			return err
+		}
+		stored, err := d.rootExtra.BeginParse()
+		if err != nil {
+			return err
+		}
+		var buf [maxCellDataBytes]byte
+		if !expected.equalsSlice(stored, &buf) {
+			return fmt.Errorf("augmented dict empty extra mismatch")
+		}
+		return nil
+	}
+
+	node, err := parseFixedDictNodeWithTrace(d.root, d.keySz, d.root.Trace())
+	if err != nil {
+		return fmt.Errorf("failed to load augmented dict root: %w", err)
+	}
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return err
+	}
+	var after Slice
+	rootExtra, err := augmentedNodeExtraViewScratch(node, d.keySz, d.aug.SkipExtra, &after)
+	if err != nil {
+		return err
+	}
+	if !node.isLeaf(d.keySz) && (after.BitsLeft() != 0 || after.RefsNum() != 0) {
+		return fmt.Errorf("invalid augmented dict root fork")
+	}
+	if !d.wrapped {
+		return nil
+	}
+	if d.rootExtra == nil {
+		return fmt.Errorf("augmented dict root extra is absent")
+	}
+	stored, err := d.rootExtra.BeginParse()
+	if err != nil {
+		return err
+	}
+	if !equalSliceContents(&rootExtra, stored) {
+		return fmt.Errorf("augmented dict root extra mismatch")
+	}
+	return nil
 }
 
 func (d *AugmentedDictionary) CheckForEachExtra(fn AugDictForeachFunc, invertFirst bool) (bool, error) {
@@ -464,6 +536,11 @@ func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, pr
 	loader, err := branch.BeginParse()
 	if err != nil {
 		return nil, nil, err
+	}
+	if trace := loader.Trace(); trace != nil {
+		if err = trace.PendingError(); err != nil {
+			return nil, nil, err
+		}
 	}
 	if loader.cell.IsSpecial() {
 		return nil, nil, fmt.Errorf("augmented dict %w", ErrDictHasSpecialCells)

@@ -261,7 +261,7 @@ func TestTransactionC7StorageFeesPreserveWideInteger(t *testing.T) {
 		storagePhase: &tlb.StoragePhase{
 			StorageFeesCollected: tlb.FromNanoTON(wide),
 		},
-	}, 3)
+	}, 3, 3)
 	if env.storageFees.Cmp(wide) != 0 {
 		t.Fatalf("execution environment storage fees = %s, want %s", env.storageFees, wide)
 	}

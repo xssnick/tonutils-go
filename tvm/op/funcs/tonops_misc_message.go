@@ -2,6 +2,7 @@ package funcs
 
 import (
 	"math/big"
+	mathbits "math/bits"
 
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
@@ -87,7 +88,12 @@ func (s *storageStat) addCellWithTrace(cl *cell.Cell, trace *cell.Trace) (bool, 
 		return false, nil
 	}
 	if s.state != nil {
-		if err := s.state.Cells.RegisterCellLoadKey(key); err != nil {
+		// The cell itself is registered, not just its key: the keyed form marks
+		// the cell loaded without reporting it, which both hides this walk from a
+		// first-load observer and makes every later genuine load of the same cell
+		// look like a repeat, silencing the observer for the whole subtree. Gas is
+		// unaffected — both forms charge the same first-load and repeat prices.
+		if err := s.state.Cells.RegisterCellLoad(cl); err != nil {
 			if !s.deferLoadGasErr {
 				return false, err
 			}
@@ -105,7 +111,9 @@ func (s *storageStat) addCellWithTrace(cl *cell.Cell, trace *cell.Trace) (bool, 
 
 	var sl cell.Slice
 	if s.state != nil {
-		if err := s.state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(cl, trace, &sl); err != nil {
+		// the storage-stat walk allows special cells and counts them as raw
+		// data, but a virtualized pruned branch still aborts the VM
+		if err := s.state.Cells.BeginParseSpecialNoCreateIntoWithTrace(cl, trace, &sl); err != nil {
 			return false, err
 		}
 	} else {
@@ -377,11 +385,7 @@ type parsedMsgAddress struct {
 }
 
 func loadSliceBits(sl *cell.Slice, bits uint) (*cell.Slice, error) {
-	data, err := sl.LoadSlice(bits)
-	if err != nil {
-		return nil, err
-	}
-	return cell.BeginCell().MustStoreSlice(data, bits).ToSlice(), nil
+	return sl.FetchSubslice(bits, 0)
 }
 
 func parseMaybeAnycast(sl *cell.Slice, globalVersion int) (*cell.Slice, bool) {
@@ -501,6 +505,9 @@ func rewriteAddrBits(addrBits, prefix *cell.Slice) (*cell.Slice, bool) {
 	}
 	if prefix.BitsLeft() > addrBits.BitsLeft() {
 		return nil, false
+	}
+	if prefix.BitsLeft() == addrBits.BitsLeft() {
+		return prefix.Copy(), true
 	}
 	b := cell.BeginCell()
 	pfxBytes, err := prefix.PreloadSlice(prefix.BitsLeft())
@@ -681,7 +688,26 @@ func rewriteMsgAddrOp(name string, prefix helpers.BitPrefix, allowVar, quiet boo
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot rewrite address in a MsgAddressInt")
 			}
 			if allowVar && addr.Anycast != nil && addr.Anycast.BitsLeft() > 0 && addr.Anycast.BitsLeft() < addr.Addr.BitsLeft() {
-				if err = state.ConsumeGas(vm.CellCreateGasPrice + vm.CellLoadGasPrice); err != nil {
+				// the rewritten address is finalized into a cell and loaded
+				// back: the load is deduplicated by hash, so a repeated
+				// rewrite of the same address costs the reload price and the
+				// hash cheapens later loads of an identical cell
+				rewrittenBits, err := rewritten.PreloadSlice(rewritten.BitsLeft())
+				if err != nil {
+					return err
+				}
+				builder := cell.BeginCell()
+				if err = builder.StoreSlice(rewrittenBits, rewritten.BitsLeft()); err != nil {
+					return err
+				}
+				rewrittenCell, err := builder.EndCellSpecial(false)
+				if err != nil {
+					return err
+				}
+				if err = state.Cells.RegisterCellCreate(); err != nil {
+					return err
+				}
+				if err = state.Cells.RegisterCellLoad(rewrittenCell); err != nil {
 					return err
 				}
 			}
@@ -906,12 +932,15 @@ func installAction(state *vm.State, build func(*cell.Builder) error) error {
 	if err := build(b); err != nil {
 		return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
 	}
+	// the cell-create charge happens before the cell is actually built, so a
+	// finalization failure (depth limit) still costs it — and an exhausted gas
+	// meter reports out-of-gas rather than a cell overflow
+	if err := state.Cells.RegisterCellCreate(); err != nil {
+		return err
+	}
 	action, err := b.EndCellSpecial(false)
 	if err != nil {
 		return vmerr.Error(vmerr.CodeCellOverflow, err.Error())
-	}
-	if err := state.Cells.RegisterCellCreate(); err != nil {
-		return err
 	}
 	state.Reg.D[1] = action
 	return nil
@@ -1105,7 +1134,9 @@ func addressFromSlice(sl *cell.Slice) (*address.Address, error) {
 	return sl.Copy().LoadAddr()
 }
 
-func getMyAddr(state *vm.State) (*address.Address, error) {
+// sendMsgMyAddrSlice reads the own-address parameter the way the message
+// estimator does: only "is a slice" is enforced, the content is read loosely.
+func sendMsgMyAddrSlice(state *vm.State) (*cell.Slice, error) {
 	v, err := state.GetParam(8)
 	if err != nil {
 		return nil, err
@@ -1114,14 +1145,48 @@ func getMyAddr(state *vm.State) (*address.Address, error) {
 	if !ok || sl == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "invalid param MYADDR")
 	}
-	addr, err := addressFromSlice(sl)
+	return sl, nil
+}
+
+// sendMsgAddrWorkchain extracts the workchain from an address slice the way
+// the message estimator does: only the leading internal-address bit is
+// enforced, everything after is read loosely and a truncated workchain field
+// collapses to 0.
+func sendMsgAddrWorkchain(cs *cell.Slice) (int64, error) {
+	if v, err := cs.LoadUInt(1); err != nil || v != 1 {
+		return 0, vmerr.Error(vmerr.CodeRangeCheck, "not an internal MsgAddress")
+	}
+	fetchU := func(n uint) uint64 {
+		if cs.BitsLeft() < n {
+			return ^uint64(0) // fetch_ulong_eof
+		}
+		v, _ := cs.LoadUInt(n)
+		return v
+	}
+	isVar := fetchU(1) != 0
+	if fetchU(1) == 1 { // maybe Anycast
+		if cs.BitsLeft() >= 5 {
+			depth, _ := cs.LoadUInt(5)
+			if depth <= 30 && cs.BitsLeft() >= uint(depth) {
+				_ = cs.SkipBits(uint(depth))
+			}
+		}
+	}
+	width := uint(8)
+	if isVar {
+		if cs.BitsLeft() >= 9 {
+			_ = cs.SkipBits(9)
+		}
+		width = 32
+	}
+	if cs.BitsLeft() < width {
+		return 0, nil // (int)fetch_long_eof truncates to 0
+	}
+	v, err := cs.LoadBigInt(width)
 	if err != nil {
-		return nil, err
+		return 0, nil
 	}
-	if addr.Type() != address.StdAddress && addr.Type() != address.VarAddress {
-		return nil, vmerr.Error(vmerr.CodeRangeCheck, "not an internal MsgAddress")
-	}
-	return addr, nil
+	return v.Int64(), nil
 }
 
 func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
@@ -1129,53 +1194,99 @@ func getSizeLimitsMaxMsgCells(state *vm.State) (uint64, error) {
 		return 1 << 13, nil
 	}
 
-	sl, err := unpackedConfigSlice(state, 6)
+	cfg, err := state.GetUnpackedConfigTuple()
 	if err != nil {
 		return 0, err
 	}
-	if sl == nil {
+	v, err := cfg.RawIndex(6)
+	if err != nil {
+		return 0, err
+	}
+	sl, ok := v.(*cell.Slice)
+	if !ok || sl == nil {
 		return 1 << 13, nil
 	}
-	tag, err := sl.LoadUInt(8)
+	// all three record versions are accepted, and the record must consume the
+	// config slice exactly
+	maxCells, err := parseSizeLimitsMaxMsgCells(sl.Copy())
 	if err != nil {
 		return 0, err
 	}
+	return maxCells, nil
+}
+
+func parseSizeLimitsMaxMsgCells(sl *cell.Slice) (uint64, error) {
+	invalid := vmerr.Error(vmerr.CodeCellUnderflow, "configuration parameter 43 is invalid")
+
+	tag, err := sl.PreloadUInt(8)
+	if err != nil {
+		return 0, invalid
+	}
+
+	var maxCells uint32
 	switch tag {
 	case 0x01:
-		_, err = sl.LoadUInt(32)
-		if err != nil {
-			return 0, err
+		var v tlb.SizeLimitsConfigV1
+		if err = tlb.LoadFromCell(&v, sl); err != nil {
+			return 0, invalid
 		}
-		maxCells, err := sl.LoadUInt(32)
-		if err != nil {
-			return 0, err
-		}
-		return maxCells, nil
+		maxCells = v.MaxMsgCells
 	case 0x02:
-		_, err = sl.LoadUInt(32)
-		if err != nil {
-			return 0, err
+		var v tlb.SizeLimitsConfigV2
+		if err = tlb.LoadFromCell(&v, sl); err != nil {
+			return 0, invalid
 		}
-		maxCells, err := sl.LoadUInt(32)
-		if err != nil {
-			return 0, err
+		maxCells = v.MaxMsgCells
+	case 0x03:
+		var v tlb.SizeLimitsConfigV3
+		if err = tlb.LoadFromCell(&v, sl); err != nil {
+			return 0, invalid
 		}
-		return maxCells, nil
+		maxCells = v.MaxMsgCells
 	default:
-		return 0, vmerr.Error(vmerr.CodeCellUnderflow, "configuration parameter 43 is invalid")
+		return 0, invalid
 	}
+	// the record must consume the config slice exactly
+	if sl.BitsLeft() != 0 || sl.RefsNum() != 0 {
+		return 0, invalid
+	}
+	return uint64(maxCells), nil
 }
 
 func getSendMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
 	if state.GlobalVersion >= 6 {
-		return getTonMsgPrices(state, isMasterchain)
+		idx := 5
+		if isMasterchain {
+			idx = 4
+		}
+		cfg, err := state.GetUnpackedConfigTuple()
+		if err != nil {
+			return nil, err
+		}
+		v, err := cfg.RawIndex(idx)
+		if err != nil {
+			return nil, err
+		}
+		sl, ok := v.(*cell.Slice)
+		if !ok || sl == nil {
+			return nil, vmerr.Error(vmerr.CodeUnknown, "invalid prices config")
+		}
+		return parseTonMsgPrices(sl)
 	}
 
 	param := tlb.ConfigParamMsgForwardPricesBasechain
 	if isMasterchain {
 		param = tlb.ConfigParamMsgForwardPricesMasterchain
 	}
-	pricesCell, err := loadConfigValue(state, new(big.Int).SetUint64(uint64(param)))
+	rootAny, err := state.GetParam(9)
+	if err != nil {
+		return nil, err
+	}
+	root, _ := rootAny.(*cell.Cell)
+	if root == nil {
+		return nil, vmerr.Error(vmerr.CodeUnknown, "invalid prices config")
+	}
+	pricesCell, err := loadConfigValueFromRoot(state, root, new(big.Int).SetUint64(uint64(param)))
 	if err != nil {
 		return nil, err
 	}
@@ -1192,10 +1303,9 @@ func getSendMsgPrices(state *vm.State, isMasterchain bool) (*tlb.ConfigMsgForwar
 func addMessageTailStorage(stat *storageStat, msgCell *cell.Cell, skipFirstRefs int) (bool, error) {
 	var root cell.Slice
 	if stat.state != nil {
-		if err := stat.state.Cells.RegisterCellLoad(msgCell); err != nil {
-			return false, err
-		}
-		if err := stat.state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(msgCell, msgCell.Trace(), &root); err != nil {
+		// the estimator loads the message root a second time here: it is
+		// charged again at the reload price and specials resolve
+		if err := stat.state.Cells.BeginParseIntoWithTrace(msgCell, msgCell.Trace(), &root); err != nil {
 			return false, err
 		}
 	} else {
@@ -1356,6 +1466,22 @@ func sendMsgStoredCoinsBits(value *big.Int, nan bool) uint {
 	return 4 + uint((value.BitLen()+7)&^7)
 }
 
+func sendMsgForwardFeeShort(prices *tlb.ConfigMsgForwardPrices, cells, bits uint64) uint64 {
+	bitHi, bitLo := mathbits.Mul64(prices.BitPrice, bits)
+	cellHi, cellLo := mathbits.Mul64(prices.CellPrice, cells)
+	lo, carry := mathbits.Add64(bitLo, cellLo, 0)
+	hi, _ := mathbits.Add64(bitHi, cellHi, carry)
+	lo, carry = mathbits.Add64(lo, 0xFFFF, 0)
+	hi, _ = mathbits.Add64(hi, 0, carry)
+
+	return prices.LumpPrice + (lo>>16 | hi<<48)
+}
+
+func sendMsgIHRFeeShort(fwdFee uint64, factor uint32) uint64 {
+	hi, lo := mathbits.Mul64(fwdFee, uint64(factor))
+	return lo>>16 | hi<<48
+}
+
 func sendMsgBigOrZero(value *big.Int) *big.Int {
 	if value == nil {
 		return new(big.Int)
@@ -1377,7 +1503,7 @@ func sendMsgTupleAmount(state *vm.State, idx int, name string) (*big.Int, bool, 
 		return nil, false, false, err
 	}
 	balance, ok := v.(tuple.Tuple)
-	if !ok {
+	if !ok || balance.IsNull() {
 		return nil, false, false, vmerr.Error(vmerr.CodeTypeCheck, "invalid param "+name)
 	}
 	amountAny, err := balance.Index(0)
@@ -1428,27 +1554,49 @@ func SENDMSG() *helpers.SimpleOP {
 				return err
 			}
 
-			if err = state.Cells.RegisterCellLoad(msgCell); err != nil {
-				return err
-			}
+			// the root is loaded through the regular VM cell path: library
+			// cells resolve, pruned cells fail with a cell underflow and
+			// virtualization aborts propagate
 			var msgSlice cell.Slice
-			if err = state.Cells.BeginParseAlreadyLoadedNoCreateIntoWithTrace(msgCell, msgCell.Trace(), &msgSlice); err != nil {
+			if err = state.Cells.BeginParseIntoWithTrace(msgCell, msgCell.Trace(), &msgSlice); err != nil {
 				return err
 			}
+			resolvedRoot := msgSlice.BaseCell()
 			var msg tlb.MessageRelaxed
 			if err = tlb.LoadFromCell(&msg, &msgSlice); err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
-			layout, err := loadSendMsgLayout(state, msgCell)
+			// the message layout constrains the destination kind: an internal
+			// address for internal messages, an external one for outbound
+			// external messages
+			destType := address.NoneAddress
+			if msg.Info.DstAddr != nil {
+				destType = msg.Info.DstAddr.Type()
+			}
+			switch msg.MsgType {
+			case tlb.MsgTypeInternal:
+				if destType != address.StdAddress && destType != address.VarAddress {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid message")
+				}
+			case tlb.MsgTypeExternalOut:
+				if destType != address.NoneAddress && destType != address.ExtAddress {
+					return vmerr.Error(vmerr.CodeUnknown, "invalid message")
+				}
+			}
+			layout, err := loadSendMsgLayout(state, resolvedRoot)
 			if err != nil {
 				return vmerr.Error(vmerr.CodeUnknown, "invalid message")
 			}
 
-			myAddr, err := getMyAddr(state)
+			myAddrSlice, err := sendMsgMyAddrSlice(state)
 			if err != nil {
 				return err
 			}
-			isMasterchain := myAddr != nil && myAddr.Workchain() == -1
+			myWorkchain, err := sendMsgAddrWorkchain(myAddrSlice.Copy())
+			if err != nil {
+				return err
+			}
+			isMasterchain := myWorkchain == -1
 			if msg.MsgType == tlb.MsgTypeInternal && msg.Info.DstAddr != nil && msg.Info.DstAddr.Workchain() == -1 {
 				isMasterchain = true
 			}
@@ -1500,12 +1648,10 @@ func SENDMSG() *helpers.SimpleOP {
 			fwd := new(big.Int)
 			ihrDisabled := msg.MsgType != tlb.MsgTypeInternal || msg.Info.IHRDisabled || state.GlobalVersion >= 11
 			computeFees := func() {
-				computedFwd := prices.ComputeForwardFee(stat.cells, stat.bits)
+				computedFwd := new(big.Int).SetUint64(sendMsgForwardFeeShort(prices, stat.cells, stat.bits))
 				computedIHR := new(big.Int)
 				if !ihrDisabled {
-					// The reference floors the IHR component (uint128 shr), unlike
-					// the forward fee, which rounds up.
-					computedIHR = new(big.Int).Rsh(mulBigUint64(computedFwd, uint64(prices.IHRFactor)), 16)
+					computedIHR.SetUint64(sendMsgIHRFeeShort(computedFwd.Uint64(), prices.IHRFactor))
 				}
 
 				fwd = computedFwd
@@ -1519,10 +1665,9 @@ func SENDMSG() *helpers.SimpleOP {
 			}
 			computeFees()
 
-			myAddrBits, err := sendMsgAddressBits(myAddr)
-			if err != nil {
-				return err
-			}
+			// the root-bits estimate counts the raw own-address slice bits,
+			// trailing data included
+			myAddrBits := myAddrSlice.BitsLeft()
 			destAddrBits, err := sendMsgAddressBits(msg.Info.DstAddr)
 			if err != nil {
 				return err

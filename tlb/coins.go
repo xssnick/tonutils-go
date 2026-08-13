@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -80,6 +81,18 @@ func (g Coins) Nano() *big.Int {
 	return new(big.Int).Set(g.nanoValue())
 }
 
+// NanoRef returns the amount without copying it. Nano allocates two heap
+// objects for every read, which a hot path that only compares, adds into
+// another accumulator or serialises the value cannot afford; a block collation
+// reads thousands of amounts it never touches.
+//
+// The result MUST NOT be mutated: it is the instance this Coins holds, and
+// writing through it silently changes the amount and every other Coins that
+// shares it. Use Nano when the value is going to be modified.
+func (g Coins) NanoRef() *big.Int {
+	return g.nanoValue()
+}
+
 // nanoValue is read-only; mutating or exposing it would break Coins ownership.
 func (g Coins) nanoValue() *big.Int {
 	if g.val == nil {
@@ -136,6 +149,22 @@ func FromNanoTON(val *big.Int) Coins {
 	return Coins{
 		decimals: 9,
 		val:      new(big.Int).Set(val),
+	}
+}
+
+// FromOwnedNanoTON wraps val instead of copying it, for the common case where
+// the caller has just computed the amount and has no further use for it — a
+// parsed balance, a fee that was summed into a fresh accumulator. It is
+// FromNanoTON without its two heap objects.
+//
+// The caller gives up val: it must not retain it, mutate it, or hand it to
+// anything that mutates in place. Use FromNanoTON when val is still live
+// elsewhere. A nil val is read back as zero, the same as any Coins whose
+// amount was never set.
+func FromOwnedNanoTON(val *big.Int) Coins {
+	return Coins{
+		decimals: 9,
+		val:      val,
 	}
 }
 
@@ -254,7 +283,7 @@ func loadCoins(loader *cell.Slice) (Coins, error) {
 		if err != nil {
 			return Coins{}, err
 		}
-		return Coins{decimals: 9, val: new(big.Int).SetUint64(coins)}, nil
+		return Coins{decimals: 9, val: bigint.FromUint64(coins)}, nil
 	}
 
 	coins, err := loader.LoadBigUInt(uint(ln * 8))

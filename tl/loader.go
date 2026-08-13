@@ -47,6 +47,15 @@ var _BoolFalse = func() []byte {
 	return buf
 }()
 
+// AppendBool appends the canonical boxed TL Bool value to dst.
+func AppendBool(dst []byte, value bool) []byte {
+	if value {
+		return append(dst, _BoolTrue...)
+	}
+
+	return append(dst, _BoolFalse...)
+}
+
 var Logger = func(a ...any) {}
 
 var DefaultSerializeBufferSize = 1024

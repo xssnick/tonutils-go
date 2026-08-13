@@ -5,20 +5,24 @@ import (
 	"testing"
 )
 
-type usageProofStatGolden struct {
+type readProofStatGolden struct {
 	cells        uint64
 	bits         uint64
 	internalRefs uint64
 	externalRefs uint64
 }
 
+// cppNewCellStorageStatGolden is a transcription of the reference
+// NewCellStorageStat: a plain recursive model with none of the packing
+// CellStorageStat does, kept so the optimized counter is compared against the
+// semantics rather than against itself.
 type cppNewCellStorageStatGolden struct {
 	seen      map[Hash]struct{}
 	proofSeen map[Hash]struct{}
-	stat      usageProofStatGolden
-	proofStat usageProofStatGolden
+	stat      readProofStatGolden
+	proofStat readProofStatGolden
 	parent    *cppNewCellStorageStatGolden
-	tree      *CellUsageTree
+	read      *ReadSet
 }
 
 func newCppNewCellStorageStatGolden() *cppNewCellStorageStatGolden {
@@ -28,8 +32,8 @@ func newCppNewCellStorageStatGolden() *cppNewCellStorageStatGolden {
 	}
 }
 
-func collectUsageProofStatGolden(root *Cell, usageTree *CellUsageTree) usageProofStatGolden {
-	var stat usageProofStatGolden
+func collectReadProofStatGolden(root *Cell, read *ReadSet) readProofStatGolden {
+	var stat readProofStatGolden
 	seen := map[Hash]struct{}{}
 
 	var dfs func(*Cell)
@@ -37,7 +41,7 @@ func collectUsageProofStatGolden(root *Cell, usageTree *CellUsageTree) usageProo
 		if c == nil {
 			return
 		}
-		if _, ok := usageTree.NodeForCell(c); ok {
+		if _, known := read.Prunable(c.HashKeyAt(0)); known {
 			stat.externalRefs++
 			return
 		}
@@ -69,30 +73,30 @@ func (s *cppNewCellStorageStatGolden) addCell(c *Cell) error {
 	return s.dfs(c, true, false)
 }
 
-func (s *cppNewCellStorageStatGolden) addProof(c *Cell, tree *CellUsageTree) error {
-	s.tree = tree
+func (s *cppNewCellStorageStatGolden) addProof(c *Cell, read *ReadSet) error {
+	s.read = read
 	return s.dfs(c, false, true)
 }
 
-func (s *cppNewCellStorageStatGolden) addCellAndProof(c *Cell, tree *CellUsageTree) error {
-	s.tree = tree
+func (s *cppNewCellStorageStatGolden) addCellAndProof(c *Cell, read *ReadSet) error {
+	s.read = read
 	return s.dfs(c, true, true)
 }
 
-func (s *cppNewCellStorageStatGolden) tentativeAddCell(c *Cell) (usageProofStatGolden, error) {
+func (s *cppNewCellStorageStatGolden) tentativeAddCell(c *Cell) (readProofStatGolden, error) {
 	tentative := newCppNewCellStorageStatGolden()
 	tentative.parent = s
 	if err := tentative.addCell(c); err != nil {
-		return usageProofStatGolden{}, err
+		return readProofStatGolden{}, err
 	}
 	return tentative.stat, nil
 }
 
-func (s *cppNewCellStorageStatGolden) tentativeAddProof(c *Cell, tree *CellUsageTree) (usageProofStatGolden, error) {
+func (s *cppNewCellStorageStatGolden) tentativeAddProof(c *Cell, read *ReadSet) (readProofStatGolden, error) {
 	tentative := newCppNewCellStorageStatGolden()
 	tentative.parent = s
-	if err := tentative.addProof(c, tree); err != nil {
-		return usageProofStatGolden{}, err
+	if err := tentative.addProof(c, read); err != nil {
+		return readProofStatGolden{}, err
 	}
 	return tentative.proofStat, nil
 }
@@ -119,7 +123,7 @@ func (s *cppNewCellStorageStatGolden) dfs(c *Cell, needStat, needProofStat bool)
 		}
 	}
 	if needProofStat {
-		if node, ok := s.tree.NodeForCell(c); ok && s.tree.validNode(node) {
+		if _, known := s.read.Prunable(c.HashKeyAt(0)); known {
 			s.proofStat.externalRefs++
 			needProofStat = false
 		} else {
@@ -168,126 +172,104 @@ func (s *cppNewCellStorageStatGolden) dfs(c *Cell, needStat, needProofStat bool)
 	return nil
 }
 
-func TestCellUsageTreeCppGoldenLoadMarkAndIgnoreSemantics(t *testing.T) {
-	tree := NewCellUsageTree()
-	root := tree.RootNode()
-	left := tree.CreateChild(root, 0)
-	right := tree.CreateChild(root, 1)
-	leaf := tree.CreateChild(left, 0)
+func TestReadSetCppGoldenRecordAndIgnoreSemantics(t *testing.T) {
+	left := BeginCell().MustStoreUInt(0x22, 8).EndCell()
+	right := BeginCell().MustStoreUInt(0x33, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0x11, 8).MustStoreRef(left).MustStoreRef(right).EndCell()
 
-	var loaded []*Cell
-	rootCell := BeginCell().MustStoreUInt(0x11, 8).EndCell()
-	leftCell := BeginCell().MustStoreUInt(0x22, 8).EndCell()
-	rightCell := BeginCell().MustStoreUInt(0x33, 8).EndCell()
-
-	tree.SetCellLoadCallback(func(c *Cell) {
-		loaded = append(loaded, c)
+	rs := NewReadSet(root)
+	var recorded []*Cell
+	rs.SetRecordCallback(func(c *Cell) {
+		recorded = append(recorded, c)
 	})
-	tree.OnLoad(root, rootCell)
-	tree.OnLoad(root, rootCell)
-	tree.OnLoad(left, leftCell)
 
-	if len(loaded) != 2 {
-		t.Fatalf("load callback should fire once per node, got %d", len(loaded))
+	slice, err := rs.Root().BeginParse()
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !tree.IsLoaded(root) || !tree.IsLoaded(left) || tree.IsLoaded(right) || tree.IsLoaded(leaf) {
-		t.Fatal("loaded flags do not match C++ CellUsageTree semantics")
+	leftRef, err := slice.PeekRefCellAt(0)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	tree.SetIgnoreLoads(true)
-	tree.SetIgnoreLoads(true)
-	tree.OnLoad(right, rightCell)
-	if tree.IsLoaded(right) || len(loaded) != 2 {
-		t.Fatal("ignore_loads should suppress both load flag and callback")
+	rightRef, err := slice.PeekRefCellAt(1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := tree.loadedCell(right); ok {
-		t.Fatal("ignore_loads should not cache loaded cell by node")
+	if _, err = leftRef.BeginParse(); err != nil {
+		t.Fatal(err)
 	}
-	index := newUsageTreeCellIndex(tree)
-	if _, ok := index.loadedCellByHash(rightCell.HashKey()); ok {
-		t.Fatal("ignore_loads should not cache loaded cell by hash")
+	if _, err = leftRef.BeginParse(); err != nil {
+		t.Fatal(err)
 	}
 
-	tree.SetIgnoreLoads(false)
-	tree.OnLoad(right, rightCell)
-	if tree.IsLoaded(right) || len(loaded) != 2 {
-		t.Fatal("nested ignore_loads should remain active until all scopes are reset")
+	if len(recorded) != 2 {
+		t.Fatalf("record callback should fire once per cell, got %d", len(recorded))
+	}
+	if _, ok := rs.Contains(root.HashKey()); !ok {
+		t.Fatal("the parsed root was not recorded")
+	}
+	if _, ok := rs.Contains(left.HashKey()); !ok {
+		t.Fatal("the parsed left branch was not recorded")
+	}
+	if _, ok := rs.Contains(right.HashKey()); ok {
+		t.Fatal("a branch that was only referenced was recorded")
 	}
 
-	tree.SetIgnoreLoads(false)
-	tree.OnLoad(right, rightCell)
-	if !tree.IsLoaded(right) || len(loaded) != 3 {
-		t.Fatal("load after ignore reset was not tracked")
+	rs.IgnoreReads(true)
+	rs.IgnoreReads(true)
+	if _, err = rightRef.BeginParse(); err != nil {
+		t.Fatal(err)
 	}
-	if cached, ok := tree.loadedCell(right); !ok || cached.HashKey() != rightCell.HashKey() {
-		t.Fatal("loaded cell was not cached after ignore reset")
+	if _, ok := rs.Contains(right.HashKey()); ok {
+		t.Fatal("ignore scope did not suppress recording")
 	}
-
-	if !tree.MarkPath(leaf) {
-		t.Fatal("mark_path should accept a valid node")
-	}
-	if !tree.HasMark(root) || !tree.HasMark(left) || tree.HasMark(leaf) {
-		t.Fatal("mark_path should mark parents only, including root")
+	if len(recorded) != 2 {
+		t.Fatal("ignore scope did not suppress the record callback")
 	}
 
-	tree.SetUseMarkForIsLoaded(true)
-	if !tree.IsLoaded(root) || !tree.IsLoaded(left) || tree.IsLoaded(right) || tree.IsLoaded(leaf) {
-		t.Fatal("use_mark should switch is_loaded to marked nodes only")
+	rs.IgnoreReads(false)
+	if _, err = rightRef.BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rs.Contains(right.HashKey()); ok {
+		t.Fatal("nested ignore scopes must stay active until all of them are closed")
+	}
+
+	rs.IgnoreReads(false)
+	if _, err = rightRef.BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := rs.Contains(right.HashKey()); !ok {
+		t.Fatal("a read after the last ignore scope closed was not recorded")
+	}
+	if len(recorded) != 3 {
+		t.Fatalf("record callback count = %d, want 3", len(recorded))
 	}
 }
 
-func TestCellUsageTreeCppGoldenTraceNodeIdentityThroughCellFlows(t *testing.T) {
-	tree := NewCellUsageTree()
-	leaf := BeginCell().MustStoreUInt(0x44, 8).EndCell()
-	root := BeginCell().MustStoreUInt(0x55, 8).MustStoreRef(leaf).EndCell().WithTrace(tree.RootTrace())
+// One trace records by hash, so two unrelated cells sharing it are two entries
+// and one callback each — the recorder has no per-position identity to confuse.
+func TestReadSetRecordCallbackReportsDistinctCellsAliasedToOneTrace(t *testing.T) {
+	rs := NewReadSet(BeginCell().EndCell())
+	records := make(map[Hash]int)
+	rs.SetRecordCallback(func(c *Cell) {
+		records[c.HashKey()]++
+	})
 
-	rootNode, ok := tree.NodeForCell(root)
-	if !ok || rootNode != tree.RootNode() {
-		t.Fatalf("root usage node mismatch: got=%d ok=%v", rootNode, ok)
+	first := BeginCell().MustStoreUInt(1, 8).EndCell().WithTrace(rs.Trace())
+	second := BeginCell().MustStoreUInt(2, 8).EndCell().WithTrace(rs.Trace())
+	if _, err := first.BeginParse(); err != nil {
+		t.Fatal(err)
 	}
-
-	rootSlice := root.MustBeginParse()
-	peeked, err := rootSlice.PeekRefCell()
-	if err != nil {
+	if _, err := second.BeginParse(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.BeginParse(); err != nil {
 		t.Fatal(err)
 	}
 
-	leafNode := tree.GetChild(rootNode, 0)
-	if leafNode == 0 {
-		t.Fatal("peek ref should create child usage node")
-	}
-	if node, ok := tree.NodeForCell(peeked); !ok || node != leafNode {
-		t.Fatalf("peeked ref usage node mismatch: got=%d want=%d ok=%v", node, leafNode, ok)
-	}
-	if tree.IsLoaded(leafNode) {
-		t.Fatal("peek ref cell should carry node identity without marking child as loaded")
-	}
-
-	loadedSlice, err := rootSlice.LoadRef()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loadedSlice.MustLoadUInt(8) != 0x44 {
-		t.Fatal("unexpected loaded leaf value")
-	}
-	if !tree.IsLoaded(leafNode) {
-		t.Fatal("LoadRef should mark child node as loaded through BeginParse")
-	}
-
-	rebuilt, err := root.MustBeginParse().ToCell()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := tree.NodeForCell(rebuilt); ok {
-		t.Fatal("newly built cell should not pretend to be a usage-tree source node")
-	}
-	if node, ok := tree.NodeForCell(rebuilt.MustPeekRef(0)); !ok || node != leafNode {
-		t.Fatalf("slice copy should preserve child usage node: got=%d want=%d ok=%v", node, leafNode, ok)
-	}
-
-	builder := root.MustBeginParse().ToBuilder()
-	if node, ok := tree.NodeForCell(builder.refs[0]); !ok || node != leafNode {
-		t.Fatalf("builder copy should preserve child usage node: got=%d want=%d ok=%v", node, leafNode, ok)
+	if records[first.HashKey()] != 1 || records[second.HashKey()] != 1 {
+		t.Fatalf("record callbacks = %#v, want each distinct hash once", records)
 	}
 }
 
@@ -427,7 +409,7 @@ func TestMerkleProofBuilderCppGoldenPrunesUnloadedOrdinaryBranchRef(t *testing.T
 	}
 }
 
-func TestCellUsageTreeCppGoldenLoadDictValidationDoesNotMarkDictRoot(t *testing.T) {
+func TestReadSetCppGoldenLoadDictValidationDoesNotRecordDictRoot(t *testing.T) {
 	dict := NewDict(8)
 	if err := dict.Set(BeginCell().MustStoreUInt(0x00, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {
 		t.Fatal(err)
@@ -443,12 +425,8 @@ func TestCellUsageTreeCppGoldenLoadDictValidationDoesNotMarkDictRoot(t *testing.
 		t.Fatal(err)
 	}
 
-	dictNode, ok := builder.UsageTree().NodeForCell(loadedDict.root)
-	if !ok {
-		t.Fatal("loaded dict root should carry usage node identity")
-	}
-	if builder.UsageTree().IsLoaded(dictNode) {
-		t.Fatal("dict validation should not mark the dict root as loaded")
+	if _, read := builder.ReadSet().Contains(loadedDict.root.HashKey()); read {
+		t.Fatal("dict validation should not record the dict root")
 	}
 
 	proof, err := builder.CreateProof()
@@ -468,7 +446,7 @@ func TestCellUsageTreeCppGoldenLoadDictValidationDoesNotMarkDictRoot(t *testing.
 	}
 }
 
-func TestCellUsageTreeCppGoldenLoadPrefixDictDoesNotMarkDictRoot(t *testing.T) {
+func TestReadSetCppGoldenLoadPrefixDictDoesNotRecordDictRoot(t *testing.T) {
 	dict := NewPrefixDict(8)
 	if err := dict.Set(BeginCell().MustStoreUInt(0x10, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {
 		t.Fatal(err)
@@ -484,16 +462,12 @@ func TestCellUsageTreeCppGoldenLoadPrefixDictDoesNotMarkDictRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dictNode, ok := builder.UsageTree().NodeForCell(loadedDict.root)
-	if !ok {
-		t.Fatal("loaded prefix dict root should carry usage node identity")
-	}
-	if builder.UsageTree().IsLoaded(dictNode) {
-		t.Fatal("prefix dict loading should not recursively mark the dict root")
+	if _, read := builder.ReadSet().Contains(loadedDict.root.HashKey()); read {
+		t.Fatal("prefix dict loading should not recursively record the dict root")
 	}
 }
 
-func TestCellUsageTreeCppGoldenLoadAugDictChecksOnlyRootExtra(t *testing.T) {
+func TestReadSetCppGoldenLoadAugDictChecksOnlyRootExtra(t *testing.T) {
 	aug := testMetricAugmentation{}
 	dict, err := NewAugDict(8, aug)
 	if err != nil {
@@ -517,16 +491,106 @@ func TestCellUsageTreeCppGoldenLoadAugDictChecksOnlyRootExtra(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dictNode, ok := builder.UsageTree().NodeForCell(loadedDict.root)
-	if !ok {
-		t.Fatal("loaded augmented dict root should carry usage node identity")
-	}
-	if builder.UsageTree().IsLoaded(dictNode) {
-		t.Fatal("augmented dict loading should not recursively mark the dict root")
+	if _, read := builder.ReadSet().Contains(loadedDict.root.HashKey()); read {
+		t.Fatal("augmented dict loading should not recursively record the dict root")
 	}
 }
 
-func TestCellUsageTreeCppGoldenDictMutationDoesNotReuseSourceRootNode(t *testing.T) {
+func TestReadSetCppGoldenAugDictValidationKeepsOnlyRoot(t *testing.T) {
+	aug := testMetricAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []uint64{0x10, 0x20, 0x80} {
+		if _, err = dict.SetWithMode(
+			BeginCell().MustStoreUInt(key, 8).EndCell(),
+			BeginCell().MustStoreUInt(key+1, 8).EndCell(),
+			DictSetModeSet,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	container := BeginCell().
+		MustStoreBoolBit(true).
+		MustStoreRef(dict.root).
+		MustStoreBuilder(dict.GetRootExtra().MustBeginParse().ToBuilder()).
+		EndCell()
+	builder := NewMerkleProofBuilder(container)
+	loaded, err := builder.Root().MustBeginParse().LoadAugDict(8, aug, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = loaded.Validate(); err != nil {
+		t.Fatalf("validate recorded augmented dictionary: %v", err)
+	}
+
+	proof, err := builder.CreateProof()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proven, err := UnwrapProofVirtualized(proof, container.Hash())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provenDict, err := proven.MustBeginParse().LoadAugDict(8, aug, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = provenDict.Validate(); err != nil {
+		t.Fatalf("validate proven augmented dictionary root: %v", err)
+	}
+	provenRoot := provenDict.RootCell()
+	if provenRoot == nil || provenRoot.GetType() != OrdinaryCellType {
+		t.Fatal("recorded validation proof does not carry the dictionary root")
+	}
+	pruned := 0
+	for i := 0; i < int(provenRoot.RefsNum()); i++ {
+		child, childErr := provenRoot.PeekRef(i)
+		if childErr != nil {
+			t.Fatal(childErr)
+		}
+		if child.GetType() == PrunedCellType {
+			pruned++
+		}
+	}
+	if pruned == 0 {
+		t.Fatal("root-only validation retained every dictionary child")
+	}
+}
+
+func TestReadSetCppGoldenAugDictValidationResolvesLazyRoot(t *testing.T) {
+	aug := testMetricAugmentation{}
+	dict, err := NewAugDict(8, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []uint64{0x10, 0x80} {
+		if _, err = dict.SetWithMode(
+			BeginCell().MustStoreUInt(key, 8).EndCell(),
+			BeginCell().MustStoreUInt(key+1, 8).EndCell(),
+			DictSetModeSet,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	loader := &testLazyLoader{cells: map[Hash]*Cell{dict.root.HashKey(): dict.root}}
+	lazy := mustCreateLazyPrunedRef(t, lazyRefFromCell(dict.root), loader.LoadCell)
+	rs := NewReadSet(lazy)
+	loaded := rs.Root().AsAugDict(8, aug)
+	if err = loaded.Validate(); err != nil {
+		t.Fatalf("validate lazy augmented dictionary: %v", err)
+	}
+	if loader.calls == 0 {
+		t.Fatal("validation did not resolve the lazy augmented dictionary root")
+	}
+}
+
+// A mutated dictionary root is a cell the source never held, and the recorder
+// keys on hashes, so it can never stand in for the root it was derived from.
+func TestReadSetCppGoldenMutatedDictRootIsNotPrunable(t *testing.T) {
 	dict := NewDict(8)
 	if err := dict.Set(BeginCell().MustStoreUInt(0x00, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {
 		t.Fatal(err)
@@ -534,27 +598,30 @@ func TestCellUsageTreeCppGoldenDictMutationDoesNotReuseSourceRootNode(t *testing
 	if err := dict.Set(BeginCell().MustStoreUInt(0x80, 8).EndCell(), BeginCell().MustStoreUInt(0xBB, 8).EndCell()); err != nil {
 		t.Fatal(err)
 	}
+	source := dict.AsCell()
 
-	tree := NewCellUsageTree()
-	traced := dict.AsCell().AsDict(8).SetTrace(tree.RootTrace())
-	if node, ok := tree.NodeForCell(traced.root); !ok || node != tree.RootNode() {
-		t.Fatalf("source dict root usage node mismatch: got=%d ok=%v", node, ok)
-	}
+	rs := NewReadSet(source)
+	recorded := rs.Root().AsDict(8)
 
-	tree.SetIgnoreLoads(true)
-	if err := traced.Set(BeginCell().MustStoreUInt(0x40, 8).EndCell(), BeginCell().MustStoreUInt(0xCC, 8).EndCell()); err != nil {
+	rs.IgnoreReads(true)
+	if err := recorded.Set(BeginCell().MustStoreUInt(0x40, 8).EndCell(), BeginCell().MustStoreUInt(0xCC, 8).EndCell()); err != nil {
 		t.Fatal(err)
 	}
-	tree.SetIgnoreLoads(false)
-	if node, ok := tree.NodeForCell(traced.root); ok {
-		t.Fatalf("mutated dict root should not keep source usage node, got node=%d", node)
+	rs.IgnoreReads(false)
+
+	mutated := recorded.AsCell()
+	if mutated.HashKey() == source.HashKey() {
+		t.Fatal("the mutation did not change the dictionary root")
+	}
+	if _, known := rs.Prunable(mutated.HashKeyAt(0)); known {
+		t.Fatal("a mutated dict root must not be prunable against the source")
 	}
 
-	if _, err := traced.root.BeginParse(); err != nil {
+	if _, err := mutated.BeginParse(); err != nil {
 		t.Fatal(err)
 	}
-	if tree.IsLoaded(tree.RootNode()) {
-		t.Fatal("parsing a mutated dict root should not mark the original source node")
+	if _, known := rs.Prunable(source.HashKeyAt(0)); known {
+		t.Fatal("parsing a mutated dict root recorded the source root it was derived from")
 	}
 }
 
@@ -625,16 +692,15 @@ func TestMerkleProofBuilderCppGoldenDuplicateHashIncludedByVisitedHash(t *testin
 	}
 }
 
-func TestCellUsageTreeCppGoldenStorageProofBoundaryStat(t *testing.T) {
-	tree := NewCellUsageTree()
-	root := tree.RootNode()
-	child := tree.CreateChild(root, 0)
-
-	leaf := BeginCell().MustStoreUInt(0xAA, 8).EndCell().WithTrace(tree.Trace(child))
+func TestReadSetCppGoldenStorageProofBoundaryStat(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	ordinaryRoot := BeginCell().MustStoreUInt(0xBB, 8).MustStoreRef(leaf).EndCell()
 
-	stat := collectUsageProofStatGolden(ordinaryRoot, tree)
-	want := usageProofStatGolden{
+	rs := NewReadSet(leaf)
+	rs.Record(leaf)
+
+	stat := collectReadProofStatGolden(ordinaryRoot, rs)
+	want := readProofStatGolden{
 		cells:        1,
 		bits:         8,
 		internalRefs: 1,
@@ -644,16 +710,16 @@ func TestCellUsageTreeCppGoldenStorageProofBoundaryStat(t *testing.T) {
 		t.Fatalf("storage proof boundary stat mismatch: got=%+v want=%+v", stat, want)
 	}
 
-	directExternal := collectUsageProofStatGolden(leaf, tree)
-	want = usageProofStatGolden{externalRefs: 1}
+	directExternal := collectReadProofStatGolden(leaf, rs)
+	want = readProofStatGolden{externalRefs: 1}
 	if directExternal != want {
-		t.Fatalf("direct usage cell should be counted as external only: got=%+v want=%+v", directExternal, want)
+		t.Fatalf("recorded cell should be counted as external only: got=%+v want=%+v", directExternal, want)
 	}
 
 	shared := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	withDuplicate := BeginCell().MustStoreRef(shared).MustStoreRef(shared).EndCell()
-	stat = collectUsageProofStatGolden(withDuplicate, NewCellUsageTree())
-	want = usageProofStatGolden{
+	stat = collectReadProofStatGolden(withDuplicate, NewReadSet(withDuplicate))
+	want = readProofStatGolden{
 		cells:        2,
 		bits:         8,
 		internalRefs: 3,
@@ -664,10 +730,7 @@ func TestCellUsageTreeCppGoldenStorageProofBoundaryStat(t *testing.T) {
 }
 
 func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
-	tree := NewCellUsageTree()
-	externalNode := tree.CreateChild(tree.RootNode(), 0)
-
-	external := BeginCell().MustStoreUInt(0xA, 4).EndCell().WithTrace(tree.Trace(externalNode))
+	external := BeginCell().MustStoreUInt(0xA, 4).EndCell()
 	shared := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	root := BeginCell().
 		MustStoreUInt(0xDD, 8).
@@ -676,6 +739,9 @@ func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
 		MustStoreRef(shared).
 		EndCell()
 
+	rs := NewReadSet(external)
+	rs.Record(external)
+
 	stat := newCppNewCellStorageStatGolden()
 	if err := stat.addCell(nil); err != nil {
 		t.Fatal(err)
@@ -683,7 +749,7 @@ func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
 	if err := stat.addCell(root); err != nil {
 		t.Fatal(err)
 	}
-	wantCell := usageProofStatGolden{
+	wantCell := readProofStatGolden{
 		cells:        3,
 		bits:         20,
 		internalRefs: 4,
@@ -693,10 +759,10 @@ func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
 	}
 
 	proofStat := newCppNewCellStorageStatGolden()
-	if err := proofStat.addProof(root, tree); err != nil {
+	if err := proofStat.addProof(root, rs); err != nil {
 		t.Fatal(err)
 	}
-	wantProof := usageProofStatGolden{
+	wantProof := readProofStatGolden{
 		cells:        2,
 		bits:         16,
 		internalRefs: 3,
@@ -707,7 +773,7 @@ func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
 	}
 
 	allStat := newCppNewCellStorageStatGolden()
-	if err := allStat.addCellAndProof(root, tree); err != nil {
+	if err := allStat.addCellAndProof(root, rs); err != nil {
 		t.Fatal(err)
 	}
 	if allStat.stat != wantCell {
@@ -721,14 +787,14 @@ func TestNewCellStorageStatCppGoldenCellAndProofSemantics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tentativeCell != (usageProofStatGolden{internalRefs: 1}) {
+	if tentativeCell != (readProofStatGolden{internalRefs: 1}) {
 		t.Fatalf("tentative duplicate cell stat mismatch: got=%+v", tentativeCell)
 	}
-	tentativeProof, err := proofStat.tentativeAddProof(root, tree)
+	tentativeProof, err := proofStat.tentativeAddProof(root, rs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tentativeProof != (usageProofStatGolden{internalRefs: 1}) {
+	if tentativeProof != (readProofStatGolden{internalRefs: 1}) {
 		t.Fatalf("tentative duplicate proof stat mismatch: got=%+v", tentativeProof)
 	}
 }

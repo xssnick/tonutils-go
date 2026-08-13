@@ -50,9 +50,61 @@ func TestTransactionCeilShiftRight(t *testing.T) {
 	}
 }
 
+func TestTransactionForwardFeesWrapUint64(t *testing.T) {
+	prices := &tlb.ConfigMsgForwardPrices{
+		LumpPrice: math.MaxUint64,
+		CellPrice: 1 << 16,
+		IHRFactor: math.MaxUint32,
+	}
+
+	wideForward := prices.ComputeForwardFee(1, 0)
+	wantWideForward := new(big.Int).Lsh(big.NewInt(1), 64)
+	if wideForward.Cmp(wantWideForward) != 0 {
+		t.Fatalf("public forward fee = %s, want %s", wideForward, wantWideForward)
+	}
+	if got := transactionComputeForwardFeeWithPrices(prices, 1, 0); got.Sign() != 0 {
+		t.Fatalf("transaction forward fee = %s, want uint64 wrap to zero", got)
+	}
+
+	pricesCell, err := tlb.ToCell(prices)
+	if err != nil {
+		t.Fatalf("failed to build forward prices: %v", err)
+	}
+	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamMsgForwardPricesBasechain: pricesCell,
+	})
+	fwdFee := new(big.Int).SetUint64(math.MaxUint64)
+	wantIHR := new(big.Int).Mul(new(big.Int).SetUint64(math.MaxUint32), fwdFee)
+	wantIHR.Rsh(wantIHR, 16)
+	wantIHR.SetUint64(wantIHR.Uint64())
+	if got := transactionComputeIHRFee(cfg, tonopsTestAddr, tonopsTestAddr, fwdFee, false); got.Cmp(wantIHR) != 0 {
+		t.Fatalf("transaction IHR fee = %s, want wrapped %s", got, wantIHR)
+	}
+}
+
+func TestTransactionSelectComputedMessageFeeSignedBoundary(t *testing.T) {
+	computed := big.NewInt(100)
+	if got := transactionSelectComputedMessageFee(computed, nil); got != computed {
+		t.Fatalf("normal computed fee did not replace zero suggestion: %s", got)
+	}
+	suggested := big.NewInt(200)
+	if got := transactionSelectComputedMessageFee(computed, suggested); got != suggested {
+		t.Fatalf("larger suggested fee was replaced: %s", got)
+	}
+
+	highComputed := new(big.Int).Lsh(big.NewInt(1), 63)
+	suggested = big.NewInt(7)
+	if got := transactionSelectComputedMessageFee(highComputed, suggested); got != suggested {
+		t.Fatalf("high computed fee replaced suggestion: %s", got)
+	}
+	if got := transactionSelectComputedMessageFee(highComputed, nil); got.Sign() != 0 {
+		t.Fatalf("high computed fee replaced forced zero: %s", got)
+	}
+}
+
 func TestTransactionGasBoundaryHelpers(t *testing.T) {
-	if got := transactionGasInt(uint64(math.MaxInt64) + 1); got != math.MaxInt64 {
-		t.Fatalf("gas int overflow = %d, want %d", got, int64(math.MaxInt64))
+	if got := transactionGasInt(uint64(math.MaxInt64) + 1); got != math.MinInt64 {
+		t.Fatalf("gas signed cast = %d, want %d", got, int64(math.MinInt64))
 	}
 
 	prices := &tlb.ConfigGasLimitsPrices{
@@ -85,11 +137,11 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 	if got := transactionGasFlatPrice(prices); got != 100 {
 		t.Fatalf("flat gas price = %d, want 100", got)
 	}
-	if got := transactionMaxGasThresholdForLimit(nil, 100); got.Sign() != 0 {
-		t.Fatalf("nil max gas threshold = %s, want 0", got)
+	if got := transactionMaxGasThresholdForLimit(nil, 100); got.Cmp64(0) != 0 {
+		t.Fatalf("nil max gas threshold = %s, want 0", got.Big())
 	}
-	if got := transactionMaxGasThresholdForLimit(prices, prices.FlatGasLimit); got.Uint64() != prices.FlatGasPrice {
-		t.Fatalf("flat max gas threshold = %s, want %d", got, prices.FlatGasPrice)
+	if got := transactionMaxGasThresholdForLimit(prices, prices.FlatGasLimit); got.Cmp64(prices.FlatGasPrice) != 0 {
+		t.Fatalf("flat max gas threshold = %s, want %d", got.Big(), prices.FlatGasPrice)
 	}
 
 	fallback := transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), nil, tlb.MsgTypeInternal, false)
@@ -304,11 +356,14 @@ func TestTransactionMessageTailAndActionUsageEdges(t *testing.T) {
 }
 
 func TestTransactionActionFineAndPublicLibrariesEdges(t *testing.T) {
-	if got := transactionComputeActionFineForUsageWithPrices(nil, transactionUsage{cells: 10}, big.NewInt(100)); got.Sign() != 0 {
+	usage := transactionUsage{cells: 10}
+	maxCells, _ := transactionActionFineCellLimitWithPrices(nil, usage.cells, big.NewInt(100))
+	if got := transactionComputeActionFineForUsageWithLimit(nil, usage, maxCells); got.Sign() != 0 {
 		t.Fatalf("nil prices fine = %s, want 0", got)
 	}
 	prices := &tlb.ConfigMsgForwardPrices{CellPrice: 8 << 16}
-	if got := transactionComputeActionFineForUsageWithPrices(prices, transactionUsage{cells: 10}, big.NewInt(2)); got.Uint64() != 2 {
+	maxCells, _ = transactionActionFineCellLimitWithPrices(prices, usage.cells, big.NewInt(2))
+	if got := transactionComputeActionFineForUsageWithLimit(prices, usage, maxCells); got.Uint64() != 2 {
 		t.Fatalf("limited fine = %s, want 2", got)
 	}
 	maxCells, limited := transactionActionFineCellLimitWithPrices(prices, 10, new(big.Int).Lsh(big.NewInt(1), 70))
@@ -373,25 +428,95 @@ func TestTransactionActionFineAndPublicLibrariesEdges(t *testing.T) {
 		t.Fatalf("mode64 insufficient funds fine = %s/%d/%t, want zero/0/true", fine, maxCells, limited)
 	}
 
-	if got := transactionPublicLibrariesCount(nil); got != 0 {
+	if got := transactionTestPublicLibrariesCount(t, nil); got != 0 {
 		t.Fatalf("nil public libraries count = %d, want 0", got)
 	}
+	library := cell.BeginCell().MustStoreUInt(0xC0DE, 16).EndCell()
 	libs := cell.NewDict(256)
-	if err := libs.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreBoolBit(true).EndCell()); err != nil {
+	if err := libs.Set(
+		cell.BeginCell().MustStoreSlice(library.Hash(), 256).EndCell(),
+		cell.BeginCell().MustStoreBoolBit(true).MustStoreRef(library).EndCell(),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if err := libs.SetIntKey(big.NewInt(2), cell.BeginCell().MustStoreBoolBit(false).EndCell()); err != nil {
+	wrongKey := append([]byte(nil), library.Hash()...)
+	wrongKey[0] ^= 0x80
+	if err := libs.Set(
+		cell.BeginCell().MustStoreSlice(wrongKey, 256).EndCell(),
+		cell.BeginCell().MustStoreBoolBit(true).MustStoreRef(library).EndCell(),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if got := transactionPublicLibrariesCount(libs); got != 1 {
+	if got := transactionTestPublicLibrariesCount(t, libs); got != 1 {
 		t.Fatalf("public libraries count = %d, want 1", got)
 	}
 	malformed := cell.NewDict(256)
 	if err := malformed.SetIntKey(big.NewInt(1), cell.BeginCell().EndCell()); err != nil {
 		t.Fatal(err)
 	}
-	if got := transactionPublicLibrariesCount(malformed); got != 0 {
+	if got := transactionTestPublicLibrariesCount(t, malformed); got != 0 {
 		t.Fatalf("malformed public libraries count = %d, want 0", got)
+	}
+}
+
+func transactionTestPublicLibrariesCount(t testing.TB, libs *cell.Dictionary) uint64 {
+	t.Helper()
+
+	count, err := transactionPublicLibrariesCountChecked(libs)
+	if err != nil {
+		t.Fatalf("count public libraries: %v", err)
+	}
+	return count
+}
+
+func TestTransactionActionFineWrapsUint64(t *testing.T) {
+	const (
+		finePerCell  = uint64(1 << 33)
+		maxFineCells = uint64(1 << 31)
+	)
+	prices := &tlb.ConfigMsgForwardPrices{CellPrice: finePerCell << 18}
+	available := new(big.Int).SetUint64(15_000_000_000)
+
+	maxCells, limited := transactionActionFineCellLimitWithPrices(prices, maxFineCells, available)
+	if maxCells != maxFineCells || limited {
+		t.Fatalf("wrapped fine cell limit = %d/%t, want %d/false", maxCells, limited, maxFineCells)
+	}
+
+	pricesCell, err := tlb.ToCell(prices)
+	if err != nil {
+		t.Fatalf("failed to build forward prices: %v", err)
+	}
+	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamMsgForwardPricesBasechain: pricesCell,
+		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(
+			t,
+			1<<21,
+			uint32(maxFineCells),
+			1<<16,
+			1<<16,
+			1<<16,
+		),
+	})
+	usage := transactionUsage{cells: 2}
+	wantFine := new(big.Int).SetUint64(2 * finePerCell)
+	if got := transactionComputeActionFineForUsage(cfg, tonopsTestAddr, tonopsTestAddr, usage, available); got.Cmp(wantFine) != 0 {
+		t.Fatalf("action fine = %s, want wrapped %s", got, wantFine)
+	}
+
+	fine, maxCells, limited := transactionComputeSendActionFineForUsage(
+		cfg,
+		tonopsTestAddr,
+		tonopsTestAddr,
+		usage,
+		available,
+		nil,
+		big.NewInt(1),
+		big.NewInt(0),
+		big.NewInt(0),
+		1,
+	)
+	if fine.Cmp(wantFine) != 0 || maxCells != maxFineCells || limited {
+		t.Fatalf("send action fine = %s/%d/%t, want raw %s/%d/false", fine, maxCells, limited, wantFine, maxFineCells)
 	}
 }
 

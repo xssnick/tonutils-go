@@ -33,13 +33,6 @@ func transactionVersionCrossEmulatorVersions(t *testing.T) []uint32 {
 	return out
 }
 
-func transactionV15LibraryReferenceSkip(version uint32) string {
-	if version >= 15 {
-		return "bundled reference emulator predates upstream transaction v15 library action restrictions"
-	}
-	return ""
-}
-
 func TestTVMCrossEmulatorTransactionVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_TRANSACTION_VERSION_AUDIT_SHARDS", "")
 	t.Setenv("TVM_TRANSACTION_VERSION_AUDIT_SHARD", "")
@@ -759,10 +752,6 @@ func assertTransactionChangeLibraryActionsVersionParity(t *testing.T, version ui
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
-	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
-		t.Skip(reason)
-	}
-
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)
@@ -864,10 +853,6 @@ func assertTransactionBuildProofLibrariesVersionParity(t *testing.T, version uin
 	if !bytes.Equal(testResultAccountState(goRes).StateInit.Data.Hash(), newData.Hash()) {
 		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", testResultAccountState(goRes).StateInit.Data.Dump(), newData.Dump())
 	}
-	if version >= 9 {
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
-	}
-
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRootAndOptions(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot, referenceTransactionOptions{
 		libs: libs,
 	})
@@ -945,10 +930,6 @@ func assertTransactionBuildProofLibrariesGlobalVersionOverrideParity(t *testing.
 	if !bytes.Equal(testResultAccountState(goRes).StateInit.Data.Hash(), newData.Hash()) {
 		t.Fatalf("go data mismatch after library execution:\ngo=%s\nwant=%s", testResultAccountState(goRes).StateInit.Data.Dump(), newData.Dump())
 	}
-	if version >= 9 {
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
-	}
-
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRootAndOptions(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, refConfigRoot, referenceTransactionOptions{
 		libs: libs,
 	})
@@ -3349,6 +3330,24 @@ func TestTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion(t *testing.T)
 			b.MustStoreBigCoins(big.NewInt(0))
 		})
 	}
+	buildOutMsgWithSource := func(src *address.Address, extraFlags func(*cell.Builder)) *cell.Cell {
+		return cell.BeginCell().
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(true).
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(false).
+			MustStoreAddr(src).
+			MustStoreAddr(address.NewAddress(0, 0, make([]byte, 32))).
+			MustStoreBigCoins(big.NewInt(1_000_000_000)).
+			MustStoreBoolBit(false).
+			MustStoreBuilder(transactionTestBuilder(extraFlags)).
+			MustStoreBigCoins(big.NewInt(0)).
+			MustStoreUInt(0, 64).
+			MustStoreUInt(0, 32).
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(false).
+			EndCell()
+	}
 
 	for _, tc := range []struct {
 		name   string
@@ -3388,6 +3387,21 @@ func TestTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion(t *testing.T)
 					return transactionActionPhaseExpectation{success: true, valid: true, skippedActions: 1}
 				}
 				return transactionActionPhaseExpectation{success: true, valid: true, messagesCreated: 1}
+			},
+		},
+		{
+			name: "forbidden_flags_precede_invalid_source",
+			outMsg: buildOutMsgWithSource(
+				address.NewAddress(0, 0, bytes.Repeat([]byte{0x22}, 32)),
+				func(b *cell.Builder) {
+					b.MustStoreBigCoins(big.NewInt(4))
+				},
+			),
+			want: func(version uint32) transactionActionPhaseExpectation {
+				if version >= 12 {
+					return transactionActionPhaseExpectation{valid: true, resultCode: 45}
+				}
+				return transactionActionPhaseExpectation{valid: true, resultCode: 35}
 			},
 		},
 		{
@@ -5073,18 +5087,20 @@ func FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion(f *test
 	}
 
 	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), false, uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version), uint8(0), uint8(0))
-		f.Add(uint8(version), true, uint16(0xD000+version), uint16(0xE000+version), uint16(0xF000+version), uint8(17), uint8(23))
+		f.Add(uint8(version), false, false, uint16(0xA000+version), uint16(0xB000+version), uint16(0xC000+version), uint8(0), uint8(0))
+		f.Add(uint8(version), false, true, uint16(0x9000+version), uint16(0x8000+version), uint16(0x7000+version), uint8(11), uint8(13))
+		f.Add(uint8(version), true, false, uint16(0xD000+version), uint16(0xE000+version), uint16(0xF000+version), uint8(17), uint8(23))
+		f.Add(uint8(version), true, true, uint16(0x6000+version), uint16(0x5000+version), uint16(0x4000+version), uint8(29), uint8(31))
 	}
-	f.Add(uint8(255), true, uint16(0), uint16(0xffff), uint16(0x1234), uint8(255), uint8(255))
+	f.Add(uint8(255), true, true, uint16(0), uint16(0xffff), uint16(0x1234), uint8(255), uint8(255))
 
-	f.Fuzz(func(t *testing.T, rawVersion uint8, mismatch bool, codeTag, dataTag, bodyTag uint16, rawBalance, rawStoragePrice uint8) {
+	f.Fuzz(func(t *testing.T, rawVersion uint8, mismatch, withStateInit bool, codeTag, dataTag, bodyTag uint16, rawBalance, rawStoragePrice uint8) {
 		version := uint32(tvmFuzzGlobalVersionByte(rawVersion))
-		assertTransactionFrozenHashEqualsAddressVersionParity(t, version, mismatch, codeTag, dataTag, bodyTag, rawBalance, rawStoragePrice)
+		assertTransactionFrozenHashEqualsAddressVersionParity(t, version, mismatch, withStateInit, codeTag, dataTag, bodyTag, rawBalance, rawStoragePrice)
 	})
 }
 
-func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version uint32, mismatch bool, codeTag, dataTag, bodyTag uint16, rawBalance, rawStoragePrice uint8) {
+func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version uint32, mismatch, withStateInit bool, codeTag, dataTag, bodyTag uint16, rawBalance, rawStoragePrice uint8) {
 	t.Helper()
 
 	baseConfigRoot := mustReferenceTransactionConfigRoot(t)
@@ -5117,12 +5133,17 @@ func assertTransactionFrozenHashEqualsAddressVersionParity(t *testing.T, version
 
 	balance := uint64(rawBalance % 50)
 	storagePrice := uint64(rawStoragePrice%200) + 100
+	var inboundStateInit *tlb.StateInit
+	if withStateInit {
+		inboundStateInit = stateInit
+	}
 	msg := mustTransactionMsgCell(t, &tlb.InternalMessage{
 		IHRDisabled: true,
 		Bounce:      false,
 		SrcAddr:     internalEmulationSrcAddr,
 		DstAddr:     addr,
 		Amount:      tlb.FromNanoTONU(0),
+		StateInit:   inboundStateInit,
 		Body:        cell.BeginCell().MustStoreUInt(uint64(bodyTag), 16).EndCell(),
 	})
 	configRoot := referenceTransactionConfigRootWithGlobalVersion(t, baseConfigRoot, version)
@@ -5189,8 +5210,9 @@ func TestTVMCrossEmulatorTransactionFrozenExternalStateHashGlobalVersion(t *test
 	for _, version := range transactionVersionCrossEmulatorVersions(t) {
 		version := version
 		t.Run("global_v"+big.NewInt(int64(version)).String(), func(t *testing.T) {
-			assertTransactionFrozenExternalStateHashVersionParity(t, version, false, 0xA800, 0xB800, 0xC800)
-			assertTransactionFrozenExternalStateHashVersionParity(t, version, true, 0xD800, 0xE800, 0xF800)
+			assertTransactionFrozenExternalStateHashVersionParity(t, version, 0, false, 0xA800, 0xB800, 0xC800)
+			assertTransactionFrozenExternalStateHashVersionParity(t, version, 0, true, 0xD800, 0xE800, 0xF800)
+			assertTransactionFrozenExternalStateHashVersionParity(t, version, 6, false, 0x1800, 0x2800, 0x3800)
 		})
 	}
 }
@@ -5201,18 +5223,21 @@ func FuzzTVMCrossEmulatorTransactionFrozenExternalStateHashGlobalVersion(f *test
 	}
 
 	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), false, uint16(0xA800+version), uint16(0xB800+version), uint16(0xC800+version))
-		f.Add(uint8(version), true, uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
+		f.Add(uint8(version), uint8(0), false, uint16(0xA800+version), uint16(0xB800+version), uint16(0xC800+version))
+		f.Add(uint8(version), uint8(0), true, uint16(0xD800+version), uint16(0xE800+version), uint16(0xF800+version))
+		f.Add(uint8(version), uint8(6), false, uint16(0x1800+version), uint16(0x2800+version), uint16(0x3800+version))
+		f.Add(uint8(version), uint8(31), false, uint16(0x4800+version), uint16(0x5800+version), uint16(0x6800+version))
 	}
-	f.Add(uint8(255), false, uint16(0), uint16(0xffff), uint16(0x1234))
+	f.Add(uint8(255), uint8(31), false, uint16(0), uint16(0xffff), uint16(0x1234))
 
-	f.Fuzz(func(t *testing.T, rawVersion uint8, hashMismatch bool, codeTag, dataTag, bodyTag uint16) {
+	f.Fuzz(func(t *testing.T, rawVersion, rawDepth uint8, hashMismatch bool, codeTag, dataTag, bodyTag uint16) {
 		version := uint32(tvmFuzzGlobalVersionByte(rawVersion))
-		assertTransactionFrozenExternalStateHashVersionParity(t, version, hashMismatch, codeTag, dataTag, bodyTag)
+		depth := uint64(rawDepth % 32)
+		assertTransactionFrozenExternalStateHashVersionParity(t, version, depth, hashMismatch, codeTag, dataTag, bodyTag)
 	})
 }
 
-func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version uint32, hashMismatch bool, codeTag, dataTag, bodyTag uint16) {
+func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version uint32, depth uint64, hashMismatch bool, codeTag, dataTag, bodyTag uint16) {
 	t.Helper()
 
 	baseConfigRoot := mustReferenceTransactionConfigRoot(t)
@@ -5227,6 +5252,9 @@ func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version
 	stateInit := &tlb.StateInit{
 		Code: code,
 		Data: origData,
+	}
+	if depth != 0 {
+		stateInit.Depth = &depth
 	}
 	stateCell, err := tlb.ToCell(stateInit)
 	if err != nil {
@@ -5266,7 +5294,7 @@ func assertTransactionFrozenExternalStateHashVersionParity(t *testing.T, version
 	})
 	refRes, refErr := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 
-	wantRejected := hashMismatch || version < 8
+	wantRejected := hashMismatch || version < 8 || (version < 16 && depth != 0)
 	if wantRejected {
 		if goErr != nil {
 			t.Fatalf("go rejected external state init with error: %v", goErr)
@@ -6886,10 +6914,6 @@ func assertTransactionMasterchainStateLimitVersionParity(t *testing.T, version u
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
-	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
-		t.Skip(reason)
-	}
-
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)
@@ -7002,10 +7026,6 @@ func assertTransactionMasterchainPublicLibraryLimitVersionParity(t *testing.T, v
 	}
 
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, want)
-	if reason := transactionV15LibraryReferenceSkip(version); reason != "" {
-		t.Skip(reason)
-	}
-
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
 	if err != nil {
 		t.Fatalf("reference transaction emulation failed: %v", err)

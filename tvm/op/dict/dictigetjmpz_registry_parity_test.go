@@ -8,7 +8,7 @@ import (
 
 func TestDICTIGETJMPZHasSingleCanonicalRegistration(t *testing.T) {
 	var names []string
-	for _, getter := range vm.List {
+	for _, getter := range vm.AllOps() {
 		op := getter()
 		for _, prefix := range op.GetPrefixes() {
 			if prefix.BitsLeft() != 16 {

@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -161,17 +160,17 @@ func TestAdvancedMetaStackTypeRangeAndDeserializeEdges(t *testing.T) {
 
 	for _, tt := range []struct {
 		name   string
-		op     *helpers.AdvancedOP
+		op     vm.OP
 		prefix uint64
 	}{
 		{name: "CHASHI", op: CHASHI(3), prefix: 0xD768 >> 2},
 		{name: "CDEPTHI", op: CDEPTHI(3), prefix: 0xD76C >> 2},
 	} {
 		t.Run(tt.name+"StaticMetadata", func(t *testing.T) {
-			if got := tt.op.MinGlobalVersion(); got != 6 {
+			if got := cellSliceMinGlobalVersion(t, tt.op); got != 6 {
 				t.Fatalf("%s min version = %d, want 6", tt.name, got)
 			}
-			if got := tt.op.InstructionBits(); got != 16 {
+			if got := cellSliceInstructionBits(t, tt.op); got != 16 {
 				t.Fatalf("%s instruction bits = %d, want 16", tt.name, got)
 			}
 			if err := tt.op.Deserialize(cell.BeginCell().MustStoreUInt(tt.prefix, 14).EndCell().MustBeginParse()); err == nil {

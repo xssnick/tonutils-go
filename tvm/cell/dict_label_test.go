@@ -218,3 +218,36 @@ func TestMatchLabelPrefixConsumesMismatchBit(t *testing.T) {
 		})
 	}
 }
+
+func TestMatchLabelPrefixRejectsTruncatedExplicitLabelBeforeShortKeyMiss(t *testing.T) {
+	tests := []struct {
+		name    string
+		encoded uint64
+		bits    uint
+		maxLen  uint
+	}{
+		{
+			name:    "short",
+			encoded: 0b010, // hml_short with length 1 and no label payload
+			bits:    3,
+			maxLen:  1,
+		},
+		{
+			name:    "long",
+			encoded: 0b10101, // hml_long with length 5 and no label payload
+			bits:    5,
+			maxLen:  5,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			loader := BeginCell().MustStoreUInt(tc.encoded, tc.bits).EndCell().MustBeginParse()
+			key := BeginCell().EndCell().MustBeginParse()
+
+			if _, _, err := matchLabelPrefix(tc.maxLen, loader, key); !IsNotEnoughDataError(err) {
+				t.Fatalf("truncated label error = %v, want NotEnoughDataError", err)
+			}
+		})
+	}
+}

@@ -3,6 +3,7 @@ package cellslice
 import (
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
@@ -17,17 +18,21 @@ func TestDynamicLoadFamiliesHaveSingleRegisteredHandler(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var names []string
-			for _, getter := range vm.List {
-				op := getter()
-				for _, prefix := range op.GetPrefixes() {
+			collect := func(prefixes []*cell.Slice, name string) {
+				for _, prefix := range prefixes {
 					if prefix.BitsLeft() != tt.bits {
 						continue
 					}
 					value, err := prefix.PreloadUInt(tt.bits)
 					if err == nil && value == tt.value {
-						names = append(names, op.SerializeText())
+						names = append(names, name)
 					}
 				}
+			}
+
+			for _, getter := range vm.AllOps() {
+				op := getter()
+				collect(op.GetPrefixes(), op.SerializeText())
 			}
 
 			if len(names) != 1 {

@@ -318,13 +318,11 @@ func (a *ADNLWrapper) handleCustomMessage(peer BroadcastPeer, msg *adnl.MessageC
 
 	switch t := msg.Data.(type) {
 	case FECReceived:
-		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash}) {
-			return nil
-		}
+		a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash})
+		return nil
 	case FECCompleted:
-		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash, Completed: true}) {
-			return nil
-		}
+		a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash, Completed: true})
+		return nil
 	}
 
 	a.mx.RLock()

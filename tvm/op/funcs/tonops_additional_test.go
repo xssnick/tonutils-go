@@ -15,6 +15,7 @@ import (
 	localec "github.com/xssnick/tonutils-go/tvm/internal/secp256k1"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
+	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func mustConfigRoot(t *testing.T, idx uint64, value *cell.Cell) *cell.Cell {
@@ -62,6 +63,61 @@ func mustSetFuncParam(t *testing.T, st *vm.State, idx int, val any) {
 	if err = st.SetC7(c7); err != nil {
 		t.Fatalf("failed to apply c7 update: %v", err)
 	}
+}
+
+func TestTonParamTupleHelpersRejectTypedNullReferences(t *testing.T) {
+	assertTypeCheck := func(t *testing.T, err error) {
+		t.Helper()
+		if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeTypeCheck {
+			t.Fatalf("error = %v (code %d, %t), want type check", err, code, ok)
+		}
+	}
+
+	tests := []struct {
+		name  string
+		idx   int
+		check func(*vm.State) error
+	}{
+		{
+			name: "previous blocks",
+			idx:  paramIdxPrevBlocksInfo,
+			check: func(state *vm.State) error {
+				_, err := getPrevBlocksTuple(state)
+				return err
+			},
+		},
+		{
+			name: "inbound message params",
+			idx:  paramIdxInMsgParams,
+			check: func(state *vm.State) error {
+				_, err := getInMsgParamsTuple(state)
+				return err
+			},
+		},
+		{
+			name: "extra balance",
+			idx:  7,
+			check: func(state *vm.State) error {
+				if err := state.Stack.PushSmallInt(0); err != nil {
+					return err
+				}
+				return GETEXTRABALANCE().Interpret(state)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			state := newFuncTestState(t, map[int]any{test.idx: tuple.Tuple{}})
+			assertTypeCheck(t, test.check(state))
+		})
+	}
+
+	t.Run("random seed params", func(t *testing.T) {
+		state := vm.NewExecutionState(vm.MaxSupportedGlobalVersion, vm.NewGas(), nil,
+			tuple.NewTupleValue(tuple.Tuple{}), vm.NewStack())
+		assertTypeCheck(t, setRandSeed(state, big.NewInt(0)))
+	})
 }
 
 func TestTonParamAliasesAndGlobals(t *testing.T) {
@@ -990,7 +1046,7 @@ func TestTonActionAndSendMsgOps(t *testing.T) {
 		}
 
 		cfg := tuple.NewTupleSized(7)
-		if err := cfg.Set(6, cell.BeginCell().MustStoreUInt(0x01, 8).MustStoreUInt(0, 32).MustStoreUInt(123, 32).ToSlice()); err != nil {
+		if err := cfg.Set(6, sizeLimitsV1Slice(0, 123)); err != nil {
 			t.Fatalf("failed to set size-limits config: %v", err)
 		}
 		limitState := newFuncTestState(t, map[int]any{paramIdxUnpackedConfig: cfg})

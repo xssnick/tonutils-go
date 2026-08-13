@@ -43,7 +43,7 @@ func composeCont(mask uint8, name string, prefix helpers.BitPrefix) *helpers.Sim
 			if mask&2 != 0 {
 				defineSavedContinuation(&data.Save, 1, val)
 			}
-			return state.Stack.PushContinuation(cont)
+			return state.Stack.PushOwnedContinuation(cont)
 		},
 		Name:      name,
 		BitPrefix: prefix,
@@ -120,7 +120,7 @@ func THENRET() *helpers.SimpleOP {
 			}
 			cont = vm.ForceControlData(cont)
 			defineSavedContinuation(&cont.GetControlData().Save, 0, state.Reg.C[0])
-			return state.Stack.PushContinuation(cont)
+			return state.Stack.PushOwnedContinuation(cont)
 		},
 		Name:      "THENRET",
 		BitPrefix: helpers.BytesPrefix(0xED, 0xF6),
@@ -136,7 +136,7 @@ func THENRETALT() *helpers.SimpleOP {
 			}
 			cont = vm.ForceControlData(cont)
 			defineSavedContinuation(&cont.GetControlData().Save, 0, state.Reg.C[1])
-			return state.Stack.PushContinuation(cont)
+			return state.Stack.PushOwnedContinuation(cont)
 		},
 		Name:      "THENRETALT",
 		BitPrefix: helpers.BytesPrefix(0xED, 0xF7),

@@ -65,7 +65,7 @@ func (c CurrencyCollection) Equals(other CurrencyCollection) bool {
 	if left == nil {
 		return true
 	}
-	return left.HashKey(0) == right.HashKey(0)
+	return left.HashKeyAt(0) == right.HashKeyAt(0)
 }
 
 // GreaterOrEqual reports whether every currency in c covers other.

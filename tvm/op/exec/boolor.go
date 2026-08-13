@@ -27,7 +27,7 @@ func BOOLOR() (op *helpers.SimpleOP) {
 
 			cont = vm.ForceControlData(cont)
 			cont.GetControlData().Save.Define(1, cloneContinuation(val))
-			return state.Stack.PushContinuation(cont)
+			return state.Stack.PushOwnedContinuation(cont)
 		},
 		Name:      "BOOLOR",
 		BitPrefix: helpers.BytesPrefix(0xED, 0xF1),

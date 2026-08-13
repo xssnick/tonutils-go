@@ -1102,17 +1102,9 @@ func FuzzTVMVersionedSendMsgSizeLimitConfigBoundary(f *testing.F) {
 		var limitSlice *cell.Slice
 		switch form {
 		case 1:
-			limitSlice = cell.BeginCell().
-				MustStoreUInt(0x01, 8).
-				MustStoreUInt(uint64(rawMaxBits), 32).
-				MustStoreUInt(wantMaxCells, 32).
-				ToSlice()
+			limitSlice = sizeLimitsV1Slice(rawMaxBits, uint32(wantMaxCells))
 		case 2:
-			limitSlice = cell.BeginCell().
-				MustStoreUInt(0x02, 8).
-				MustStoreUInt(uint64(rawMaxBits), 32).
-				MustStoreUInt(wantMaxCells, 32).
-				ToSlice()
+			limitSlice = sizeLimitsV2Slice(rawMaxBits, uint32(wantMaxCells))
 		case 3:
 			limitSlice = cell.BeginCell().MustStoreUInt(0x03, 8).ToSlice()
 		case 4:
@@ -1160,7 +1152,7 @@ func FuzzTVMVersionedSendMsgPricesSourceBoundary(f *testing.F) {
 	f.Add(int64(5), true, uint8(2), uint64(14), uint64(96))
 	f.Add(int64(6), true, uint8(2), uint64(14), uint64(96))
 	for version := int64(0); version <= int64(vm.MaxSupportedGlobalVersion); version++ {
-		for sourceForm := uint8(0); sourceForm < 3; sourceForm++ {
+		for sourceForm := uint8(0); sourceForm < 4; sourceForm++ {
 			f.Add(version, false, sourceForm, uint64(version+1), uint64((version+1)*10))
 			f.Add(version, true, sourceForm, uint64(version+2), uint64((version+2)*10))
 		}
@@ -1168,7 +1160,9 @@ func FuzzTVMVersionedSendMsgPricesSourceBoundary(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, rawVersion int64, masterchain bool, rawSourceForm uint8, rawRootLump, rawUnpackedLump uint64) {
 		version := fuzzFuncsVersion(rawVersion)
-		sourceForm := rawSourceForm % 3
+		// 0: both sources present; 1: root entry missing; 2: unpacked
+		// entry missing; 3: legacy config root has a non-cell stack type.
+		sourceForm := rawSourceForm % 4
 		rootLump := rawRootLump%1_000_000 + 1
 		unpackedLump := rawUnpackedLump%1_000_000 + 1
 		if rootLump == unpackedLump {
@@ -1193,22 +1187,29 @@ func FuzzTVMVersionedSendMsgPricesSourceBoundary(f *testing.F) {
 			}
 		}
 
+		var root any = makeConfigRootRefDict(t, rootEntries)
+		if sourceForm == 3 {
+			root = int64(42)
+		}
 		st := newFuncTestState(t, map[int]any{
-			9:                      makeConfigRootRefDict(t, rootEntries),
+			9:                      root,
 			paramIdxUnpackedConfig: unpacked,
 		})
 		st.GlobalVersion = version
 
 		prices, err := getSendMsgPrices(st, masterchain)
 		switch {
-		case version < 6 && sourceForm == 1:
-			if err == nil {
-				t.Fatalf("version=%d sourceForm=%d got root prices %+v, want missing-root error", version, sourceForm, prices)
+		case version < 6 && (sourceForm == 1 || sourceForm == 3):
+			if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeUnknown {
+				t.Fatalf("version=%d sourceForm=%d root prices err=%v, want unknown", version, sourceForm, err)
 			}
 			return
 		case version >= 6 && sourceForm == 2:
-			if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeTypeCheck {
-				t.Fatalf("version=%d sourceForm=%d unpacked missing err=%v, want type check", version, sourceForm, err)
+			// SENDMSG maps a null/non-slice unpacked price slot to its
+			// opcode-specific "invalid prices config" unknown error. The fee
+			// opcodes deliberately retain type-check for the same slot shape.
+			if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeUnknown {
+				t.Fatalf("version=%d sourceForm=%d unpacked missing err=%v, want unknown", version, sourceForm, err)
 			}
 			return
 		}

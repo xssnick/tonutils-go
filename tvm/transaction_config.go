@@ -7,12 +7,16 @@ import (
 	"sort"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/fee"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-var errConfigRootRequired = errors.New("config root is required")
+var (
+	errConfigRootRequired                = errors.New("config root is required")
+	errTransactionNegativeStoragePayment = errors.New("negative storage payment")
+)
 
 type preparedAddr256 [32]byte
 
@@ -156,7 +160,9 @@ func prepareBlockchainConfigParams(bc tlb.BlockchainConfig, globalVersion tlb.Gl
 		return nil, err
 	}
 	out.prepareGlobalID(bc)
-	out.prepareSpecialAccounts(bc)
+	if err = out.prepareSpecialAccounts(bc); err != nil {
+		return nil, err
+	}
 	out.prepareBlackhole(bc)
 	if err = out.prepareSuspended(bc); err != nil {
 		return nil, err
@@ -284,27 +290,34 @@ func (c *PreparedBlockchainConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 	c.hasGlobalID = true
 }
 
-func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) error {
 	c.specialAccounts = map[preparedAddr256]struct{}{}
 	if configAddr, err := bc.GetConfigAddress(); err == nil && len(configAddr) == 32 {
 		c.specialAccounts[preparedAddr256(configAddr)] = struct{}{}
 	}
 
 	fundamental, err := bc.GetFundamentalSmartContractAddresses()
-	if err != nil || fundamental.Addresses == nil {
-		return
-	}
-	items, err := fundamental.Addresses.LoadAll(true)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to load fundamental smart contracts config param: %w", err)
 	}
-	for _, item := range items {
+	if fundamental.Addresses == nil || fundamental.Addresses.GetKeySize() != 256 {
+		return errors.New("invalid fundamental smart contracts dictionary")
+	}
+	// The config root commonly comes from lazy CellDB state. Skipping pruned
+	// branches here silently turns fundamental contracts into ordinary accounts.
+	items, err := fundamental.Addresses.LoadAll()
+	if err != nil {
+		return fmt.Errorf("failed to load fundamental smart contracts dictionary: %w", err)
+	}
+	for i, item := range items {
 		addr, err := item.Key.LoadSlice(256)
-		if err != nil || len(addr) != 32 {
-			continue
+		if err != nil || len(addr) != 32 || item.Key.BitsLeft() != 0 ||
+			item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+			return fmt.Errorf("invalid fundamental smart contract entry %d", i)
 		}
 		c.specialAccounts[preparedAddr256(addr)] = struct{}{}
 	}
+	return nil
 }
 
 func (c *PreparedBlockchainConfig) prepareBlackhole(bc tlb.BlockchainConfig) {
@@ -330,7 +343,7 @@ func (c *PreparedBlockchainConfig) prepareSuspended(bc tlb.BlockchainConfig) err
 		return nil
 	}
 
-	items, err := list.Addresses.LoadAll(true)
+	items, err := list.Addresses.LoadAll()
 	if err != nil {
 		return fmt.Errorf("failed to load suspended address list: %w", err)
 	}
@@ -363,7 +376,7 @@ func (c *PreparedBlockchainConfig) preparePrecompiled(bc tlb.BlockchainConfig) e
 		return nil
 	}
 
-	items, err := precompiled.List.LoadAll(true)
+	items, err := precompiled.List.LoadAll()
 	if err != nil {
 		return fmt.Errorf("failed to load precompiled contracts list: %w", err)
 	}
@@ -400,7 +413,10 @@ func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig, st
 	c.hasWorkchains = true
 	c.workchains = map[int32]*tlb.WorkchainDescr{}
 
-	items, err := workchains.Workchains.LoadAll(true)
+	// A production config commonly comes from a lazy CellDB tree. Its unresolved
+	// refs are pruned boundaries too, so skip-pruned traversal would silently
+	// turn a present workchain dictionary into a partial or empty map.
+	items, err := workchains.Workchains.LoadAll()
 	if err != nil {
 		if strict {
 			return fmt.Errorf("failed to load workchains config dict: %w", err)
@@ -505,13 +521,13 @@ func (c *PreparedBlockchainConfig) currentStoragePricesSlice(now uint32) *cell.S
 
 // computeStorageFee accrues the storage fee over [lastPaid, now) across all
 // active storage-price windows, mirroring tlb.BlockchainConfig.ComputeStorageFee.
-func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) *big.Int {
+func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) (*big.Int, error) {
 	if now <= lastPaid || lastPaid == 0 {
-		return big.NewInt(0)
+		return big.NewInt(0), nil
 	}
 	entries := c.storagePrices
 	if len(entries) == 0 || now <= entries[0].price.ValidSince {
-		return big.NewInt(0)
+		return big.NewInt(0), nil
 	}
 
 	i := len(entries)
@@ -527,7 +543,8 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 		upto = entries[0].price.ValidSince
 	}
 
-	total := big.NewInt(0)
+	var fixed fee.U128
+	var wide *big.Int // set once a window leaves the fixed-width range, see transactionStorageFeeRawU128
 	for ; i < len(entries) && upto < now; i++ {
 		validUntil := now
 		if i < len(entries)-1 && entries[i+1].price.ValidSince < validUntil {
@@ -537,25 +554,83 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 			continue
 		}
 
-		total.Add(total, transactionStorageFeeRaw(entries[i].price, masterchain, uint64(validUntil-upto), bits, cells))
+		delta := uint64(validUntil - upto)
 		upto = validUntil
+
+		if wide == nil {
+			part, fits := transactionStorageFeeRawU128(entries[i].price, masterchain, delta, bits, cells)
+			if fits {
+				// Non-negative operands cannot produce a negative window here,
+				// so only the wide path can trip the payment check.
+				if sum, fits := fixed.Add(part); fits {
+					fixed = sum
+					continue
+				}
+			}
+			wide = fixed.Big()
+		}
+
+		part := transactionStorageFeeRaw(entries[i].price, masterchain, delta, bits, cells)
+		if part.Sign() < 0 {
+			return nil, errTransactionNegativeStoragePayment
+		}
+		wide.Add(wide, part)
 	}
 
-	return transactionCeilShiftRight(total, 16)
+	if wide == nil {
+		return fixed.CeilShr(16).Big(), nil
+	}
+
+	return transactionCeilShiftRight(wide, 16), nil
+}
+
+func transactionStoragePricesFor(price tlb.ConfigStoragePrices, masterchain bool) (bitPrice, cellPrice uint64) {
+	if masterchain {
+		return price.MCBitPrice, price.MCCellPrice
+	}
+	return price.BitPrice, price.CellPrice
+}
+
+// transactionStorageFeeRawU128 is transactionStorageFeeRaw in fixed width. It
+// reports false whenever the signed reading below could differ from an unsigned
+// one, or the result leaves 128 bits, and the arbitrary-precision form runs.
+func transactionStorageFeeRawU128(price tlb.ConfigStoragePrices, masterchain bool, delta, bits, cells uint64) (fee.U128, bool) {
+	bitPrice, cellPrice := transactionStoragePricesFor(price, masterchain)
+
+	// mul_short takes a signed machine word, so an operand above MaxInt64 is a
+	// negative multiplicand there rather than a large positive one. The two
+	// readings coincide only while every operand keeps bit 63 clear.
+	if (cells|cellPrice|bits|bitPrice)>>63 != 0 {
+		return fee.U128{}, false
+	}
+
+	total, fits := fee.Mul64(cells, cellPrice).Add(fee.Mul64(bits, bitPrice))
+	if !fits {
+		return fee.U128{}, false
+	}
+
+	return total.Mul64(delta)
 }
 
 func transactionStorageFeeRaw(price tlb.ConfigStoragePrices, masterchain bool, delta, bits, cells uint64) *big.Int {
-	bitPrice := price.BitPrice
-	cellPrice := price.CellPrice
-	if masterchain {
-		bitPrice = price.MCBitPrice
-		cellPrice = price.MCCellPrice
-	}
+	bitPrice, cellPrice := transactionStoragePricesFor(price, masterchain)
 
-	total := new(big.Int).Mul(new(big.Int).SetUint64(cells), new(big.Int).SetUint64(cellPrice))
-	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(bits), new(big.Int).SetUint64(bitPrice)))
-	total.Mul(total, new(big.Int).SetUint64(delta))
-	return total
+	// BigInt256::mul_short takes a signed machine word. The transaction
+	// implementation passes the uint64 config fields directly, so values above
+	// MaxInt64 are interpreted as negative two's-complement integers.
+	total := new(big.Int).SetInt64(int64(cells))
+	var factor big.Int
+	factor.SetInt64(int64(cellPrice))
+	total.Mul(total, &factor)
+
+	var part big.Int
+	part.SetInt64(int64(bits))
+	factor.SetInt64(int64(bitPrice))
+	part.Mul(&part, &factor)
+	total.Add(total, &part)
+
+	factor.SetUint64(delta)
+	return total.Mul(total, &factor)
 }
 
 func transactionLoadGasPrices(blockchainCfg tlb.BlockchainConfig, masterchain bool) *tlb.ConfigGasLimitsPrices {

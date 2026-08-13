@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-type usageTreeConcurrentCase struct {
+type readSetConcurrentCase struct {
 	from *Cell
 	keys []uint64
 }
 
-func newUsageTreeConcurrentCase(tb testing.TB, entries int, seed int64) usageTreeConcurrentCase {
+func newReadSetConcurrentCase(tb testing.TB, entries int, seed int64) readSetConcurrentCase {
 	tb.Helper()
 
 	rnd := rand.New(rand.NewSource(seed))
@@ -36,13 +36,13 @@ func newUsageTreeConcurrentCase(tb testing.TB, entries int, seed int64) usageTre
 	if err != nil {
 		tb.Fatalf("failed to reload source dict: %v", err)
 	}
-	return usageTreeConcurrentCase{from: from, keys: keys}
+	return readSetConcurrentCase{from: from, keys: keys}
 }
 
-// usageTreeWalkLane reads a deterministic set of keys through the traced root,
+// readSetWalkLane reads a deterministic set of keys through the recording root,
 // mixing lane-private keys with keys shared by every lane.
-func usageTreeWalkLane(tb testing.TB, tracedRoot *Cell, keys []uint64, lane, lanes int) {
-	dict := tracedRoot.AsDict(64)
+func readSetWalkLane(tb testing.TB, recordingRoot *Cell, keys []uint64, lane, lanes int) {
+	dict := recordingRoot.AsDict(64)
 	for i := lane; i < len(keys); i += lanes * 2 {
 		if _, err := dict.LoadValue(merkleUpdateBenchKey(keys[i])); err != nil {
 			tb.Errorf("lane %d failed to load key %d: %v", lane, i, err)
@@ -58,8 +58,8 @@ func usageTreeWalkLane(tb testing.TB, tracedRoot *Cell, keys []uint64, lane, lan
 	}
 }
 
-func usageTreeApplyChanges(tb testing.TB, tracedRoot *Cell, keys []uint64) *Cell {
-	dict := tracedRoot.AsDict(64)
+func readSetApplyChanges(tb testing.TB, recordingRoot *Cell, keys []uint64) *Cell {
+	dict := recordingRoot.AsDict(64)
 	for i := 0; i < len(keys); i += 7 {
 		next := keys[i] ^ uint64(i+1)*0x9e3779b97f4a7c15
 		if err := dict.Set(merkleUpdateBenchKey(keys[i]), merkleUpdateBenchValue(next)); err != nil {
@@ -69,7 +69,7 @@ func usageTreeApplyChanges(tb testing.TB, tracedRoot *Cell, keys []uint64) *Cell
 	return dict.AsCell().WithoutTrace()
 }
 
-func usageTreeRunScenario(tb testing.TB, tc usageTreeConcurrentCase, lanes int, concurrent bool) (proofHash, updateHash Hash) {
+func readSetRunScenario(tb testing.TB, tc readSetConcurrentCase, lanes int, concurrent bool) (proofHash, updateHash Hash) {
 	tb.Helper()
 
 	builder := NewMerkleProofBuilder(tc.from)
@@ -79,31 +79,31 @@ func usageTreeRunScenario(tb testing.TB, tc usageTreeConcurrentCase, lanes int, 
 			wg.Add(1)
 			go func(lane int) {
 				defer wg.Done()
-				usageTreeWalkLane(tb, builder.Root(), tc.keys, lane, lanes)
+				readSetWalkLane(tb, builder.Root(), tc.keys, lane, lanes)
 			}(lane)
 		}
 		wg.Wait()
 	} else {
 		for lane := 0; lane < lanes; lane++ {
-			usageTreeWalkLane(tb, builder.Root(), tc.keys, lane, lanes)
+			readSetWalkLane(tb, builder.Root(), tc.keys, lane, lanes)
 		}
 	}
 	if tb.Failed() {
 		tb.FailNow()
 	}
 
-	to := usageTreeApplyChanges(tb, builder.Root(), tc.keys)
+	to := readSetApplyChanges(tb, builder.Root(), tc.keys)
 
 	proof, err := builder.CreateProof()
 	if err != nil {
 		tb.Fatalf("failed to build usage proof: %v", err)
 	}
-	update, err := builder.UsageTree().CreateMerkleUpdate(tc.from, to)
+	update, err := builder.ReadSet().CreateMerkleUpdate(to)
 	if err != nil {
 		tb.Fatalf("failed to build merkle update: %v", err)
 	}
 
-	applied, _, err := ApplyMerkleUpdate(tc.from, update)
+	applied, err := ApplyMerkleUpdate(tc.from, update)
 	if err != nil {
 		tb.Fatalf("failed to apply merkle update: %v", err)
 	}
@@ -113,13 +113,13 @@ func usageTreeRunScenario(tb testing.TB, tc usageTreeConcurrentCase, lanes int, 
 	return proof.HashKey(), update.HashKey()
 }
 
-func TestUsageTreeConcurrentWalkMatchesSequential(t *testing.T) {
-	tc := newUsageTreeConcurrentCase(t, 4096, 2026070701)
+func TestReadSetConcurrentWalkMatchesSequential(t *testing.T) {
+	tc := newReadSetConcurrentCase(t, 4096, 2026070701)
 
 	const lanes = 8
-	seqProof, seqUpdate := usageTreeRunScenario(t, tc, lanes, false)
+	seqProof, seqUpdate := readSetRunScenario(t, tc, lanes, false)
 	for round := 0; round < 3; round++ {
-		conProof, conUpdate := usageTreeRunScenario(t, tc, lanes, true)
+		conProof, conUpdate := readSetRunScenario(t, tc, lanes, true)
 		if conProof != seqProof {
 			t.Fatalf("round %d: concurrent usage proof differs from sequential: got=%x want=%x", round, conProof, seqProof)
 		}
@@ -129,12 +129,12 @@ func TestUsageTreeConcurrentWalkMatchesSequential(t *testing.T) {
 	}
 }
 
-func TestUsageTreeConcurrentDeepWalks(t *testing.T) {
-	tc := newUsageTreeConcurrentCase(t, 2048, 2026070702)
+func TestReadSetConcurrentDeepWalks(t *testing.T) {
+	tc := newReadSetConcurrentCase(t, 2048, 2026070702)
 
 	builder := NewMerkleProofBuilder(tc.from)
 
-	// All lanes walk the full tree: every CreateChild races on the same edges.
+	// All lanes walk the full tree: every recorded cell is raced on.
 	var walk func(c *Cell) error
 	walk = func(c *Cell) error {
 		sl, err := c.BeginParse()
@@ -195,8 +195,8 @@ func TestUsageTreeConcurrentDeepWalks(t *testing.T) {
 	}
 }
 
-func BenchmarkUsageTreeTracedWalk(b *testing.B) {
-	tc := newUsageTreeConcurrentCase(b, 4096, 2026070703)
+func BenchmarkReadSetRecordedWalk(b *testing.B) {
+	tc := newReadSetConcurrentCase(b, 4096, 2026070703)
 
 	for _, lanes := range []int{1, 8} {
 		b.Run(fmt.Sprintf("lanes_%d", lanes), func(b *testing.B) {
@@ -205,7 +205,7 @@ func BenchmarkUsageTreeTracedWalk(b *testing.B) {
 				builder := NewMerkleProofBuilder(tc.from)
 				if lanes == 1 {
 					for lane := 0; lane < 8; lane++ {
-						usageTreeWalkLane(b, builder.Root(), tc.keys, lane, 8)
+						readSetWalkLane(b, builder.Root(), tc.keys, lane, 8)
 					}
 					continue
 				}
@@ -214,7 +214,7 @@ func BenchmarkUsageTreeTracedWalk(b *testing.B) {
 					wg.Add(1)
 					go func(lane int) {
 						defer wg.Done()
-						usageTreeWalkLane(b, builder.Root(), tc.keys, lane, 8)
+						readSetWalkLane(b, builder.Root(), tc.keys, lane, 8)
 					}(lane)
 				}
 				wg.Wait()

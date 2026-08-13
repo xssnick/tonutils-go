@@ -196,6 +196,45 @@ func TestTransactionInboundExtraFlagsBoundaries(t *testing.T) {
 	}
 }
 
+func TestTransactionBuildNewBounceBodyTruncatesCounters(t *testing.T) {
+	in := &tlb.InternalMessage{
+		IHRFee: tlb.FromNanoTONU(1),
+		Body:   cell.BeginCell().EndCell(),
+	}
+	compute := &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			GasUsed:   1<<32 + 7,
+			Steps:     1<<32 + 9,
+			Committed: true,
+		},
+		Accepted: true,
+	}
+	body, err := transactionBuildBounceBody(in, transactionTestConfigWithGlobalVersion(t, 12), nil, compute, &tlb.ActionPhase{ResultCode: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sl := body.MustBeginParse()
+	if tag := sl.MustLoadUInt(32); tag != 0xfffffffe {
+		t.Fatalf("bounce tag = %#x, want new format", tag)
+	}
+	if phase := sl.MustLoadUInt(8); phase != 2 {
+		t.Fatalf("bounce phase = %d, want action phase", phase)
+	}
+	if exit := sl.MustLoadInt(32); exit != 37 {
+		t.Fatalf("bounce exit code = %d, want 37", exit)
+	}
+	if hasCompute := sl.MustLoadBoolBit(); !hasCompute {
+		t.Fatal("bounce compute details are absent")
+	}
+	if gas := sl.MustLoadUInt(32); gas != 7 {
+		t.Fatalf("bounce gas counter = %d, want low uint32", gas)
+	}
+	if steps := sl.MustLoadUInt(32); steps != 9 {
+		t.Fatalf("bounce step counter = %d, want low uint32", steps)
+	}
+}
+
 func transactionTestConfigWithGlobalVersionAndCapabilities(t *testing.T, version uint32, capabilities uint64) *PreparedBlockchainConfig {
 	t.Helper()
 

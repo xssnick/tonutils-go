@@ -30,6 +30,9 @@ type BOCSerializeOptions struct {
 	WithCRC32C    bool
 	WithIndex     bool
 	WithCacheBits bool
+	// WithTopHash writes hashes and depths for root cells. The reference
+	// carries the same mode but never reaches the code that would emit them,
+	// so a bag serialized with this flag differs from one it would produce.
 	WithTopHash   bool
 	WithIntHashes bool
 	// CellsCountHint pre-sizes serializer dedup structures for the expected
@@ -259,9 +262,6 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if cell == nil {
 		return 0, fmt.Errorf("cell is nil")
 	}
-	if cell.IsVirtualized() {
-		return 0, ErrVirtualizedCell
-	}
 	if cell.IsLazy() {
 		if pos, found := s.findImportedCell(cell); found {
 			return pos, nil
@@ -270,9 +270,6 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 		loaded, err := loadLazyPrunedRef(cell)
 		if err != nil {
 			return 0, err
-		}
-		if loaded.IsVirtualized() {
-			return 0, ErrVirtualizedCell
 		}
 		cell = loaded
 	}
@@ -284,6 +281,11 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if found {
 		s.cellList[int(pos)].shouldCache = true
 		return pos, nil
+	}
+	// the virtualization check comes after the lookup: a repeat of an already
+	// imported cell is served from the index regardless of how it was reached
+	if cell.IsVirtualized() {
+		return 0, ErrVirtualizedCell
 	}
 
 	refView := newCellRefView(cell)

@@ -2,8 +2,8 @@ package tvm
 
 import (
 	"errors"
-	"math/big"
 
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -52,11 +52,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 	if err != nil {
 		return nil, err
 	}
-	if isSpecial {
-		storageFee = transactionCoinsNano(runtimeAcc.storageInfo.DuePayment)
-	}
-
-	importFee := big.NewInt(0)
+	importFee := bigint.FromInt64(0)
 	if !isSpecial {
 		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg.msg, msg.cell)
 		if err != nil {
@@ -72,8 +68,9 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 		prepared.lastPaid = 0
 	}
 
-	startLT := transactionStartLT(runtimeAcc.storageLT, transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime), &msg.msg)
-	env := newTransactionExecEnv(block, opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT)
+	executionLT := transactionExecutionLogicalTime(runtimeAcc.prevTxLT, opts.LogicalTime, opts.LogicalTimeUint64)
+	startLT := transactionStartLT(runtimeAcc.storageLT, executionLT, &msg.msg)
+	env := newTransactionExecEnv(block, opts, runtimeAcc, &msg.msg, msg.cell, prepared, startLT, executionLT)
 	env.stopOnAccept = true
 
 	computeAcc := runtimeAcc

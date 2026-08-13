@@ -168,7 +168,7 @@ func TestLittleEndianOpVariants(t *testing.T) {
 		if got := loadDecoded.SerializeText(); got != "LDULE8Q" {
 			t.Fatalf("unexpected LE load text: %q", got)
 		}
-		if got := loadDecoded.InstructionBits(); got != 16 {
+		if got := cellSliceInstructionBits(t, loadDecoded); got != 16 {
 			t.Fatalf("unexpected LE load bits: %d", got)
 		}
 
@@ -179,7 +179,7 @@ func TestLittleEndianOpVariants(t *testing.T) {
 		if got := storeDecoded.SerializeText(); got != "STULE8" {
 			t.Fatalf("unexpected LE store text: %q", got)
 		}
-		if got := storeDecoded.InstructionBits(); got != 16 {
+		if got := cellSliceInstructionBits(t, storeDecoded); got != 16 {
 			t.Fatalf("unexpected LE store bits: %d", got)
 		}
 
@@ -306,7 +306,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 		if got := intDecoded.SerializeText(); got != "LDUQ 32" {
 			t.Fatalf("unexpected fixed int text: %q", got)
 		}
-		if got := intDecoded.InstructionBits(); got != 24 {
+		if got := cellSliceInstructionBits(t, intDecoded); got != 24 {
 			t.Fatalf("unexpected fixed int bits: %d", got)
 		}
 
@@ -317,7 +317,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 		if got := sliceDecoded.SerializeText(); got != "PLDSLICEQ 16" {
 			t.Fatalf("unexpected fixed slice text: %q", got)
 		}
-		if got := sliceDecoded.InstructionBits(); got != 24 {
+		if got := cellSliceInstructionBits(t, sliceDecoded); got != 24 {
 			t.Fatalf("unexpected fixed slice bits: %d", got)
 		}
 
@@ -325,7 +325,7 @@ func TestLoadFamilyVariants(t *testing.T) {
 		if err := plduzDecoded.Deserialize(PLDUZ(64).Serialize().EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("PLDUZ deserialize failed: %v", err)
 		}
-		if got := plduzDecoded.InstructionBits(); got != 16 {
+		if got := cellSliceInstructionBits(t, plduzDecoded); got != 16 {
 			t.Fatalf("unexpected PLDUZ bits: %d", got)
 		}
 

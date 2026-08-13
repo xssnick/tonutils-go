@@ -464,7 +464,7 @@ func TestBuilderStoreSliceFromPreservesSourceCursor(t *testing.T) {
 	}
 }
 
-func TestSliceRefParsingCombinedAndUsageTraces(t *testing.T) {
+func TestSliceRefParsingCombinedAndReadSetTraces(t *testing.T) {
 	loadsA, loadsB := 0, 0
 	childA := NewTrace(TraceHooks{OnLoad: func(*Cell) { loadsA++ }})
 	childB := NewTrace(TraceHooks{OnLoad: func(*Cell) { loadsB++ }})
@@ -482,24 +482,34 @@ func TestSliceRefParsingCombinedAndUsageTraces(t *testing.T) {
 		t.Fatalf("combined child trace was not notified: a=%d b=%d", loadsA, loadsB)
 	}
 
-	tree := NewCellUsageTree()
-	lazyRoot := cellWithLazyRefsFromCell(
+	lazySource := cellWithLazyRefsFromCell(
 		BeginCell().MustStoreRef(leaf).EndCell(),
 		func(Hash) (*Cell, error) { return leaf, nil },
-	).WithTrace(tree.RootTrace())
-	lazyLoaded, err := lazyRoot.MustBeginParse().LoadRef()
+	)
+	read := NewReadSet(lazySource)
+	lazyLoaded, err := read.Root().MustBeginParse().LoadRef()
 	if err != nil {
 		t.Fatal(err)
 	}
-	childNode := tree.GetChild(tree.RootNode(), 0)
-	if childNode == 0 || !tree.IsLoaded(childNode) {
-		t.Fatal("lazy child was not recorded in the usage tree")
+	recordedChild, ok := read.Contains(leaf.HashKey())
+	if !ok {
+		t.Fatal("lazy child was not recorded")
 	}
 	if lazyLoaded.cell != leaf || lazyLoaded.cell.Trace() != nil {
 		t.Fatal("lazy parse path cloned the loaded cell")
 	}
-	if node, ok := tree.NodeForCell(lazyLoaded.BaseCell()); !ok || node != childNode {
-		t.Fatalf("BaseCell lost usage node identity: got=%d want=%d ok=%v", node, childNode, ok)
+	// BaseCell hands back the parsed cell re-wrapped with the slice's trace, so the
+	// identity the node lookup checked is now two facts: the cell under the wrapper
+	// is the very one that was recorded, and the wrapper still records.
+	base := lazyLoaded.BaseCell()
+	if base.HashKey() != leaf.HashKey() {
+		t.Fatalf("BaseCell hash %x, want %x", base.Hash(), leaf.Hash())
+	}
+	if recordedChild != lazyLoaded.cell {
+		t.Fatal("the recorded child is not the cell the slice carries")
+	}
+	if base.Trace() == nil {
+		t.Fatal("BaseCell dropped the recording trace")
 	}
 }
 

@@ -3,7 +3,6 @@ package math
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -11,25 +10,25 @@ import (
 
 func init() {
 	vm.List = append(vm.List,
-		func() vm.OP { return FITS(0) },
-		func() vm.OP { return UFITS(0) },
 		func() vm.OP { return FITSX() },
 		func() vm.OP { return UFITSX() },
 		func() vm.OP { return BITSIZE() },
 		func() vm.OP { return UBITSIZE() },
-		func() vm.OP { return QFITS(0) },
-		func() vm.OP { return QUFITS(0) },
 		func() vm.OP { return QFITSX() },
 		func() vm.OP { return QUFITSX() },
 		func() vm.OP { return QBITSIZE() },
 		func() vm.OP { return QUBITSIZE() },
 	)
+	vm.ArgList = append(vm.ArgList, fitsOp, ufitsOp, qfitsOp, qufitsOp)
 }
 
-func fitTinyOp(name string, prefix helpers.BitPrefix, bits uint8, unsigned, quiet bool) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
+// fitTinyOp builds a FITS-style opcode: the encoded byte holds width-1, so the
+// checked width is 1..256.
+func fitTinyOp(name string, prefix helpers.BitPrefix, unsigned, quiet bool) *helpers.ArgOP {
+	return helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(prefix),
+		ArgBits:  8,
+		Action: func(state *vm.State, args uint64) error {
 			x, err := popIntOperandRead(state, quiet)
 			if err != nil {
 				return err
@@ -38,7 +37,7 @@ func fitTinyOp(name string, prefix helpers.BitPrefix, bits uint8, unsigned, quie
 				return pushNaNOrOverflow(state, quiet)
 			}
 
-			width := int(bits) + 1
+			width := bytePlusOneValue(args)
 			if unsigned {
 				if !unsignedFitsBits(x, width) {
 					x = nil
@@ -48,22 +47,10 @@ func fitTinyOp(name string, prefix helpers.BitPrefix, bits uint8, unsigned, quie
 			}
 			return pushMaybeInt(state, x, quiet)
 		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%s %d", name, int(bits)+1)
+		Name: func(args uint64) string {
+			return fmt.Sprintf("%s %d", name, bytePlusOneValue(args))
 		},
-		BitPrefix: helpers.BytesPrefix(prefix.Data...),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(bits), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			bits = uint8(v)
-			return nil
-		},
-	}
+	})
 }
 
 func fitStackOp(name string, prefix helpers.BitPrefix, unsigned, quiet bool) *helpers.SimpleOP {
@@ -126,12 +113,19 @@ func bitSizeOp(name string, prefix helpers.BitPrefix, signed, quiet bool) *helpe
 	}
 }
 
-func FITS(bits uint8) *helpers.AdvancedOP {
-	return fitTinyOp("FITS", helpers.BytesPrefix(0xB4), bits, false, false)
+var (
+	fitsOp   = fitTinyOp("FITS", helpers.BytesPrefix(0xB4), false, false)
+	ufitsOp  = fitTinyOp("UFITS", helpers.BytesPrefix(0xB5), true, false)
+	qfitsOp  = fitTinyOp("QFITS", helpers.BytesPrefix(0xB7, 0xB4), false, true)
+	qufitsOp = fitTinyOp("QUFITS", helpers.BytesPrefix(0xB7, 0xB5), true, true)
+)
+
+func FITS(bits uint8) vm.OP {
+	return vm.Bind(fitsOp, uint64(bits))
 }
 
-func UFITS(bits uint8) *helpers.AdvancedOP {
-	return fitTinyOp("UFITS", helpers.BytesPrefix(0xB5), bits, true, false)
+func UFITS(bits uint8) vm.OP {
+	return vm.Bind(ufitsOp, uint64(bits))
 }
 
 func FITSX() *helpers.SimpleOP {
@@ -150,12 +144,12 @@ func UBITSIZE() *helpers.SimpleOP {
 	return bitSizeOp("UBITSIZE", helpers.BytesPrefix(0xB6, 0x03), false, false)
 }
 
-func QFITS(bits uint8) *helpers.AdvancedOP {
-	return fitTinyOp("QFITS", helpers.BytesPrefix(0xB7, 0xB4), bits, false, true)
+func QFITS(bits uint8) vm.OP {
+	return vm.Bind(qfitsOp, uint64(bits))
 }
 
-func QUFITS(bits uint8) *helpers.AdvancedOP {
-	return fitTinyOp("QUFITS", helpers.BytesPrefix(0xB7, 0xB5), bits, true, true)
+func QUFITS(bits uint8) vm.OP {
+	return vm.Bind(qufitsOp, uint64(bits))
 }
 
 func QFITSX() *helpers.SimpleOP {

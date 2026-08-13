@@ -119,6 +119,32 @@ func TestTransactionCurrencyExtraDictRoundTripAndErrors(t *testing.T) {
 	if _, err = transactionAddExtraCurrencies(nil, malformed); err == nil {
 		t.Fatal("expected add malformed extra error")
 	}
+
+	absent := cell.NewDict(32)
+	loaded, err = transactionLoadExtraCurrencies(absent)
+	if err != nil || len(loaded) != 0 {
+		t.Fatalf("absent extra currency root = %v, %v; want empty, nil", loaded, err)
+	}
+
+	presentEmpty := cell.BeginCell().EndCell().AsDict(32)
+	if _, err = transactionLoadExtraCurrencies(presentEmpty); err == nil {
+		t.Fatal("expected present empty extra currency root error")
+	}
+
+	for _, malformedFork := range []struct {
+		name               string
+		extraBit, extraRef bool
+	}{
+		{name: "payload_bit", extraBit: true},
+		{name: "third_reference", extraRef: true},
+	} {
+		t.Run(malformedFork.name, func(t *testing.T) {
+			dict := transactionMalformedExtraCurrencyFork(t, malformedFork.extraBit, malformedFork.extraRef)
+			if _, err := transactionLoadExtraCurrencies(dict); err == nil {
+				t.Fatal("expected malformed extra currency fork error")
+			}
+		})
+	}
 }
 
 func TestTransactionCurrencyAddExtraCurrenciesAndMinBig(t *testing.T) {

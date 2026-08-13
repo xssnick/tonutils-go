@@ -3,70 +3,42 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return UNTUPLE(0) },
-		func() vm.OP { return UNPACKFIRST(0) },
-	)
+	vm.ArgList = append(vm.ArgList, untupleOp, unpackFirstOp)
 }
 
-// constant prefixes, computed once instead of on every decode
-var (
-	untuplePrefix     = helpers.UIntPrefix(0x6f2, 12)
-	unpackFirstPrefix = helpers.UIntPrefix(0x6f3, 12)
-)
+var untupleOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f2, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d UNTUPLE", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execUntuple(state, int(uint8(args)), true)
+	},
+})
 
-func UNTUPLE(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     untuplePrefix,
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d UNTUPLE", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execUntuple(state, int(n), true)
-		},
-	}
+var unpackFirstOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f3, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d UNPACKFIRST", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execUntuple(state, int(uint8(args)), false)
+	},
+})
+
+func UNTUPLE(n uint8) vm.OP {
+	return vm.Bind(untupleOp, uint64(n))
 }
 
-func UNPACKFIRST(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     unpackFirstPrefix,
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d UNPACKFIRST", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execUntuple(state, int(n), false)
-		},
-	}
+func UNPACKFIRST(n uint8) vm.OP {
+	return vm.Bind(unpackFirstOp, uint64(n))
 }
 
 func execUntuple(state *vm.State, count int, exact bool) error {

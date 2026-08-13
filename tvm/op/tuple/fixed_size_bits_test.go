@@ -9,7 +9,7 @@ import (
 func TestTupleAdvancedOpsInstructionBits(t *testing.T) {
 	tests := []struct {
 		name string
-		op   vm.GasPricedOp
+		op   vm.OP
 		bits int64
 	}{
 		{name: "TUPLE", op: TUPLE(2), bits: 16},
@@ -26,7 +26,11 @@ func TestTupleAdvancedOpsInstructionBits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.op.InstructionBits(); got != tt.bits {
+			gasPriced, ok := tt.op.(vm.GasPricedOp)
+			if !ok {
+				t.Fatalf("%T does not report instruction bits", tt.op)
+			}
+			if got := gasPriced.InstructionBits(); got != tt.bits {
 				t.Fatalf("instruction bits mismatch: got %d want %d", got, tt.bits)
 			}
 		})

@@ -9,35 +9,33 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return RSHIFTCCODE(1) })
+	vm.ArgList = append(vm.ArgList, rshiftCCodeOp)
 }
 
-func RSHIFTCCODE(value int) (op *helpers.AdvancedOP) {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			x, err := popIntRead(state)
-			if err != nil {
-				return err
+var rshiftCCodeOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA9, 0x36)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		x, err := popIntRead(state)
+		if err != nil {
+			return err
+		}
+		if x == nil {
+			if state.GlobalVersion >= 14 {
+				return pushNaNOrOverflow(state, false)
 			}
-			if x == nil {
-				if state.GlobalVersion >= 14 {
-					return pushNaNOrOverflow(state, false)
-				}
-				return pushSmallInt(state, 0)
-			}
+			return pushSmallInt(state, 0)
+		}
 
-			res := helpers.DivCeil(x, new(big.Int).Lsh(bigIntOne, uint(imm())))
+		res := helpers.DivCeil(x, new(big.Int).Lsh(bigIntOne, uint(bytePlusOneValue(args))))
 
-			return state.Stack.PushInt(res)
-		},
-		BitPrefix:       helpers.BytesPrefix(0xA9, 0x36),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d RSHIFTC#", imm())
-		},
-		DeserializeSuffix: deserializeImmediate,
-	}
-	return op
+		return state.Stack.PushInt(res)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d RSHIFTC#", bytePlusOneValue(args))
+	},
+})
+
+func RSHIFTCCODE(value int) vm.OP {
+	return vm.Bind(rshiftCCodeOp, bytePlusOneArg(value))
 }

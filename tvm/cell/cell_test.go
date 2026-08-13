@@ -321,3 +321,36 @@ func TestCellRecursive(t *testing.T) {
 		log.Fatal("incorrect err:", err.Error())
 	}
 }
+
+func TestCellNegativeLevelUsesTopLevel(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xA5, 8).EndCell()
+	branch := BeginCell().MustStoreRef(leaf).EndCell()
+	pruned, err := createPrunedBranchFromCell(branch, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := BeginCell().MustStoreRef(pruned).EndCell()
+	if c.HashKey() == c.HashKey(0) {
+		t.Fatal("multi-level fixture has identical top and level-0 hashes")
+	}
+	if !bytes.Equal(c.Hash(-1), c.Hash()) {
+		t.Fatalf("negative-level hash = %x, want top-level %x", c.Hash(-1), c.Hash())
+	}
+	if c.HashKey(-1) != c.HashKey() {
+		t.Fatalf("negative-level hash key = %x, want top-level %x", c.HashKey(-1), c.HashKey())
+	}
+	if c.Depth(-1) != c.Depth() {
+		t.Fatalf("negative-level depth = %d, want top-level %d", c.Depth(-1), c.Depth())
+	}
+	if c.HashKey(-1) == c.HashKey(0) {
+		t.Fatal("negative level selected level 0 instead of the top level")
+	}
+
+	virtual := c.Virtualize(0)
+	if virtual.HashKey() != c.HashKey(0) {
+		t.Fatalf("virtualized top hash = %x, want effective level-0 %x", virtual.HashKey(), c.HashKey(0))
+	}
+	if virtual.HashKey(-1) != virtual.HashKey() || virtual.Depth(-1) != virtual.Depth() {
+		t.Fatal("negative level did not select the virtualized top level")
+	}
+}

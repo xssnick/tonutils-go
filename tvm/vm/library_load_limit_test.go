@@ -112,6 +112,34 @@ func TestLoadLibraryByHashRepeatAtLimitIsFree(t *testing.T) {
 	}
 }
 
+// VmState::load_library compares the configured limit to the current set size
+// for exact equality. In particular, lowering a public limit below the number
+// of already-seen hashes does not retroactively refuse later loads.
+func TestLoadLibraryByHashLoweredLimitMatchesReference(t *testing.T) {
+	libs := distinctLibs(4)
+	st := newLibraryLimitState(t, libs...)
+	st.SetMaxLibraryLoads(3)
+
+	for i, lib := range libs[:3] {
+		got, err := st.LoadLibraryByHash(lib.Hash())
+		if err != nil || got == nil || got.HashKey() != lib.HashKey() {
+			t.Fatalf("initial load %d = (%v, %v), want (%x, nil)", i, got, err, lib.Hash())
+		}
+	}
+
+	st.SetMaxLibraryLoads(2)
+	got, err := st.LoadLibraryByHash(libs[3].Hash())
+	if err != nil {
+		t.Fatalf("load after lowering limit: %v", err)
+	}
+	if got == nil || got.HashKey() != libs[3].HashKey() {
+		t.Fatalf("load after lowering limit = %v, want %x", got, libs[3].Hash())
+	}
+	if n := len(st.libraryLoads.loadedLibraries); n != 4 {
+		t.Fatalf("distinct attempted hashes = %d, want 4", n)
+	}
+}
+
 // Rule 2, the easiest one to get backwards: the slot is consumed on the
 // *attempt* itself, even when the subsequent lookup fails to find the hash
 // in any registered library collection. We prove this by burning the whole
@@ -133,16 +161,16 @@ func TestLoadLibraryByHashConsumesSlotOnFailedLookup(t *testing.T) {
 		t.Fatalf("load missing B = (%v, %v), want (nil, nil)", got, err)
 	}
 
-	if n := len(st.loadedLibraries); n != 2 {
+	if n := len(st.libraryLoads.loadedLibraries); n != 2 {
 		t.Fatalf("distinct attempted hashes = %d, want 2 (failed lookups must still consume a slot)", n)
 	}
 	var keyA, keyB cell.Hash
 	copy(keyA[:], missingA)
 	copy(keyB[:], missingB)
-	if _, ok := st.loadedLibraries[keyA]; !ok {
+	if _, ok := st.libraryLoads.loadedLibraries[keyA]; !ok {
 		t.Fatal("missing hash A should be recorded as an attempted load")
 	}
-	if _, ok := st.loadedLibraries[keyB]; !ok {
+	if _, ok := st.libraryLoads.loadedLibraries[keyB]; !ok {
 		t.Fatal("missing hash B should be recorded as an attempted load")
 	}
 
@@ -201,8 +229,8 @@ func TestLoadLibraryByHashUnsetLimitIsUnlimited(t *testing.T) {
 			t.Fatalf("load library %d = %v, want %x", i, got, lib.Hash())
 		}
 	}
-	if st.loadedLibraries != nil {
-		t.Fatalf("loadedLibraries should stay nil (no bookkeeping) when the limit is unset, got %d entries", len(st.loadedLibraries))
+	if st.libraryLoads != nil && st.libraryLoads.loadedLibraries != nil {
+		t.Fatalf("loadedLibraries should stay nil (no bookkeeping) when the limit is unset, got %d entries", len(st.libraryLoads.loadedLibraries))
 	}
 }
 
@@ -262,7 +290,7 @@ func TestLibraryLoadLimitSharedAcrossRunChild(t *testing.T) {
 
 	// the counter is shared: the parent must see the child's consumption of
 	// the second slot, and must itself now refuse the third library too.
-	if n := len(parent.loadedLibraries); n != 2 {
+	if n := len(parent.libraryLoads.loadedLibraries); n != 2 {
 		t.Fatalf("parent loadedLibraries after child run = %d, want 2 (shared with child)", n)
 	}
 	got, err := parent.LoadLibraryByHash(libs[2].Hash())
@@ -316,8 +344,8 @@ func TestLibraryLoadLimitSharedLazyMapCreatedForChild(t *testing.T) {
 		t.Fatalf("run child: %v", err)
 	}
 
-	if parent.loadedLibraries == nil || len(parent.loadedLibraries) != 1 {
-		t.Fatalf("parent loadedLibraries = %v, want a shared map with 1 entry", parent.loadedLibraries)
+	if parent.libraryLoads == nil || len(parent.libraryLoads.loadedLibraries) != 1 {
+		t.Fatalf("parent loadedLibraries = %v, want a shared map with 1 entry", parent.libraryLoads)
 	}
 	if got, err := parent.LoadLibraryByHash(libs[1].Hash()); err != nil || got != nil {
 		t.Fatalf("parent load second library after child run = (%v, %v), want (nil, nil)", got, err)
@@ -369,5 +397,52 @@ func TestSetMaxDataDepthChangesCommitLimit(t *testing.T) {
 	unconfigured.Reg.D[1] = cell.BeginCell().EndCell()
 	if !unconfigured.TryCommitCurrent() {
 		t.Fatal("expected commit within the default max data depth to succeed when SetMaxDataDepth was never called")
+	}
+}
+
+// Boundary of the "count vs limit" comparison at zero: the first load already
+// sits at the limit, so it is refused before any bookkeeping is allocated.
+func TestLoadLibraryByHashZeroLimitRefusesFirstLoad(t *testing.T) {
+	lib := cell.BeginCell().MustStoreUInt(0x77, 8).EndCell()
+	st := newLibraryLimitState(t, lib)
+	st.SetMaxLibraryLoads(0)
+
+	if got, err := st.LoadLibraryByHash(lib.Hash()); err != nil || got != nil {
+		t.Fatalf("load under zero limit = (%v, %v), want (nil, nil)", got, err)
+	}
+	if st.libraryLoads != nil {
+		t.Fatalf("refused load must not allocate load bookkeeping, got %+v", st.libraryLoads)
+	}
+}
+
+// A miss recorded while no limit was configured leaves the load state present
+// but its hash set unallocated. Enabling the limit afterwards must count from
+// zero, and the boundary must still be exact: the slot is consumed by the
+// first new hash, a repeat stays free and the next new hash is refused.
+func TestLoadLibraryByHashLimitEnabledAfterMissingLookup(t *testing.T) {
+	libs := distinctLibs(2)
+	st := newLibraryLimitState(t, libs...)
+
+	if got, err := st.LoadLibraryByHash(bytes.Repeat([]byte{0x33}, 32)); err != nil || got != nil {
+		t.Fatalf("missing lookup = (%v, %v), want (nil, nil)", got, err)
+	}
+	if st.libraryLoads == nil || st.libraryLoads.loadedLibraries != nil {
+		t.Fatalf("missing lookup without a limit must leave the hash set unallocated, got %+v", st.libraryLoads)
+	}
+
+	st.SetMaxLibraryLoads(1)
+
+	if got, err := st.LoadLibraryByHash(libs[0].Hash()); err != nil || got == nil || got.HashKey() != libs[0].HashKey() {
+		t.Fatalf("first load under limit = (%v, %v), want (%x, nil)", got, err, libs[0].Hash())
+	}
+	if n := len(st.libraryLoads.loadedLibraries); n != 1 {
+		t.Fatalf("recorded hashes = %d, want 1 (the miss seen before the limit must not count)", n)
+	}
+
+	if got, err := st.LoadLibraryByHash(libs[0].Hash()); err != nil || got == nil || got.HashKey() != libs[0].HashKey() {
+		t.Fatalf("repeat load at limit = (%v, %v), want (%x, nil)", got, err, libs[0].Hash())
+	}
+	if got, err := st.LoadLibraryByHash(libs[1].Hash()); err != nil || got != nil {
+		t.Fatalf("new hash at limit = (%v, %v), want (nil, nil)", got, err)
 	}
 }

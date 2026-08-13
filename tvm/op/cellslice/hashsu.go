@@ -20,7 +20,12 @@ func HASHSU() *helpers.SimpleOP {
 				return err
 			}
 			var builder cell.Builder
-			cl := s.ToBuilderInto(&builder).EndCell()
+			// the cell-create charge must surface as a regular out-of-gas
+			// failure, not as a panic-driven fatal error
+			cl, err := s.ToBuilderInto(&builder).EndCellSpecial(false)
+			if err != nil {
+				return err
+			}
 			hash := cl.HashKey()
 			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
 		},

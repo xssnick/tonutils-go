@@ -221,7 +221,7 @@ func (v ValueFlow) validateExtraCurrencyBalance() error {
 	}
 
 	left, right := extraDictRoot(in), extraDictRoot(out)
-	if (left == nil) != (right == nil) || (left != nil && left.HashKey(0) != right.HashKey(0)) {
+	if (left == nil) != (right == nil) || (left != nil && left.HashKeyAt(0) != right.HashKeyAt(0)) {
 		return fmt.Errorf("value flow is unbalanced")
 	}
 	return nil

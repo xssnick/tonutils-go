@@ -8,11 +8,62 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/xssnick/tonutils-go/tl"
 )
+
+const (
+	// A plain flexserver Plumtree IHAVE plus its overlay.message envelope.
+	quicPlumtreeIHavePayloadSize      = 240
+	quicMessageBenchmarkMaxLag        = 4 * 1024
+	quicMessageBenchmarkResumeLag     = quicMessageBenchmarkMaxLag / 2
+	quicMessageBenchmarkStreamCredits = 2 * quicMessageBenchmarkMaxLag
+)
+
+type quicBenchPacketCounter struct {
+	received atomic.Uint64
+	target   atomic.Uint64
+	reached  chan struct{}
+}
+
+func newQUICBenchPacketCounter() *quicBenchPacketCounter {
+	return &quicBenchPacketCounter{reached: make(chan struct{}, 1)}
+}
+
+func (c *quicBenchPacketCounter) handle(_ context.Context, _ []byte) {
+	received := c.received.Add(1)
+	if received == c.target.Load() {
+		select {
+		case c.reached <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (c *quicBenchPacketCounter) expect(target uint64) {
+	for {
+		select {
+		case <-c.reached:
+		default:
+			c.target.Store(target)
+			return
+		}
+	}
+}
+
+func (c *quicBenchPacketCounter) wait(ctx context.Context, target uint64) error {
+	for c.received.Load() < target {
+		select {
+		case <-c.reached:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
 
 type QuicBenchRequest struct {
 	WantLen uint32 `tl:"int"`
@@ -69,6 +120,135 @@ func BenchmarkQUICSteadyStateQuery(b *testing.B) {
 			}
 		})
 	}
+}
+
+func BenchmarkQUICMessageLoopback(b *testing.B) {
+	peer, counter := setupQUICMessageLoopbackBenchmark(b)
+	payload := make([]byte, quicPlumtreeIHavePayloadSize)
+
+	warmupCtx, warmupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	warmupTarget := counter.received.Load() + 1
+	counter.expect(warmupTarget)
+	if err := peer.SendMessage(warmupCtx, payload); err != nil {
+		warmupCancel()
+		b.Fatalf("send warmup message: %v", err)
+	}
+	if err := counter.wait(warmupCtx, warmupTarget); err != nil {
+		warmupCancel()
+		b.Fatalf("receive warmup message: %v", err)
+	}
+	warmupCancel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	start := counter.received.Load()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err := peer.SendMessage(ctx, payload); err != nil {
+			b.Fatal(err)
+		}
+
+		submitted := uint64(i + 1)
+		received := counter.received.Load() - start
+		// Keep the asynchronous receiver saturated without allowing an unbounded
+		// stream queue. This is aggregate flow control, not a per-message reply.
+		if submitted-min(submitted, received) >= quicMessageBenchmarkMaxLag {
+			target := start + submitted - quicMessageBenchmarkResumeLag
+			counter.expect(target)
+			if err := counter.wait(ctx, target); err != nil {
+				b.Fatalf("wait for QUIC receiver lag: %v", err)
+			}
+		}
+	}
+	b.StopTimer()
+
+	elapsed := b.Elapsed().Seconds()
+	received := counter.received.Load() - start
+	if received > 0 {
+		b.ReportMetric(elapsed*1e9/float64(received), "ns/message")
+		b.ReportMetric(float64(received)/elapsed, "messages/s")
+		b.ReportMetric(float64(received*uint64(len(payload)))/elapsed/1e6, "payload_MB/s")
+	}
+	b.ReportMetric(float64(received), "received")
+	b.ReportMetric(float64(b.N), "submitted")
+	b.ReportMetric(quicMessageBenchmarkMaxLag, "max_lag")
+	if b.N > 0 {
+		b.ReportMetric(100*float64(received)/float64(b.N), "delivery_pct")
+	}
+
+	drainTarget := start + uint64(b.N)
+	counter.expect(drainTarget)
+	if err := counter.wait(ctx, drainTarget); err != nil {
+		b.Fatalf("drain QUIC receiver after measurement: %v", err)
+	}
+}
+
+func setupQUICMessageLoopbackBenchmark(b *testing.B) (*Peer, *quicBenchPacketCounter) {
+	b.Helper()
+
+	serverKey := mustBenchKey(b)
+	clientKey := mustBenchKey(b)
+	counter := newQUICBenchPacketCounter()
+
+	limits := DefaultLimits()
+	// Stream release trails handler completion, so transport credit needs headroom
+	// over the measured maximum receiver lag.
+	limits.MaxIncomingStreams = quicMessageBenchmarkStreamCredits
+	limits.MaxConcurrentIncomingStreams = quicMessageBenchmarkStreamCredits
+	limits.MaxConcurrentIncomingStreamsPerConnection = quicMessageBenchmarkStreamCredits
+	server, err := NewGatewayWithLimits(limits, serverKey)
+	if err != nil {
+		b.Fatal(err)
+	}
+	server.SetConnectionHandler(func(peer *Peer) error {
+		peer.SetMessageHandler(counter.handle)
+		return nil
+	})
+
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		_ = server.Close()
+		b.Fatal(err)
+	}
+	go func() { _ = server.Serve(pc) }()
+
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	err = server.WaitReady(readyCtx)
+	readyCancel()
+	if err != nil {
+		_ = server.Close()
+		_ = pc.Close()
+		b.Fatal(err)
+	}
+
+	client, err := NewGateway(clientKey)
+	if err != nil {
+		_ = server.Close()
+		_ = pc.Close()
+		b.Fatal(err)
+	}
+
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	peer, err := client.DialDefault(dialCtx, server.PublicKey(), pc.LocalAddr().String())
+	dialCancel()
+	if err != nil {
+		_ = client.Close()
+		_ = server.Close()
+		_ = pc.Close()
+		b.Fatal(err)
+	}
+
+	b.Cleanup(func() {
+		_ = peer.Close()
+		_ = client.Close()
+		_ = server.Close()
+		_ = pc.Close()
+	})
+
+	return peer, counter
 }
 
 func newQUICBenchCases(tb testing.TB) []quicBenchCase {

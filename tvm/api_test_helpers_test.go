@@ -18,8 +18,12 @@ type testTxParams struct {
 	Address *address.Address
 	Now     uint32
 	BlockLT int64
+	// BlockLTUint64 is the full-width block LT and overrides BlockLT.
+	BlockLTUint64 uint64
 	// LogicalTime is the per-transaction minimal LT.
 	LogicalTime int64
+	// LogicalTimeUint64 is the full-width minimal LT and overrides LogicalTime.
+	LogicalTimeUint64 uint64
 	// RandSeed is the block-level seed; the per-account c7 seed is derived
 	// from it and the account address.
 	RandSeed []byte
@@ -48,18 +52,20 @@ func (p testTxParams) blockContext() (*BlockContext, error) {
 		}
 	}
 	return cfg.NewBlockContext(BlockOptions{
-		Now:        p.Now,
-		BlockLT:    p.BlockLT,
-		RandSeed:   p.RandSeed,
-		PrevBlocks: p.PrevBlocks,
-		GlobalID:   p.GlobalID,
-		Libraries:  p.Libraries,
+		Now:           p.Now,
+		BlockLT:       p.BlockLT,
+		BlockLTUint64: p.BlockLTUint64,
+		RandSeed:      p.RandSeed,
+		PrevBlocks:    p.PrevBlocks,
+		GlobalID:      p.GlobalID,
+		Libraries:     p.Libraries,
 	})
 }
 
 func (p testTxParams) txOptions() TransactionOptions {
 	return TransactionOptions{
 		LogicalTime:                 p.LogicalTime,
+		LogicalTimeUint64:           p.LogicalTimeUint64,
 		RandSeed:                    p.AccountRandSeed,
 		Gas:                         p.Gas,
 		AccountStorageStat:          p.AccountStorageStat,

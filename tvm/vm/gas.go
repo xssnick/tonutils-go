@@ -5,7 +5,7 @@ import "github.com/xssnick/tonutils-go/tvm/vmerr"
 // Gas prices constants.
 const (
 	GasInfinite               int64 = 1<<63 - 1
-	MaxSupportedGlobalVersion       = 15
+	MaxSupportedGlobalVersion       = 16
 
 	CellLoadGasPrice           = 100
 	CellReloadGasPrice         = 25
@@ -110,11 +110,19 @@ func NewGas(cfg ...GasConfig) Gas {
 }
 
 func GasWithLimit(limit int64, max ...int64) Gas {
-	cfg := GasConfig{Limit: limit}
-	if len(max) > 0 {
-		cfg.Max = max[0]
+	maxLimit := int64(GasInfinite)
+	if len(max) > 0 && max[0] != 0 {
+		maxLimit = max[0]
 	}
-	return NewGas(cfg)
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	return Gas{
+		Max:       maxLimit,
+		Limit:     limit,
+		Base:      limit,
+		Remaining: limit,
+	}
 }
 
 func (g *Gas) SetLimits(max, limit int64, credit ...int64) {

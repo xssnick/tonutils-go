@@ -155,7 +155,7 @@ func skipAugExtra[T any](loader *cell.Slice) error {
 // Full semantic parsing of CurrencyCollection/DepthBalanceInfo still happens on
 // actual leaf payloads, where callers load the returned value through regular TLB.
 func skipCurrencyCollectionBoundary(loader *cell.Slice) error {
-	if _, err := loader.LoadBigCoins(); err != nil {
+	if err := skipGrams(loader); err != nil {
 		return err
 	}
 	_, err := loader.LoadMaybeRef()

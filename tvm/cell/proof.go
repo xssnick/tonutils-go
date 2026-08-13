@@ -90,7 +90,14 @@ func (s *ProofSkeleton) Copy() *ProofSkeleton {
 // Deprecated: use NewMerkleProofBuilder with traced cell loads, or
 // Cell.CreateUsageProof with CellUsageTree.
 func (c *Cell) CreateProof(skeleton *ProofSkeleton) (*Cell, error) {
-	body, err := buildProofBody(c, skeleton, c.Level())
+	if c == nil {
+		return nil, fmt.Errorf("failed to generate Merkle proof: cell is nil")
+	}
+	if c.Level() != 0 {
+		return nil, fmt.Errorf("failed to generate Merkle proof: level is not 0")
+	}
+
+	body, err := buildProofBody(c, skeleton, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build proof for cell: %w", err)
 	}
@@ -206,6 +213,10 @@ func materializePrunedBranchBoundary(c *Cell) (*Cell, error) {
 // CreateMerkleProof wraps an already-built proof body into a MerkleProof
 // special cell.
 func CreateMerkleProof(body *Cell) (*Cell, error) {
+	if body == nil {
+		return nil, fmt.Errorf("failed to create Merkle proof: cell is nil")
+	}
+
 	builder := BeginCell()
 	if err := builder.StoreUInt(uint64(MerkleProofCellType), 8); err != nil {
 		return nil, fmt.Errorf("failed to store merkle proof type: %w", err)
@@ -233,6 +244,13 @@ func CheckProofVirtualized(proof *Cell, hash []byte) error {
 }
 
 func UnwrapProof(proof *Cell, hash []byte) (*Cell, error) {
+	if proof == nil {
+		return nil, fmt.Errorf("failed to unpack Merkle proof: cell is nil")
+	}
+	if proof.Level() != 0 {
+		return nil, fmt.Errorf("level of merkle proof must be zero")
+	}
+
 	if !proof.IsSpecial() || proof.RefsNum() != 1 || proof.BitsSize() != 280 ||
 		Type(proof.data[0]) != MerkleProofCellType {
 		return nil, fmt.Errorf("not a merkle proof cell")
@@ -328,7 +346,9 @@ func (c *Cell) calculateHashes() error {
 			continue
 		}
 
-		if levelIndex < hashIndexOffset {
+		// A pruned mask can be sparse (for example 110), so payload hashes
+		// must be skipped by their dense index rather than by level number.
+		if hashIndex < hashIndexOffset {
 			hashIndex++
 			continue
 		}

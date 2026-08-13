@@ -46,11 +46,11 @@ const (
 	parityProgramChunkReserveBits  = 32
 	maxSmallIndexForParityProgram  = (1 << 30) - 1
 
-	expectedParityOpcodeInventoryEntries      = 904
-	expectedParityOpcodeInventoryUniqueNames  = 874
+	expectedParityOpcodeInventoryEntries      = 632
+	expectedParityOpcodeInventoryUniqueNames  = 848
 	expectedParityDictOpcodeWitnessNames      = 143
-	expectedParityMathOpcodeWitnessNames      = 255
-	expectedParityCellSliceOpcodeWitnessNames = 153
+	expectedParityMathOpcodeWitnessNames      = 253
+	expectedParityCellSliceOpcodeWitnessNames = 143
 
 	expectedSupportedDifferentialFuzzFamilyCount     = 28
 	expectedSupportedDifferentialFuzzFamilyHash      = "56a8e5085c21d46e27c5280228fa9a19161352abcc9d5b19d3de202bad73e7e0"
@@ -65,10 +65,10 @@ var expectedParityOpcodeCoverageBucketCounts = map[string]int{
 	"deterministic_exec":        110,
 	"deterministic_ton_crypto":  45,
 	"deterministic_ton_runtime": 66,
-	"random_cell_slice":         157,
+	"random_cell_slice":         147,
 	"random_dict":               143,
-	"random_math":               273,
-	"random_stack":              77,
+	"random_math":               271,
+	"random_stack":              63,
 }
 
 type parityWitnessManifestExpectation struct {
@@ -193,7 +193,7 @@ var expectedParityRuntimeOpcodeWitnessCases = map[string][]string{
 	"GETFORWARDFEESIMPLE": {"getforwardfeesimple"},
 	"GETGASFEE":           {"getgasfee"},
 	"GETGASFEESIMPLE":     {"getgasfeesimple"},
-	"GETGLOB 1":           {"setglob_getglob_roundtrip"},
+	"GETGLOB 0":           {"setglob_getglob_roundtrip"},
 	"GETGLOBVAR":          {"setglobvar_getglobvar_roundtrip"},
 	"GETORIGINALFWDFEE":   {"getoriginalfwdfee"},
 	"GETPARAM 0":          {"getparam_now_blocklt_ltime_aliases"},
@@ -234,7 +234,7 @@ var expectedParityRuntimeOpcodeWitnessCases = map[string][]string{
 	"SETCODE":             {"action_chain_setcode_then_setlibcode_hash"},
 	"SETCPX":              {"setcpx_zero"},
 	"SETGASLIMIT":         {"setgaslimit"},
-	"SETGLOB 1":           {"setglob_getglob_roundtrip"},
+	"SETGLOB 0":           {"setglob_getglob_roundtrip"},
 	"SETGLOBVAR":          {"setglobvar_getglobvar_roundtrip"},
 	"SETLIBCODE":          {"setlibcode_mode_0"},
 	"SETRAND":             {"setrand_addrand_roundtrip"},
@@ -295,7 +295,7 @@ var expectedParityStackOpcodeWitnessCases = map[string][]string{
 	"DROPX":            {"dropx_0"},
 	"DUMPSTK":          {"dumpstk_noop"},
 	"DUMP s0":          {"dump_s0_noop"},
-	"DEBUG 1":          {"debug_noop"},
+	"DEBUG 0":          {"debug_noop"},
 	"DEBUGSTR 00":      {"debugstr_noop"},
 	"STRDUMP":          {"strdump_slice_noop"},
 	"DUP":              {"dup"},
@@ -334,20 +334,6 @@ var expectedParityStackOpcodeWitnessCases = map[string][]string{
 	"TUCK":             {"tuck"},
 	"s0,s0 XCHG":       {"xchg_1_15"},
 	"0 XCHG0":          {"xchg0_long_255"},
-	"2 XCHG0":          {"xchg0_long_255"},
-	"3 XCHG0":          {"xchg0_long_255"},
-	"4 XCHG0":          {"xchg0_long_255"},
-	"5 XCHG0":          {"xchg0_long_255"},
-	"6 XCHG0":          {"xchg0_long_255"},
-	"7 XCHG0":          {"xchg0_long_255"},
-	"8 XCHG0":          {"xchg0_long_255"},
-	"9 XCHG0":          {"xchg0_long_255"},
-	"10 XCHG0":         {"xchg0_long_255"},
-	"11 XCHG0":         {"xchg0_long_255"},
-	"12 XCHG0":         {"xchg0_long_255"},
-	"13 XCHG0":         {"xchg0_long_255"},
-	"14 XCHG0":         {"xchg0_long_255"},
-	"15 XCHG0":         {"xchg0_long_255"},
 	"0,0 XCHG2":        {"xchg2_15_15"},
 	"0,0,0 XCHG3":      {"xchg3_short_15_15_15"},
 	"XCHGX":            {"xchgx_0"},
@@ -362,13 +348,13 @@ var expectedParityExecOpcodeWitnessCases = map[string][]string{
 	"ATEXIT":           {"atexit_runs"},
 	"ATEXITALT":        {"atexitalt_runs"},
 	"BLESS":            {"bless_execute"},
-	"BLESSARGS 0,-1":   {"blessargs_execute"},
+	"BLESSARGS 0,0":    {"blessargs_execute"},
 	"BLESSVARARGS":     {"blessvarargs_execute"},
 	"BOOLAND":          {"booland_composes_return_continuation"},
 	"BOOLEVAL":         {"booleval_false_branch"},
 	"BOOLOR":           {"boolor_composes_alt_continuation"},
 	"CALLCC":           {"callcc_pushes_current_continuation"},
-	"CALLCCARGS 0,-1":  {"callccargs_preserves_arg"},
+	"CALLCCARGS 0,0":   {"callccargs_preserves_arg"},
 	"CALLCCVARARGS":    {"callccvarargs_dynamic"},
 	"CALLDICT 0":       {"calldict_short"},
 	"CALLREF":          {"callref_pushes_value"},
@@ -425,7 +411,7 @@ var expectedParityExecOpcodeWitnessCases = map[string][]string{
 	"RUNVMX":           {"runvmx_gas_bounds_return_one"},
 	"SAMEALT":          {"samealt_copy_is_independent"},
 	"SAMEALTSAVE":      {"samealtsave_preserves_previous_alt"},
-	"SETCONTARGS 0,-1": {"setcontargs_capture_all"},
+	"SETCONTARGS 0,0":  {"setcontargs_capture_all"},
 	"SETCONTCTRMANY 1": {"setcontctrmany_success"},
 	"SETCONTCTRMANYX":  {"setcontctrmanyx_success"},
 	"SETCONTCTRX":      {"setcontctrx_success"},
@@ -1449,6 +1435,9 @@ func TestTVMDifferentialFuzzExplicitGlobalVersionZero(t *testing.T) {
 	if tc.refCfg == nil {
 		t.Fatal("explicit v0 case must use config-aware reference runner")
 	}
+	if differentialFuzzExplicitVersionRefConfig(t, referenceRawRunGlobalVersion) == nil {
+		t.Fatal("explicit baseline-version case must use config-aware reference runner")
+	}
 
 	runDifferentialFuzzCase(t, tc)
 }
@@ -1482,7 +1471,7 @@ func TestTVMDifferentialFuzzOpcodeInventoryIsClassified(t *testing.T) {
 	buckets := map[string]int{}
 	seen := map[string]struct{}{}
 	var missing []string
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		op := getter()
 		if op == nil {
 			missing = append(missing, fmt.Sprintf("%03d <nil op>", i))
@@ -1846,7 +1835,7 @@ func parityOpcodeInventoryNamesByBucket(t *testing.T, bucket string) map[string]
 	t.Helper()
 
 	names := map[string]struct{}{}
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		op := getter()
 		if op == nil {
 			t.Fatalf("vm.List[%d] returned nil op", i)
@@ -2328,9 +2317,9 @@ func parityOpcodeCoverageBucket(name string) (string, bool) {
 		"QLSHIFT", "QRSHIFT", "QPOW2", "DIVR", "DIVC", "DIVMOD", "DIVMODR", "DIVMODC",
 		"MODR", "MODC", "MODPOW2", "MODPOW2R", "MODPOW2C", "MULDIV", "MULDIVR",
 		"MULDIVC", "MULDIVMOD", "MULDIVMODR", "MULDIVMODC", "MULMOD", "MULMODR",
-		"MULMODC", "MULMODPOW2_VAR", "MULMODPOW2R_VAR", "MULMODPOW2C_VAR", "MULRSHIFT",
-		"MULRSHIFTR", "MULRSHIFTC", "MULRSHIFTMOD_VAR", "MULRSHIFTRMOD_VAR",
-		"MULRSHIFTCMOD_VAR", "ADDDIVMOD", "ADDDIVMODR", "ADDDIVMODC", "MULADDDIVMOD",
+		"MULMODC", "MULMODPOW2", "MULMODPOW2R", "MULMODPOW2C", "MULRSHIFT",
+		"MULRSHIFTR", "MULRSHIFTC", "MULRSHIFTMOD", "MULRSHIFTRMOD",
+		"MULRSHIFTCMOD", "ADDDIVMOD", "ADDDIVMODR", "ADDDIVMODC", "MULADDDIVMOD",
 		"MULADDDIVMODR", "MULADDDIVMODC", "ADDRSHIFTMOD", "ADDRSHIFTMODR", "ADDRSHIFTMODC",
 		"LSHIFTDIV", "LSHIFTDIVR", "LSHIFTDIVC", "LSHIFTDIVMOD", "LSHIFTDIVMODR",
 		"LSHIFTDIVMODC", "LSHIFTMOD", "LSHIFTMODR", "LSHIFTMODC", "RSHIFTR", "RSHIFTC",
@@ -5404,11 +5393,9 @@ func TestTVMDifferentialFuzzMathImmediateGapOps(t *testing.T) {
 				globalVersion = 14
 			case "qrshift_code_nan_legacy":
 				// Exercises the pre-v14 legacy NaN-shift result. Pin to a version
-				// below the v14 threshold that is NOT referenceRawRunGlobalVersion
-				// (13), so differentialFuzzOptionalVersionRefConfig builds an
-				// explicit reference config instead of silently falling back to
-				// the raw harness path (whose implicit default now tracks the
-				// bundled reference binary's SUPPORTED_VERSION, not 13).
+				// below the v14 threshold and route both engines through an explicit
+				// config instead of relying on the C++ runner's implicit
+				// SUPPORTED_VERSION.
 				globalVersion = 12
 			}
 
@@ -5817,7 +5804,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictureplace_miss_false",
 			code:  code(parityProgramDictValueOpcode(0xF422, 2, false)),
-			stack: []any{valueSlice(0x55, 8), int64(0x33), (*cell.Cell)(nil), int64(8)},
+			stack: []any{valueSlice(0x55, 8), int64(0x33), nil, int64(8)},
 		},
 		{
 			name:  "dictuadd_existing_false",
@@ -5827,7 +5814,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictureplaceget_miss_false",
 			code:  code(parityProgramDictValueOpcode(0xF42A, 2, false)),
-			stack: []any{valueSlice(0x66, 8), int64(0x44), (*cell.Cell)(nil), int64(8)},
+			stack: []any{valueSlice(0x66, 8), int64(0x44), nil, int64(8)},
 		},
 		{
 			name:  "dictaddget_existing_returns_old",
@@ -5907,7 +5894,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictusetgetoptref_delete_miss_null",
 			code:  code(parityProgramDictScalarOpcode(0xF46D, 2)),
-			stack: []any{(*cell.Cell)(nil), int64(0x77), refRoot, int64(8)},
+			stack: []any{nil, int64(0x77), refRoot, int64(8)},
 		},
 		{
 			name:  "dictisetgetoptref_overflow_key_rangecheck",
@@ -5927,7 +5914,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictusetgetoptref_delete_overflow_key_rangecheck",
 			code:  code(parityProgramDictScalarOpcode(0xF46D, 2)),
-			stack: []any{(*cell.Cell)(nil), big.NewInt(256), refRoot, int64(8)},
+			stack: []any{nil, big.NewInt(256), refRoot, int64(8)},
 		},
 		{
 			name:  "dicturemminref_key_len_rangecheck",
@@ -5942,12 +5929,12 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictumin_empty_false",
 			code:  code(parityProgramDictValueOpcode(0xF482, 2, false)),
-			stack: []any{(*cell.Cell)(nil), int64(8)},
+			stack: []any{nil, int64(8)},
 		},
 		{
 			name:  "dicturemmin_empty_false",
 			code:  code(parityProgramDictValueOpcode(0xF492, 2, false)),
-			stack: []any{(*cell.Cell)(nil), int64(8)},
+			stack: []any{nil, int64(8)},
 		},
 		{
 			name:  "dictgetprev_miss_false",
@@ -6017,7 +6004,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictgetq_nil_root_false",
 			code:  code(0xF4A8),
-			stack: []any{parityProgramKeySlice(0b1011, 4), (*cell.Cell)(nil), int64(4)},
+			stack: []any{parityProgramKeySlice(0b1011, 4), nil, int64(4)},
 		},
 		{
 			name:  "pfxdictget_miss_cell_underflow",
@@ -6027,7 +6014,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictget_nil_root_cell_underflow",
 			code:  code(0xF4A9),
-			stack: []any{parityProgramKeySlice(0b1011, 4), (*cell.Cell)(nil), int64(4)},
+			stack: []any{parityProgramKeySlice(0b1011, 4), nil, int64(4)},
 		},
 		{
 			name:  "pfxdictgetjmp_miss_keeps_input",
@@ -6037,12 +6024,12 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictgetjmp_nil_root_keeps_input",
 			code:  code(0xF4AA),
-			stack: []any{parityProgramKeySlice(0b1011, 4), (*cell.Cell)(nil), int64(4)},
+			stack: []any{parityProgramKeySlice(0b1011, 4), nil, int64(4)},
 		},
 		{
 			name:  "pfxdictreplace_miss_false",
 			code:  code(0xF471),
-			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(4)},
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), nil, int64(4)},
 		},
 		{
 			name:  "pfxdictadd_existing_false",
@@ -6062,7 +6049,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictset_oversized_key_nil_root_false",
 			code:  code(0xF470),
-			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(1)},
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), nil, int64(1)},
 		},
 		{
 			name:  "pfxdictreplace_oversized_key_false",
@@ -6072,7 +6059,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictreplace_oversized_key_nil_root_false",
 			code:  code(0xF471),
-			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(1)},
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), nil, int64(1)},
 		},
 		{
 			name:  "pfxdictadd_oversized_key_false",
@@ -6082,7 +6069,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictadd_oversized_key_nil_root_false",
 			code:  code(0xF472),
-			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(1)},
+			stack: []any{valueSlice(0xE, 4), parityProgramKeySlice(0b11, 2), nil, int64(1)},
 		},
 		{
 			name:  "pfxdictdel_oversized_key_false",
@@ -6092,7 +6079,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "pfxdictdel_oversized_key_nil_root_false",
 			code:  code(0xF473),
-			stack: []any{parityProgramKeySlice(0b11, 2), (*cell.Cell)(nil), int64(1)},
+			stack: []any{parityProgramKeySlice(0b11, 2), nil, int64(1)},
 		},
 		{
 			name:  "subdictuget_miss_dict_error",
@@ -6102,7 +6089,7 @@ func TestTVMDifferentialFuzzDictMissGapOps(t *testing.T) {
 		{
 			name:  "dictureplaceb_miss_false",
 			code:  code(parityProgramDictScalarOpcode(0xF449, 2)),
-			stack: []any{valueBuilder(0x77, 8), int64(0x44), (*cell.Cell)(nil), int64(8)},
+			stack: []any{valueBuilder(0x77, 8), int64(0x44), nil, int64(8)},
 		},
 		{
 			name:  "dictuaddb_existing_false",
@@ -6166,12 +6153,12 @@ func TestTVMDifferentialFuzzDictEdgeGapOps(t *testing.T) {
 		{
 			name:  "dictuset_negative_key_bad_value_typecheck_order",
 			code:  code(parityProgramDictValueOpcode(0xF412, 2, false)),
-			stack: []any{int64(1), big.NewInt(-1), (*cell.Cell)(nil), int64(8)},
+			stack: []any{int64(1), big.NewInt(-1), nil, int64(8)},
 		},
 		{
 			name:  "dictusetb_negative_key_bad_builder_typecheck_order",
 			code:  code(parityProgramDictScalarOpcode(0xF441, 2)),
-			stack: []any{int64(1), big.NewInt(-1), (*cell.Cell)(nil), int64(8)},
+			stack: []any{int64(1), big.NewInt(-1), nil, int64(8)},
 		},
 		{
 			name:  "dictusetgetoptref_negative_key_bad_value_typecheck_order",
@@ -6186,7 +6173,7 @@ func TestTVMDifferentialFuzzDictEdgeGapOps(t *testing.T) {
 		{
 			name:  "dictsetgetoptref_delete_short_key_deferred_value_pop",
 			code:  code(parityProgramDictScalarOpcode(0xF46D, 0)),
-			stack: []any{(*cell.Cell)(nil), parityProgramKeySlice(0x1, 4), refRoot, int64(8)},
+			stack: []any{nil, parityProgramKeySlice(0x1, 4), refRoot, int64(8)},
 		},
 		{
 			name:  "dictsetgetoptref_update_plain_value_dict_error",
@@ -6196,7 +6183,7 @@ func TestTVMDifferentialFuzzDictEdgeGapOps(t *testing.T) {
 		{
 			name:  "dictsetgetoptref_delete_plain_value_dict_error",
 			code:  code(parityProgramDictScalarOpcode(0xF46D, 0)),
-			stack: []any{(*cell.Cell)(nil), parityProgramKeySlice(0x12, 8), plainRoot, int64(8)},
+			stack: []any{nil, parityProgramKeySlice(0x12, 8), plainRoot, int64(8)},
 		},
 		{
 			name:  "dictugetoptref_plain_value_dict_error",
@@ -6261,22 +6248,22 @@ func TestTVMDifferentialFuzzDictEdgeGapOps(t *testing.T) {
 		{
 			name:  "dictgetnext_short_key_underflow",
 			code:  code(0xF474),
-			stack: []any{parityProgramKeySlice(0x1, 4), (*cell.Cell)(nil), int64(8)},
+			stack: []any{parityProgramKeySlice(0x1, 4), nil, int64(8)},
 		},
 		{
 			name:  "dictgetnexteq_short_key_underflow",
 			code:  code(0xF475),
-			stack: []any{parityProgramKeySlice(0x1, 4), (*cell.Cell)(nil), int64(8)},
+			stack: []any{parityProgramKeySlice(0x1, 4), nil, int64(8)},
 		},
 		{
 			name:  "dictgetprev_short_key_underflow",
 			code:  code(0xF476),
-			stack: []any{parityProgramKeySlice(0x1, 4), (*cell.Cell)(nil), int64(8)},
+			stack: []any{parityProgramKeySlice(0x1, 4), nil, int64(8)},
 		},
 		{
 			name:  "dictgetpreveq_short_key_underflow",
 			code:  code(0xF477),
-			stack: []any{parityProgramKeySlice(0x1, 4), (*cell.Cell)(nil), int64(8)},
+			stack: []any{parityProgramKeySlice(0x1, 4), nil, int64(8)},
 		},
 		{
 			name:  "pfxdictgetq_input_with_refs_preserved",
@@ -7503,9 +7490,9 @@ func TestTVMDifferentialFuzzDictContinuationGapOps(t *testing.T) {
 		{"dictigetjmpz_miss_keeps_index", parityProgramCodeCell(parityProgramRawOp(0xF4BC, 16)), []any{int64(4), signedRoot, int64(8)}},
 		{"dictugetexecz_miss_keeps_index", parityProgramCodeCell(parityProgramRawOp(0xF4BF, 16)), []any{int64(4), unsignedRoot, int64(8)}},
 		{"pfxdictgetjmp_miss_keeps_input", parityProgramCodeCell(parityProgramRawOp(0xF4AA, 16)), []any{prefixMissInput.Copy(), prefixRoot, int64(4)}},
-		{"pfxdictgetjmp_nil_root_keeps_input", parityProgramCodeCell(parityProgramRawOp(0xF4AA, 16)), []any{prefixInput.Copy(), (*cell.Cell)(nil), int64(4)}},
+		{"pfxdictgetjmp_nil_root_keeps_input", parityProgramCodeCell(parityProgramRawOp(0xF4AA, 16)), []any{prefixInput.Copy(), nil, int64(4)}},
 		{"pfxdictgetexec_miss_cell_underflow", parityProgramCodeCell(parityProgramRawOp(0xF4AB, 16)), []any{prefixMissInput.Copy(), prefixRoot, int64(4)}},
-		{"pfxdictgetexec_nil_root_cell_underflow", parityProgramCodeCell(parityProgramRawOp(0xF4AB, 16)), []any{prefixInput.Copy(), (*cell.Cell)(nil), int64(4)}},
+		{"pfxdictgetexec_nil_root_cell_underflow", parityProgramCodeCell(parityProgramRawOp(0xF4AB, 16)), []any{prefixInput.Copy(), nil, int64(4)}},
 		{"pfxdictswitch_miss_keeps_input", parityProgramCodeCell(dictop.PFXDICTSWITCH(prefixRoot, 4).Serialize()), []any{prefixMissInput.Copy()}},
 		{"pfxdictswitch_nil_root_flag_with_ref_underflow", parityProgramPfxDictSwitchNilRootWithRef(4), []any{prefixInput.Copy()}},
 	}
@@ -9729,7 +9716,7 @@ func TestTVMDifferentialFuzzDataSizeGapOps(t *testing.T) {
 		{
 			name:  "cdatasize_nil_success_zero",
 			code:  parityProgramCodeCell(funcsop.CDATASIZE().Serialize()),
-			stack: []any{(*cell.Cell)(nil), int64(0)},
+			stack: []any{nil, int64(0)},
 		},
 		{
 			name:  "cdatasize_success_counts_ref",
@@ -11614,7 +11601,7 @@ func runDifferentialFuzzCase(t *testing.T, tc differentialFuzzCase) {
 	if !tc.hasGlobalVersion && globalVersion == 0 {
 		globalVersion = referenceRawRunGlobalVersion
 	}
-	if globalVersion != referenceRawRunGlobalVersion && tc.refCfg == nil && !tc.rawC7Versioned {
+	if tc.hasGlobalVersion && tc.refCfg == nil && !tc.rawC7Versioned {
 		t.Fatalf("seed=%d family=%s op=%s: versioned differential case v%d has no reference config", tc.seed, tc.family, tc.op, globalVersion)
 	}
 
@@ -11708,7 +11695,7 @@ func differentialFuzzTraceHasV14SilentSaveListWrite(trace string) bool {
 func differentialFuzzOptionalVersionRefConfig(t *testing.T, version int) *referenceGetMethodConfig {
 	t.Helper()
 
-	if version == 0 || version == referenceRawRunGlobalVersion {
+	if version == 0 {
 		return nil
 	}
 	return differentialFuzzExplicitVersionRefConfig(t, version)
@@ -11739,6 +11726,8 @@ func differentialFuzzC7FromRefConfig(t *testing.T, code *cell.Cell, cfg referenc
 		addr:           cfg.Address,
 		code:           code,
 		now:            cfg.Now,
+		blockLT:        big.NewInt(0),
+		logicalTime:    big.NewInt(0),
 		balance:        balance,
 		seed:           new(big.Int).SetBytes(seed),
 		configRoot:     prepared.Root(),
@@ -11767,9 +11756,6 @@ func differentialFuzzVersionMatrixAuditSeed(start uint64, familyIdx, offset int,
 func differentialFuzzExplicitVersionRefConfig(t *testing.T, version int) *referenceGetMethodConfig {
 	t.Helper()
 
-	if version == referenceRawRunGlobalVersion {
-		return nil
-	}
 	return tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
 }
 

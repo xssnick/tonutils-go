@@ -76,6 +76,36 @@ func TestOrdinaryContinuationJumpRestoresCP0AndEmptySavedC7(t *testing.T) {
 	}
 }
 
+func TestOrdinaryContinuationJumpRejectsAbsentSerializedCodepage(t *testing.T) {
+	state := NewExecutionState(MaxSupportedGlobalVersion, NewGas(), nil, tuple.NewTupleValue(), NewStack())
+	state.PrepareExecution(cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse())
+	target := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell().MustBeginParse()
+	cont := &OrdinaryContinuation{
+		Data: ControlData{
+			CP: CP,
+			Save: Register{
+				C: [4]Continuation{nil, &QuitContinuation{ExitCode: 17}},
+			},
+		},
+		Code: target,
+	}
+
+	_, err := cont.Jump(state)
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeInvalidOpcode {
+		t.Fatalf("ordinary jump error = %v, want invalid-opcode", err)
+	}
+	if state.Reg.C[1] == nil {
+		t.Fatal("ordinary jump did not restore saved registers before rejecting the codepage")
+	}
+	op, loadErr := state.CurrentCode.Copy().LoadUInt(8)
+	if loadErr != nil {
+		t.Fatalf("load installed continuation code: %v", loadErr)
+	}
+	if op != 0xBB {
+		t.Fatalf("installed opcode = %x, want bb", op)
+	}
+}
+
 func TestArgExtContinuationJumpAllowsCP0(t *testing.T) {
 	state := &State{Stack: NewStack(), CP: 9}
 	next := &QuitContinuation{ExitCode: 17}
@@ -93,5 +123,25 @@ func TestArgExtContinuationJumpAllowsCP0(t *testing.T) {
 	}
 	if state.CP != 0 {
 		t.Fatalf("state cp = %d, want 0", state.CP)
+	}
+}
+
+func TestArgExtContinuationJumpRetainsCurrentCPWhenAbsent(t *testing.T) {
+	state := &State{Stack: NewStack(), CP: 9}
+	next := &QuitContinuation{ExitCode: 17}
+	cont := &ArgExtContinuation{
+		Data: ControlData{CP: CP},
+		Ext:  next,
+	}
+
+	got, err := cont.Jump(state)
+	if err != nil {
+		t.Fatalf("arg-ext jump failed: %v", err)
+	}
+	if got != next {
+		t.Fatalf("next continuation = %T, want %T", got, next)
+	}
+	if state.CP != 9 {
+		t.Fatalf("state cp = %d, want 9", state.CP)
 	}
 }

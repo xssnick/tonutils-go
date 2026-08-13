@@ -165,6 +165,45 @@ func parseFixedDictNode(branch *Cell, remaining uint) (fixedDictNode, error) {
 	return parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
 }
 
+// resolveIfSpecial re-parses a node whose cell turned out to be special
+// (a library) through the walk's resolver, so a walk inside the VM sees the
+// resolved ordinary node. It is a no-op for the ordinary nodes that make up
+// the whole of a well-formed tree, so it stays out of the descent's way.
+func (n *fixedDictNode) resolveIfSpecial(remaining uint, trace *Trace, resolver DictSpecialResolver) error {
+	if !n.cell.IsSpecial() {
+		return nil
+	}
+	return n.resolveSpecialNode(remaining, trace, resolver)
+}
+
+// resolveSpecialNode carries the actual resolution. The walk charges the node
+// cell load first and resolves a library only afterwards — the parse that
+// produced this node already performed that charge through the trace. Without
+// a resolver the node is left as it is, for the caller's own special-cell
+// rejection to report.
+func (n *fixedDictNode) resolveSpecialNode(remaining uint, trace *Trace, resolver DictSpecialResolver) error {
+	if resolver == nil {
+		resolver = trace.dictSpecialResolver()
+		if resolver == nil {
+			return nil
+		}
+	}
+
+	resolved, err := resolver.ResolveDictNodeCell(n.cell)
+	if err != nil {
+		return err
+	}
+	// The resolver already charged the resolved cell per version rules;
+	// parse it charge-free and rebind the gas trace for its children.
+	resolvedNode, err := parseFixedDictNodeWithTrace(resolved, remaining, nil)
+	if err != nil {
+		return err
+	}
+	resolvedNode.loader.SetTrace(CombineTraces(resolved.Trace(), trace))
+	*n = resolvedNode
+	return nil
+}
+
 func parseFixedDictNodeWithTrace(branch *Cell, remaining uint, trace *Trace) (fixedDictNode, error) {
 	var loader Slice
 	if err := branch.BeginParseIntoWithTrace(&loader, trace); err != nil {
@@ -234,11 +273,63 @@ func (n fixedDictNode) value() *Slice {
 	return &value
 }
 
+// DictSpecialResolver resolves a special (library) cell met as a dictionary
+// node into its ordinary content, as a cell load inside the VM does. When
+// nil, special nodes fail the walk. It is an interface rather than a function
+// so that installing it on a dictionary costs no allocation.
+type DictSpecialResolver interface {
+	ResolveDictNodeCell(*Cell) (*Cell, error)
+}
+
+func resolveDictNodeCell(branch *Cell, trace *Trace, resolver DictSpecialResolver, kind string) (*Cell, error) {
+	if !branch.IsSpecial() {
+		return branch, nil
+	}
+	if resolver == nil {
+		resolver = trace.dictSpecialResolver()
+		if resolver == nil {
+			return nil, fmt.Errorf("%s %w", kind, ErrDictHasSpecialCells)
+		}
+	}
+	return resolver.ResolveDictNodeCell(branch)
+}
+
 func (n fixedDictNode) rejectSpecial(kind string) error {
 	if n.cell.IsSpecial() {
 		return fmt.Errorf("%s %w", kind, ErrDictHasSpecialCells)
 	}
 	return nil
+}
+
+// validateForkShape enforces the dictionary node shape: a fork carries its
+// label and exactly two references. lenient relaxes it to the augmented-tree
+// rules, where payload after the label is legal because it carries the
+// augmentation. The check fails even when the looked-up key does not match the
+// node's label.
+func (n *fixedDictNode) validateForkShape(remaining uint, lenient bool) error {
+	if n.labelLen >= remaining {
+		return nil
+	}
+	if lenient {
+		if n.loader.RefsNum() < 2 {
+			return ErrInvalidDictForkNode
+		}
+		return nil
+	}
+	if n.loader.BitsLeft() != 0 || n.loader.RefsNum() != 2 {
+		return ErrInvalidDictForkNode
+	}
+	return nil
+}
+
+// dictWalk carries the settings that travel together through a fixed-dictionary
+// walk: the trace node loads are charged to, the resolver consulted when the
+// walk meets a special node, and whether fork nodes follow the lenient
+// augmented-dictionary shape rules.
+type dictWalk struct {
+	trace    *Trace
+	resolver DictSpecialResolver
+	lenient  bool
 }
 
 func (n fixedDictNode) prunedBoundary(kind string) (bool, error) {
@@ -252,7 +343,102 @@ func (n fixedDictNode) prunedBoundary(kind string) (bool, error) {
 }
 
 func (n *fixedDictNode) cloneWithRef(i int, ref *Cell, trace *Trace) (*Cell, bool, error) {
-	return n.refView.cloneWithRef(i, ref, trace)
+	if ref == nil {
+		return nil, false, ErrRefCannotBeNil
+	}
+	if i < 0 {
+		return nil, false, ErrNegative
+	}
+	if i >= int(n.refView.refCnt) {
+		return nil, false, ErrNoMoreRefs
+	}
+	if n.loader.trace == nil {
+		return n.refView.cloneWithRef(i, ref, trace)
+	}
+
+	var refsBuf [4]*Cell
+	refs := refsBuf[:n.refView.refCnt]
+	for j := range refs {
+		var err error
+		refs[j], err = n.ref(j)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	refs[i] = ref
+
+	// Unchanged siblings must be copied through the parsed node view. Its child
+	// traces retain predecessor proof edges even when the dictionary also has a
+	// detached VM trace; copying raw refs would make rebuilt Patricia ancestors
+	// lose the only path that can materialize a reused predecessor subtree.
+	return n.refView.cloneWithRefs(refs, trace)
+}
+
+// hasCanonicalLabel reports whether the source node uses the same HmLabel
+// representation append_dict_label would choose. Mutating dictionary walks in
+// the reference rebuild every changed ancestor and therefore canonicalize a
+// valid but non-minimal label on that path.
+func (n *fixedDictNode) hasCanonicalLabel(maxLen uint) (bool, error) {
+	canonical, decided := n.canonicalLabelFast(maxLen)
+	if decided {
+		return canonical, nil
+	}
+
+	label := n.labelSlice()
+	_, same, err := dictLabelSliceSameBit(&label, n.labelLen)
+	if err != nil {
+		return false, err
+	}
+	return !same, nil
+}
+
+// canonicalLabelFast settles all canonical generated labels except an
+// explicit short/long label for which hml_same would be shorter. Only that
+// adversarial case needs to scan the label bits.
+func (n *fixedDictNode) canonicalLabelFast(maxLen uint) (canonical, decided bool) {
+	ln := n.labelLen
+	lengthBits := dictLabelSizeBits(maxLen)
+	sameOptimal := ln > 1 && lengthBits < 2*ln-1
+	if n.label.cell != n.cell {
+		return sameOptimal, true
+	}
+
+	isLong := n.cell.data[0]&0x80 != 0
+	if isLong != (lengthBits < ln) {
+		return false, true
+	}
+	if sameOptimal {
+		return false, false
+	}
+	return true, true
+}
+
+func (n *fixedDictNode) rebuildNonCanonicalFixedForkWithRef(i int, ref *Cell, remaining uint, trace *Trace) (*Cell, bool, error) {
+	left, err := n.ref(0)
+	if err != nil {
+		return nil, false, err
+	}
+	right, err := n.ref(1)
+	if err != nil {
+		return nil, false, err
+	}
+	if i == 0 {
+		left = ref
+	} else {
+		right = ref
+	}
+
+	var payload Builder
+	payload.SetTrace(trace)
+	if err = payload.StoreRefUncheckedDepth(left); err != nil {
+		return nil, false, err
+	}
+	if err = payload.StoreRefUncheckedDepth(right); err != nil {
+		return nil, false, err
+	}
+	label := n.labelSlice()
+	rebuilt, err := storeDictNodeTraced(&label, &payload, remaining, trace)
+	return rebuilt, err == nil, err
 }
 
 func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {

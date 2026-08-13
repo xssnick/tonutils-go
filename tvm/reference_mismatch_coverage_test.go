@@ -19,10 +19,10 @@ import (
 const knownReferenceMismatchPrefix = "bundled reference emulator " + "predates upstream "
 
 const (
-	expectedKnownReferenceMismatchLocalAnchorCount = 15
-	expectedKnownReferenceMismatchLocalAnchorHash  = "a90c9c9a733b4457989071ffbf569178cd0d646a134cd6d67fbac6c09dc2445a"
-	expectedKnownReferenceMismatchBoundaryCount    = 18
-	expectedKnownReferenceMismatchBoundaryHash     = "c74adb3e03d42f915f91d5dc7e664c84fe481248307d871c3b52132d8eecc212"
+	expectedKnownReferenceMismatchLocalAnchorCount = 13
+	expectedKnownReferenceMismatchLocalAnchorHash  = "1ac8b29c58df34b1a627602332baef6d432873b5ceae535a60397046a42189b9"
+	expectedKnownReferenceMismatchBoundaryCount    = 16
+	expectedKnownReferenceMismatchBoundaryHash     = "fe7cbb4b229f0b95f48fa6fc6d37018062d8cb86fde6e448e2c221003903e33d"
 )
 
 var knownReferenceMismatchLocalAnchors = map[string][]string{
@@ -47,10 +47,6 @@ var knownReferenceMismatchLocalAnchors = map[string][]string{
 	"transaction v14 failed-action message-balance restore": {
 		"FuzzTransactionVersionedFailedActionMessageBalance",
 		"FuzzTransactionVersionedStateLimitFailureMessageBalance",
-	},
-	"transaction v15 library action restrictions": {
-		"FuzzTransactionVersionedChangeLibraryActionBoundaries",
-		"TestTransactionV15ChangeLibraryRestrictions",
 	},
 	"v9 direct startup library code loading": {
 		"FuzzTVMLibraryCodeCellStartupV9BoundaryCosts",
@@ -89,10 +85,6 @@ var knownReferenceMismatchBoundaryVersions = map[string][]int{
 	"transaction v14 failed-action message-balance restore": {
 		13,
 		14,
-	},
-	"transaction v15 library action restrictions": {
-		14,
-		15,
 	},
 	"v9 direct startup library code loading": {
 		8,

@@ -18,7 +18,7 @@ import (
 
 const (
 	expectedOpcodeMinVersionSourceTouchCount = 60
-	expectedOpcodeMinVersionSourceTouchHash  = "7f787843427fad9d4dd2706e5e4905a3f80d954371577d7dd0e30a6d20ebc299"
+	expectedOpcodeMinVersionSourceTouchHash  = "4bf3dbce7efa1ca15af6b30ad307f510a0cce9984d06389088db722c19f18c1c"
 )
 
 func TestOpcodeMinGlobalVersionSourceTouchInventory(t *testing.T) {
@@ -65,7 +65,7 @@ package fixture
 
 func fixture(op *helpers.SimpleOP, minVersion int) {
 	_ = &helpers.SimpleOP{MinVersion: 4}
-	_ = &helpers.AdvancedOP{
+	_ = &helpers.ArgOP{
 		MinVersion: 6,
 	}
 	op.MinVersion = 9

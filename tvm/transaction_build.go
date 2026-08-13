@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -115,6 +116,7 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 			statRoot = next.storageCell
 		}
 		if statRoot != nil {
+			nextAccount.runtime.accountStorageStat = next.storageStat
 			nextAccount.runtime.statBoundTo = statRoot.HashKey()
 		}
 	}
@@ -220,7 +222,7 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 
 	var gasCredit *big.Int
 	if params.computeGas.Credit > 0 {
-		gasCredit = big.NewInt(params.computeGas.Credit)
+		gasCredit = bigint.FromInt64(params.computeGas.Credit)
 	}
 
 	computeSuccess := transactionComputeSucceeded(params.computeResult)
@@ -232,8 +234,8 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 			AccountActivated: false,
 			GasFees:          tlb.FromNanoTON(params.gasFees),
 			Details: tlb.ComputePhaseVMDetails{
-				GasUsed:          big.NewInt(params.computeResult.GasUsed),
-				GasLimit:         big.NewInt(gasLimit),
+				GasUsed:          bigint.FromInt64(params.computeResult.GasUsed),
+				GasLimit:         bigint.FromInt64(gasLimit),
 				GasCredit:        gasCredit,
 				Mode:             0,
 				ExitCode:         int32(params.computeResult.ExitCode),

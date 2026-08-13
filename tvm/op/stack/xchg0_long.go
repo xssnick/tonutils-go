@@ -3,36 +3,25 @@ package stack
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return XCHG0L(0) })
+	vm.ArgList = append(vm.ArgList, xchg0LongOp)
 }
 
-func XCHG0L(i uint8) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			return state.Stack.Exchange(0, int(i))
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d XCHG0", i)
-		},
-		BitPrefix: helpers.UIntPrefix(0x11, 8),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			i = uint8(val)
-			return nil
-		},
-	}
-	return op
+var xchg0LongOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x11, 8)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		return state.Stack.Exchange(0, int(args))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d XCHG0", args)
+	},
+})
+
+func XCHG0L(i uint8) vm.OP {
+	return vm.Bind(xchg0LongOp, uint64(i))
 }

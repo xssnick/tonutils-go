@@ -2944,8 +2944,8 @@ func FuzzTransactionVersionedTickTockGasBoundaries(f *testing.F) {
 			BlockGasLimit:           gasLimit + 10_000,
 		}
 		if prices.GasLimit <= prices.FlatGasLimit {
-			if got := transactionMaxGasThresholdForLimit(prices, prices.GasLimit); got.Uint64() != transactionGasFlatPrice(prices) {
-				t.Fatalf("flat threshold = %s, want flat price %d", got, prices.FlatGasPrice)
+			if got := transactionMaxGasThresholdForLimit(prices, prices.GasLimit); got.Cmp64(transactionGasFlatPrice(prices)) != 0 {
+				t.Fatalf("flat threshold = %s, want flat price %d", got.Big(), prices.FlatGasPrice)
 			}
 		}
 		if transactionGasFlatPrice(nil) != 0 {
@@ -3194,7 +3194,7 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 					Actions:   actions,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), extra))
 			if err != nil {
 				t.Fatalf("apply actions v%d failed: %v", version, err)
 			}
@@ -3283,7 +3283,7 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, version),
 			tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0))
+		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(10_000_000), extra))
 		if err != nil {
 			t.Fatalf("apply actions v%d failed: %v", version, err)
 		}
@@ -3380,7 +3380,7 @@ func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
 			data:    data,
 			balance: big.NewInt(2_000_000),
 		}
-		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0))
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(2_000_000), extra))
 		if err != nil {
 			t.Fatalf("apply actions v%d %s failed: %v", version, context, err)
 		}
@@ -4533,6 +4533,7 @@ func FuzzTransactionVersionedStorageExtraDictHash(f *testing.F) {
 			version >= 10,
 			cfg,
 			nil,
+			nil,
 		)
 		if err != nil {
 			t.Fatal(err)
@@ -4563,6 +4564,10 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 	f.Add(byte(7), byte(2), byte(0), byte(0), false, true, true, byte(0x77), byte(0x88))
 	f.Add(byte(8), byte(2), byte(0), byte(0), false, true, true, byte(0x77), byte(0x88))
 	f.Add(byte(8), byte(2), byte(0), byte(0), false, false, true, byte(0x99), byte(0xaa))
+	f.Add(byte(15), byte(2), byte(6), byte(0), false, false, false, byte(0xbb), byte(0xcc))
+	f.Add(byte(16), byte(2), byte(6), byte(0), false, false, false, byte(0xbb), byte(0xcc))
+	f.Add(byte(15), byte(2), byte(31), byte(0), false, false, false, byte(0xdd), byte(0xee))
+	f.Add(byte(16), byte(2), byte(31), byte(0), false, false, false, byte(0xdd), byte(0xee))
 	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(2), byte(0), byte(0), false, false, true, byte(0x99), byte(0xaa))
 
 	statuses := []tlb.AccountStatus{
@@ -4580,6 +4585,8 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 		}
 
 		if status == tlb.AccountStatusFrozen {
+			depth := uint64(rawDepth % 32)
+			stateInit.Depth = &depth
 			stateCell, err := tlb.ToCell(stateInit)
 			if err != nil {
 				t.Fatal(err)
@@ -4609,7 +4616,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 				t.Fatal(err)
 			}
 
-			wantBadState := frozenHashMismatch || (version < 8 && frozenAddrMismatch)
+			wantBadState := frozenHashMismatch || (version < 8 && frozenAddrMismatch) || (version < 16 && depth != 0)
 			checkTransactionComputeBoundaryResult(t, version, usedState, skip, !wantBadState, tlb.ComputeSkipReasonBadState)
 			return
 		}
@@ -5069,10 +5076,11 @@ func FuzzTransactionVersionedAccountStateLimitBoundaries(f *testing.F) {
 		if isMasterchain && version >= 12 {
 			maxCells = uint64(maxMCCells)
 		}
-		publicLibrariesExceeded := isMasterchain && !transactionDictEqual(acc.libraries, libs) && transactionPublicLibrariesCount(libs) > uint64(maxPublicLibraries)
+		publicLibraries := transactionTestPublicLibrariesCount(t, libs)
+		publicLibrariesExceeded := isMasterchain && !transactionDictEqual(acc.libraries, libs) && publicLibraries > uint64(maxPublicLibraries)
 		want := !isSpecial && (usage.cells > maxCells || publicLibrariesExceeded)
 		if got != want {
-			t.Fatalf("v%d master=%t special=%t usage=%d max_acc=%d max_mc=%d public=%d max_public=%d same_libs=%t exceeds=%t want %t", version, isMasterchain, isSpecial, usage.cells, maxAccCells, maxMCCells, transactionPublicLibrariesCount(libs), maxPublicLibraries, sameLibraries, got, want)
+			t.Fatalf("v%d master=%t special=%t usage=%d max_acc=%d max_mc=%d public=%d max_public=%d same_libs=%t exceeds=%t want %t", version, isMasterchain, isSpecial, usage.cells, maxAccCells, maxMCCells, publicLibraries, maxPublicLibraries, sameLibraries, got, want)
 		}
 	})
 }
@@ -5149,10 +5157,11 @@ func FuzzTransactionVersionedAccountStateLimitShortCircuits(f *testing.F) {
 		if isMasterchain && version >= 12 {
 			maxCells = uint64(maxMCCells)
 		}
-		publicLibrariesExceeded := isMasterchain && transactionPublicLibrariesCount(libs) > uint64(maxPublicLibraries)
+		publicLibraries := transactionTestPublicLibrariesCount(t, libs)
+		publicLibrariesExceeded := isMasterchain && publicLibraries > uint64(maxPublicLibraries)
 		want := usage.cells > maxCells || publicLibrariesExceeded
 		if got != want {
-			t.Fatalf("v%d master=%t usage=%d max_acc=%d max_mc=%d public=%d max_public=%d exceeded=%t want %t", version, isMasterchain, usage.cells, maxAccCells, maxMCCells, transactionPublicLibrariesCount(libs), maxPublicLibraries, got, want)
+			t.Fatalf("v%d master=%t usage=%d max_acc=%d max_mc=%d public=%d max_public=%d exceeded=%t want %t", version, isMasterchain, usage.cells, maxAccCells, maxMCCells, publicLibraries, maxPublicLibraries, got, want)
 		}
 	})
 }
@@ -5984,6 +5993,7 @@ func checkAccountSerializationVersion(t *testing.T, addr *address.Address, rawDa
 		nil,
 		version >= 10,
 		transactionTestConfigWithGlobalVersion(t, version),
+		nil,
 		nil,
 	)
 	if err != nil {

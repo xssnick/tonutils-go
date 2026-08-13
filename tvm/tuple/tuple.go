@@ -72,10 +72,10 @@ func stackValueNeedsSnapshot(val any) bool {
 	switch v := val.(type) {
 	case *big.Int:
 		return v == nil
-	case *cell.Cell:
-		return v == nil
-	case *cell.Slice, *cell.Builder:
-		return true
+	case *cell.Slice:
+		return v != nil
+	case *cell.Builder:
+		return v != nil
 	case Tuple:
 		return v.NeedsValueSnapshot()
 	default:
@@ -98,9 +98,9 @@ func (t *Tuple) Copy() Tuple {
 }
 
 // NeedsValueSnapshot reports whether the tuple contains mutable cursor values
-// or typed nils that must be isolated when the tuple crosses a VM ownership
-// boundary. The summary is maintained when persistent tuple data is created,
-// so scalar/cell-only tuple trees can be rejected in O(1).
+// that must be isolated when the tuple crosses a VM ownership boundary. The
+// summary is maintained when persistent tuple data is created, so scalar and
+// cell-only tuple trees can be rejected in O(1).
 func (t *Tuple) NeedsValueSnapshot() bool {
 	return !t.IsNull() && t.data.needsValueSnapshot
 }
@@ -158,7 +158,7 @@ func cloneTupleLeaf(val any) any {
 		return v.Copy()
 	case *cell.Builder:
 		if v == nil {
-			return nil
+			return v
 		}
 		return v.Copy()
 	default:

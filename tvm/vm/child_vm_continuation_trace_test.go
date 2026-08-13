@@ -27,7 +27,7 @@ func TestRunChildVMReturnedContinuationDropsChildTrace(t *testing.T) {
 		}
 
 		nested := &OrdinaryContinuation{
-			Data: ControlData{NumArgs: ControlDataAllArgs, CP: CP},
+			Data: ControlData{NumArgs: ControlDataAllArgs, CP: child.CP},
 			Code: cell.BeginCell().EndCell().MustBeginParse().SetTrace(childTrace),
 		}
 		savedSlice := cell.BeginCell().MustStoreUInt(1, 1).EndCell().MustBeginParse().SetTrace(childTrace)
@@ -37,7 +37,7 @@ func TestRunChildVMReturnedContinuationDropsChildTrace(t *testing.T) {
 			Data: ControlData{
 				Stack:   captured,
 				NumArgs: 0,
-				CP:      CP,
+				CP:      child.CP,
 			},
 			Code: cell.BeginCell().EndCell().MustBeginParse().SetTrace(childTrace),
 		}

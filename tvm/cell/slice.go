@@ -9,6 +9,7 @@ import (
 	"math/bits"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 )
 
 type Slice struct {
@@ -30,6 +31,17 @@ func newSliceFromCell(c *Cell, trace *Trace) *Slice {
 		bitEnd: c.bitsSz,
 		refEnd: uint8(c.refsCount()),
 	}
+}
+
+// cursor and restoreCursor name the read position of the slice so a partially
+// consumed load can put it back. Both fields are small integers, so this is a
+// register pair rather than a copy of the Slice.
+func (c *Slice) cursor() (uint16, uint8) {
+	return c.bitStart, c.refStart
+}
+
+func (c *Slice) restoreCursor(bitPos uint16, refPos uint8) {
+	c.bitStart, c.refStart = bitPos, refPos
 }
 
 func (c *Slice) refCellAt(i int) (*Cell, error) {
@@ -159,7 +171,11 @@ func (c *Slice) MustLoadMaybeRef() *Slice {
 	return r
 }
 
+// LoadMaybeRef loads a maybe-reference, returning nil when the tag says there
+// is no reference. A present tag with no reference behind it rolls the tag bit
+// back, leaving c where it was before the call.
 func (c *Slice) LoadMaybeRef() (*Slice, error) {
+	bitPos, refPos := c.cursor()
 	has, err := c.LoadBoolBit()
 	if err != nil {
 		return nil, err
@@ -169,16 +185,21 @@ func (c *Slice) LoadMaybeRef() (*Slice, error) {
 	}
 
 	ref := new(Slice)
-	if err = c.LoadRefInto(ref); err != nil {
+	if err = c.PreloadRefInto(ref); err != nil {
+		c.restoreCursor(bitPos, refPos)
 		return nil, err
 	}
+	c.refStart++
 	return ref, nil
 }
 
 // LoadMaybeRefInto loads a maybe-reference into dst. It reports whether the
-// reference was present and does not allocate. When absent, dst is reset.
-// dst must not alias c.
+// reference was present and does not allocate. A tag saying there is no
+// reference resets dst; a present tag with no reference behind it resets dst
+// and rolls the tag bit back, leaving c where it was before the call; a
+// missing tag leaves both dst and c unchanged. dst must not alias c.
 func (c *Slice) LoadMaybeRefInto(dst *Slice) (bool, error) {
+	bitPos, refPos := c.cursor()
 	has, err := c.LoadBoolBit()
 	if err != nil {
 		return false, err
@@ -189,9 +210,12 @@ func (c *Slice) LoadMaybeRefInto(dst *Slice) (bool, error) {
 		return false, nil
 	}
 
-	if err := c.LoadRefInto(dst); err != nil {
+	if err := c.PreloadRefInto(dst); err != nil {
+		c.restoreCursor(bitPos, refPos)
+		*dst = Slice{}
 		return false, err
 	}
+	c.refStart++
 	return true, nil
 }
 
@@ -579,7 +603,7 @@ func (c *Slice) PreloadBigUIntInto(dst *big.Int, sz uint) error {
 }
 
 func (c *Slice) readBigNumber(sz uint, preload bool) (*big.Int, error) {
-	value := new(big.Int)
+	value := bigint.New()
 	if err := c.readBigNumberInto(value, sz, preload); err != nil {
 		return nil, err
 	}
@@ -868,12 +892,13 @@ func (c *Slice) LoadAddr() (*address.Address, error) {
 			return nil, fmt.Errorf("failed to load workchain: %w", err)
 		}
 
-		data, err := c.LoadSlice(256)
-		if err != nil {
+		// The address and its 32 bytes come out of one allocation; loading
+		// straight into that buffer is what makes the pair worth fusing.
+		addr, data := address.NewStdAddressBuffer(0, byte(workchain))
+		if err = c.LoadSliceInto(data, 256); err != nil {
 			return nil, fmt.Errorf("failed to load addr data: %w", err)
 		}
 
-		addr := address.NewAddress(0, byte(workchain), data)
 		if anycast == nil {
 			return addr, nil
 		}

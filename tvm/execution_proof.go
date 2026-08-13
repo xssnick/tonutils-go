@@ -78,7 +78,7 @@ func attachExecutionProof(res *ExecutionResult, state *vm.State, proof *cell.Mer
 	}
 
 	if state != nil {
-		if err := markExecutionProofStack(state.Stack, proof.UsageTree(), state.Cells.Trace()); err != nil {
+		if err := markExecutionProofStack(state.Stack, proof.ReadSet(), state.Cells.Trace()); err != nil {
 			return err
 		}
 	}
@@ -91,11 +91,13 @@ func attachExecutionProof(res *ExecutionResult, state *vm.State, proof *cell.Mer
 	return nil
 }
 
-func markExecutionProofStack(stack *vm.Stack, usageTree *cell.CellUsageTree, gasTrace *cell.Trace) error {
-	if stack == nil || usageTree == nil {
+func markExecutionProofStack(stack *vm.Stack, read *cell.ReadSet, gasTrace *cell.Trace) error {
+	if stack == nil || read == nil {
 		return nil
 	}
 
+	// The gas trace comes off the values first: the execution is over, and the
+	// parses this walk does to reach a subtree must not be charged to it.
 	stack = stack.WithoutTrace(gasTrace).Copy()
 	seen := map[cell.Hash]struct{}{}
 	for stack.Len() > 0 {
@@ -103,32 +105,24 @@ func markExecutionProofStack(stack *vm.Stack, usageTree *cell.CellUsageTree, gas
 		if err != nil {
 			return err
 		}
-		if err = markExecutionProofValue(val, usageTree, seen); err != nil {
+		if err = markExecutionProofValue(val, read, seen); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
+func markExecutionProofValue(val any, read *cell.ReadSet, seen map[cell.Hash]struct{}) error {
 	switch v := val.(type) {
 	case *cell.Cell:
-		return markExecutionProofCell(v, v.Trace(), usageTree, seen)
+		return markExecutionProofCell(v, read, seen)
 	case *cell.Slice:
 		if v == nil {
 			return nil
 		}
-		trace := v.Trace()
-		if trace == nil {
-			// Match BaseCell semantics without cloning the cell: a Slice can
-			// suppress its own trace while its immutable backing cell still
-			// carries the usage-tree identity.
-			trace = v.RawCell().Trace()
-		}
-		return markExecutionProofCell(v.RawCell(), trace, usageTree, seen)
+		return markExecutionProofCell(v.RawCell(), read, seen)
 	case *cell.Builder:
-		built := v.EndCell()
-		return markExecutionProofCell(built, built.Trace(), usageTree, seen)
+		return markExecutionProofCell(v.EndCell(), read, seen)
 	case tuple.Tuple:
 		ln := v.Len()
 		for i := 0; i < ln; i++ {
@@ -136,7 +130,7 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 			if err != nil {
 				return err
 			}
-			if err = markExecutionProofValue(next, usageTree, seen); err != nil {
+			if err = markExecutionProofValue(next, read, seen); err != nil {
 				return err
 			}
 		}
@@ -144,43 +138,36 @@ func markExecutionProofValue(val any, usageTree *cell.CellUsageTree, seen map[ce
 	return nil
 }
 
-func markExecutionProofCell(c *cell.Cell, trace *cell.Trace, usageTree *cell.CellUsageTree, seen map[cell.Hash]struct{}) error {
-	node, ok := usageTree.NodeForTrace(trace)
-	if !ok {
-		var loader cell.Slice
-		if err := c.BeginParseIntoWithTrace(&loader, nil); err != nil {
-			return err
-		}
-		refsNum := loader.RefsNum()
-		for i := 0; i < refsNum; i++ {
-			ref, refTrace, err := loader.PeekRefCellAtWithTrace(i)
-			if err != nil {
-				return err
-			}
-			if err = markExecutionProofCell(ref, refTrace, usageTree, seen); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-
+// markExecutionProofCell records c and everything below it. The walk keeps its
+// own visited set rather than stopping at what the read set already holds: a
+// cell the execution read is in the set while the references it never opened
+// are not, and those are exactly what marking has to add.
+//
+// A stack value that never came from the proven tree is recorded too and costs
+// nothing: the proof is built by walking the account root, so a hash it does not
+// reach is never looked up.
+func markExecutionProofCell(c *cell.Cell, read *cell.ReadSet, seen map[cell.Hash]struct{}) error {
+	// Parsed without a trace: recording is explicit here, so a value still
+	// carrying the recorder would only record the same cell twice.
 	var loader cell.Slice
-	if err := c.BeginParseIntoWithTrace(&loader, usageTree.Trace(node)); err != nil {
+	if err := c.BeginParseIntoWithTrace(&loader, nil); err != nil {
 		return err
 	}
-	key := loader.RawCell().HashKey()
-	if _, ok = seen[key]; ok {
+	loaded := loader.RawCell()
+	key := loaded.HashKey()
+	if _, ok := seen[key]; ok {
 		return nil
 	}
 	seen[key] = struct{}{}
+	read.Record(loaded)
 
 	refsNum := loader.RefsNum()
 	for i := 0; i < refsNum; i++ {
-		ref, refTrace, err := loader.PeekRefCellAtWithTrace(i)
+		ref, err := loader.PeekRefCellAt(i)
 		if err != nil {
 			return err
 		}
-		if err = markExecutionProofCell(ref, refTrace, usageTree, seen); err != nil {
+		if err = markExecutionProofCell(ref, read, seen); err != nil {
 			return err
 		}
 	}

@@ -237,6 +237,9 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 		if ln > sz {
 			return 0, 0, ErrLabelExceedsKeyBits
 		}
+		if loader.BitsLeft() < ln {
+			return 0, 0, ErrNotEnoughData(int(loader.BitsLeft()), int(ln))
+		}
 		matched, err := consumeCommonPrefix(loader, key, ln)
 		return ln, matched, err
 	}
@@ -254,6 +257,9 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 		}
 		if ln > uint64(sz) {
 			return 0, 0, ErrLabelExceedsKeyBits
+		}
+		if uint64(loader.BitsLeft()) < ln {
+			return 0, 0, ErrNotEnoughData(int(loader.BitsLeft()), int(ln))
 		}
 		matched, err := consumeCommonPrefix(loader, key, uint(ln))
 		return uint(ln), matched, err

@@ -45,6 +45,22 @@ func BenchmarkCellSliceLoadRefTracedInto(b *testing.B) {
 	}
 }
 
+func BenchmarkCellSliceLoadMaybeRefInto(b *testing.B) {
+	leaf := BeginCell().MustStoreUInt(0xAB, 8).EndCell()
+	base := *BeginCell().MustStoreMaybeRef(leaf).EndCell().MustBeginParse()
+	var loaded Slice
+
+	b.ReportAllocs()
+	for b.Loop() {
+		s := base
+		has, err := s.LoadMaybeRefInto(&loaded)
+		if err != nil || !has {
+			b.Fatalf("LoadMaybeRefInto = %v, %v", has, err)
+		}
+		benchmarkIntResult = loaded.RefsNum()
+	}
+}
+
 func BenchmarkCellSliceLoadBinarySnake(b *testing.B) {
 	data := make([]byte, 127*128)
 	for i := range data {

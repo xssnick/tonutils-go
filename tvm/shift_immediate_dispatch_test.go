@@ -46,17 +46,17 @@ func TestTVMShiftImmediateCodeRoundTrip(t *testing.T) {
 				if getter == nil {
 					t.Fatalf("dispatcher did not match %s shift %d", tc.text, shift)
 				}
-				decoded := getter()
-				if err := decoded.Deserialize(code.MustBeginParse()); err != nil {
+				encoded, got, err := getter.decodeAndEncode(nil, code.MustBeginParse(), true)
+				if err != nil {
 					t.Fatalf("deserialize %s shift %d: %v", tc.text, shift, err)
 				}
 
 				wantText := fmt.Sprintf("%d %s", shift, tc.text)
-				if got := decoded.SerializeText(); got != wantText {
+				if got != wantText {
 					t.Fatalf("decoded text = %q, want %q", got, wantText)
 				}
 
-				reserialized := decoded.Serialize().EndCell()
+				reserialized := encoded.EndCell()
 				if !bytes.Equal(code.Hash(), reserialized.Hash()) {
 					t.Fatalf("round-trip bytes mismatch: %s vs %s", code.Dump(), reserialized.Dump())
 				}

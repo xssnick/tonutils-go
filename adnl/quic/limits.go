@@ -23,19 +23,27 @@ const (
 	defaultMaxBufferedIncomingBytes              = 32 * int64(DefaultMaxObjectSize)
 	defaultMaxBufferedIncomingBytesPerConnection = 4 * int64(DefaultMaxObjectSize)
 	// Idle, not absolute: see readIncomingBoxedObject.
-	defaultStreamReadTimeout  = 15 * time.Second
-	defaultStreamTotalTimeout = 0
-	defaultMaxConnections     = 4096
-	defaultMaxPeerPaths       = 4096
-	// The slice of MaxPeerPaths inbound connections may never occupy: both
-	// directions share one table, so without a reserve an inbound flood exhausts
-	// it and the node can no longer dial out.
-	defaultOutboundPathReserve                  = 512
+	defaultStreamReadTimeout                    = 15 * time.Second
+	defaultStreamTotalTimeout                   = 0
 	defaultNewConnectionRateLimitCapacity       = 10
 	defaultNewConnectionRateLimitPeriod         = 200 * time.Millisecond
 	defaultGlobalNewConnectionRateLimitCapacity = 100000
 	defaultGlobalNewConnectionRateLimitPeriod   = 10 * time.Microsecond
 	defaultMaxConnectionRateLimiterEntries      = 16384
+)
+
+// Connection and peer path defaults. They are read unsynchronized by
+// DefaultLimits, that is by NewServer, NewGateway and Dial while they build the
+// Limits of the instance being constructed. Set them before constructing
+// servers or gateways: writing them while any construction can run concurrently
+// is a data race, and an already constructed instance keeps the values it was
+// built with. Use NewServerWithLimits and NewGatewayWithLimits for
+// per-instance configuration.
+var (
+	DefaultMaxConnections      = 4096
+	DefaultMaxConnectionsPerIP = 1000
+	DefaultMaxPeerPaths        = 4096
+	DefaultOutboundPathReserve = 512
 )
 
 // Limits bounds QUIC protocol and application resources for one Server or
@@ -119,15 +127,15 @@ func DefaultLimits() Limits {
 		GuaranteedStreamsPerConnection:            defaultGuaranteedStreamsPerConnection,
 		StreamReadTimeout:                         defaultStreamReadTimeout,
 		StreamTotalTimeout:                        defaultStreamTotalTimeout,
-		MaxConnections:                            defaultMaxConnections,
-		MaxConnectionsPerIP:                       defaultMaxConnectionsPerIP,
+		MaxConnections:                            DefaultMaxConnections,
+		MaxConnectionsPerIP:                       DefaultMaxConnectionsPerIP,
 		NewConnectionRateLimitCapacity:            defaultNewConnectionRateLimitCapacity,
 		NewConnectionRateLimitPeriod:              defaultNewConnectionRateLimitPeriod,
 		GlobalNewConnectionRateLimitCapacity:      defaultGlobalNewConnectionRateLimitCapacity,
 		GlobalNewConnectionRateLimitPeriod:        defaultGlobalNewConnectionRateLimitPeriod,
 		MaxConnectionRateLimiterEntries:           defaultMaxConnectionRateLimiterEntries,
-		MaxPeerPaths:                              defaultMaxPeerPaths,
-		OutboundPathReserve:                       defaultOutboundPathReserve,
+		MaxPeerPaths:                              DefaultMaxPeerPaths,
+		OutboundPathReserve:                       DefaultOutboundPathReserve,
 	}
 }
 

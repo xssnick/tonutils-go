@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"math/bits"
 
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
@@ -100,7 +101,7 @@ func loadVarUInt(loader *cell.Slice, sz uint) (*big.Int, error) {
 		if err != nil {
 			return nil, err
 		}
-		return new(big.Int).SetUint64(val), nil
+		return bigint.FromUint64(val), nil
 	}
 	return loader.LoadBigUInt(uint(ln * 8))
 }

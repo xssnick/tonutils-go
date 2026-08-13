@@ -8,40 +8,38 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MULMODPOW2RCODE(1) })
+	vm.ArgList = append(vm.ArgList, mulModPow2RCodeOp)
 }
 
-func MULMODPOW2RCODE(value int) (op *helpers.AdvancedOP) {
-	imm, serializeImmediate, deserializeImmediate := newBytePlusOneImmediate(value)
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			if err := checkStackDepth(state, 2); err != nil {
-				return err
-			}
-			y, err := popInt(state)
-			if err != nil {
-				return err
-			}
-			x, err := popInt(state)
-			if err != nil {
-				return err
-			}
-			if err = requireFiniteInts(y, x); err != nil {
-				return err
-			}
+var mulModPow2RCodeOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA9, 0xB9)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		if err := checkStackDepth(state, 2); err != nil {
+			return err
+		}
+		y, err := popInt(state)
+		if err != nil {
+			return err
+		}
+		x, err := popInt(state)
+		if err != nil {
+			return err
+		}
+		if err = requireFiniteInts(y, x); err != nil {
+			return err
+		}
 
-			q := helpers.DivRound(x.Mul(x, y), y.Lsh(bigIntOne, uint(imm())))
-			r := y.Sub(x, y.Mul(y, q))
+		q := helpers.DivRound(x.Mul(x, y), y.Lsh(bigIntOne, uint(bytePlusOneValue(args))))
+		r := y.Sub(x, y.Mul(y, q))
 
-			return state.Stack.PushInt(r)
-		},
-		BitPrefix:       helpers.BytesPrefix(0xA9, 0xB9),
-		SerializeSuffix: serializeImmediate,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d MULMODPOW2R#", imm())
-		},
-		DeserializeSuffix: deserializeImmediate,
-	}
-	return op
+		return state.Stack.PushInt(r)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d MULMODPOW2R#", bytePlusOneValue(args))
+	},
+})
+
+func MULMODPOW2RCODE(value int) vm.OP {
+	return vm.Bind(mulModPow2RCodeOp, bytePlusOneArg(value))
 }

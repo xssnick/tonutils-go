@@ -17,13 +17,25 @@ type TraceListener interface {
 	PendingError() error
 }
 
+type traceLoadErrorListener interface {
+	TraceListener
+	OnLoadError(*Cell) error
+}
+
 type traceKind uint8
 
+// traceKindListener and traceKindLoadErrorListener are the same object seen
+// through two tags: the split only keeps the traceLoadErrorListener assertion
+// off the hot dictionary-walk path. Only NotifyLoad and NotifyLoadError may
+// tell them apart, by dispatching the load through OnLoadError; NotifyCreate,
+// Child, PendingError, dictSpecialResolver and DetachListener must list both
+// tags in the same case. TestTraceListenerKindsDispatchIdentically fails when
+// one of them is forgotten.
 const (
 	traceKindEmpty traceKind = iota
 	traceKindHooks
 	traceKindListener
-	traceKindUsage
+	traceKindLoadErrorListener
 	traceKindPair
 	traceKindCombined
 )
@@ -32,13 +44,10 @@ type traceParts []*Trace
 
 // Trace keeps the dispatch tag and its backend in a compact fixed-size value.
 // General hook and combined traces keep their larger state in the optional
-// backend, while the common usage-tree trace stores only a tree pointer and
-// node id. Usage traces are embedded in stable arena slots; callers may retain
-// their exact addresses while the arena grows.
+// backend; a listener-backed trace needs nothing but the listener.
 type Trace struct {
-	backend   any
-	usageNode TraceNode
-	kind      traceKind
+	backend any
+	kind    traceKind
 }
 
 // These owners keep the uncommon large backends beside Trace in the same
@@ -79,10 +88,25 @@ func NewTraceForListener(l TraceListener) *Trace {
 	if l == nil {
 		return nil
 	}
+	kind := traceKindListener
+	if _, ok := l.(traceLoadErrorListener); ok {
+		kind = traceKindLoadErrorListener
+	}
 	return &Trace{
 		backend: l,
-		kind:    traceKindListener,
+		kind:    kind,
 	}
+}
+
+// DetachListener makes a listener-backed trace inert in place. Existing pair
+// and combined traces retain leaf pointers, so detaching the leaf releases the
+// listener from the whole object graph without walking or rebuilding it.
+func (t *Trace) DetachListener() {
+	if t == nil || t.kind != traceKindListener && t.kind != traceKindLoadErrorListener {
+		return
+	}
+	t.backend = nil
+	t.kind = traceKindEmpty
 }
 
 func CombineTraces(traces ...*Trace) *Trace {
@@ -90,6 +114,9 @@ func CombineTraces(traces ...*Trace) *Trace {
 		return nil
 	}
 	if len(traces) == 1 {
+		if traces[0] == nil || traces[0].kind == traceKindEmpty {
+			return nil
+		}
 		return traces[0]
 	}
 
@@ -107,7 +134,10 @@ func CombineTraces(traces ...*Trace) *Trace {
 }
 
 func (t *Trace) WithoutTrace(trace *Trace) *Trace {
-	if t == nil || trace == nil {
+	if t == nil || t.kind == traceKindEmpty {
+		return nil
+	}
+	if trace == nil || trace.kind == traceKindEmpty {
 		return t
 	}
 	if !traceContainsAny(t, trace) {
@@ -131,8 +161,8 @@ func (t *Trace) NotifyLoad(c *Cell) {
 		}
 	case traceKindListener:
 		t.backend.(TraceListener).OnLoad(c)
-	case traceKindUsage:
-		t.backend.(*CellUsageTree).OnLoad(t.usageNode, c)
+	case traceKindLoadErrorListener:
+		_ = t.backend.(traceLoadErrorListener).OnLoadError(c)
 	case traceKindPair:
 		pair := t.backend.(*tracePairState)
 		pair.first.NotifyLoad(c)
@@ -142,6 +172,48 @@ func (t *Trace) NotifyLoad(c *Cell) {
 			part.NotifyLoad(c)
 		}
 	}
+}
+
+// NotifyLoadError dispatches a load and returns the first pending trace error
+// without a second traversal of listener/pair/combined trace state.
+func (t *Trace) NotifyLoadError(c *Cell) error {
+	if t == nil || c == nil {
+		return nil
+	}
+
+	switch t.kind {
+	case traceKindHooks:
+		hooks := &t.backend.(*traceHooksState).hooks
+		if fn := hooks.OnLoad; fn != nil {
+			fn(c)
+		}
+		if hooks.PendingError != nil {
+			return hooks.PendingError()
+		}
+	case traceKindListener:
+		listener := t.backend.(TraceListener)
+		listener.OnLoad(c)
+		return listener.PendingError()
+	case traceKindLoadErrorListener:
+		return t.backend.(traceLoadErrorListener).OnLoadError(c)
+	case traceKindPair:
+		pair := t.backend.(*tracePairState)
+		firstErr := pair.first.NotifyLoadError(c)
+		secondErr := pair.second.NotifyLoadError(c)
+		if firstErr != nil {
+			return firstErr
+		}
+		return secondErr
+	case traceKindCombined:
+		var firstErr error
+		for _, part := range t.backend.(*traceCombinedState).parts {
+			if err := part.NotifyLoadError(c); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return firstErr
+	}
+	return nil
 }
 
 func (t *Trace) NotifyCreate() error {
@@ -158,7 +230,7 @@ func (t *Trace) NotifyCreate() error {
 		if hooks.PendingError != nil {
 			return hooks.PendingError()
 		}
-	case traceKindListener:
+	case traceKindListener, traceKindLoadErrorListener:
 		listener := t.backend.(TraceListener)
 		listener.OnCreate()
 		return listener.PendingError()
@@ -184,15 +256,14 @@ func (t *Trace) Child(refIdx int) *Trace {
 	}
 
 	switch t.kind {
+	case traceKindEmpty:
+		return nil
 	case traceKindHooks:
 		if fn := t.backend.(*traceHooksState).hooks.OnChild; fn != nil {
 			return fn(refIdx)
 		}
-	case traceKindListener:
+	case traceKindListener, traceKindLoadErrorListener:
 		return t.backend.(TraceListener).ChildTrace(refIdx)
-	case traceKindUsage:
-		tree := t.backend.(*CellUsageTree)
-		return tree.Trace(tree.CreateChild(t.usageNode, refIdx))
 	case traceKindPair:
 		pair := t.backend.(*tracePairState)
 		var buf [4]*Trace
@@ -227,7 +298,7 @@ func (t *Trace) PendingError() error {
 		if fn := t.backend.(*traceHooksState).hooks.PendingError; fn != nil {
 			return fn()
 		}
-	case traceKindListener:
+	case traceKindListener, traceKindLoadErrorListener:
 		return t.backend.(TraceListener).PendingError()
 	case traceKindPair:
 		pair := t.backend.(*tracePairState)
@@ -245,39 +316,36 @@ func (t *Trace) PendingError() error {
 	return nil
 }
 
-func (t *Trace) initUsage(tree *CellUsageTree, node TraceNode) {
-	t.backend = tree
-	t.usageNode = node
-	t.kind = traceKindUsage
-}
+// dictSpecialResolver returns the execution resolver carried by a trace. The
+// lookup is only performed after a dictionary walk has met a special cell, so
+// ordinary dictionary nodes pay no interface-assertion or trace-tree cost.
+func (t *Trace) dictSpecialResolver() DictSpecialResolver {
+	if t == nil {
+		return nil
+	}
 
-func (t *Trace) usageNodeFor(tree *CellUsageTree) (TraceNode, bool) {
-	if t == nil || tree == nil {
-		return 0, false
-	}
-	if t.kind == traceKindPair {
+	switch t.kind {
+	case traceKindListener, traceKindLoadErrorListener:
+		resolver, _ := t.backend.(DictSpecialResolver)
+		return resolver
+	case traceKindPair:
 		pair := t.backend.(*tracePairState)
-		if node, ok := pair.first.usageNodeFor(tree); ok {
-			return node, true
+		if resolver := pair.first.dictSpecialResolver(); resolver != nil {
+			return resolver
 		}
-		return pair.second.usageNodeFor(tree)
-	}
-	if t.kind == traceKindCombined {
+		return pair.second.dictSpecialResolver()
+	case traceKindCombined:
 		for _, part := range t.backend.(*traceCombinedState).parts {
-			if node, ok := part.usageNodeFor(tree); ok {
-				return node, true
+			if resolver := part.dictSpecialResolver(); resolver != nil {
+				return resolver
 			}
 		}
-		return 0, false
 	}
-	if t.kind == traceKindUsage && t.backend == tree && t.usageNode != 0 {
-		return t.usageNode, true
-	}
-	return 0, false
+	return nil
 }
 
 func appendTraceUnique(out []*Trace, trace *Trace) []*Trace {
-	if trace == nil {
+	if trace == nil || trace.kind == traceKindEmpty {
 		return out
 	}
 	if trace.kind == traceKindPair {
@@ -298,7 +366,7 @@ func appendTraceUnique(out []*Trace, trace *Trace) []*Trace {
 }
 
 func appendTraceWithout(out []*Trace, trace, excluded *Trace) []*Trace {
-	if trace == nil {
+	if trace == nil || trace.kind == traceKindEmpty {
 		return out
 	}
 	if trace.kind == traceKindPair {

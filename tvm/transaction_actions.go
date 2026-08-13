@@ -7,6 +7,7 @@ import (
 	"math/bits"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -68,6 +69,9 @@ type transactionActionEntry struct {
 var (
 	errTransactionInvalidRelaxedActionMessage = errors.New("invalid relaxed action message")
 	errTransactionOutboundMessageDoesNotFit   = errors.New("outbound message does not fit into a cell")
+	// errTransactionActionPhaseFatal mirrors the reference sanity failure that
+	// aborts the whole transaction instead of just the action phase.
+	errTransactionActionPhaseFatal = errors.New("cannot create action phase")
 )
 
 type transactionNormalizedOutboundMessage struct {
@@ -95,7 +99,7 @@ type transactionActionLoadResult struct {
 	bounce         bool
 }
 
-func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int) (*transactionActionApplyResult, error) {
+func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
 	out := &transactionActionApplyResult{
@@ -104,8 +108,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		extraCurrencies:     extraCurrencies,
 		endLT:               endLT,
 		balance:             transactionBigOrZero(balanceAfterGas),
-		actionFees:          big.NewInt(0),
-		actionFine:          big.NewInt(0),
+		actionFees:          bigint.FromInt64(0),
+		actionFine:          bigint.FromInt64(0),
 		msgBalanceRemaining: msgBalance.copy(),
 	}
 	if !computeSuccess {
@@ -132,8 +136,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		TotalActions:   loadedActions.totalActions,
 		SkippedActions: loadedActions.skippedActions,
 		TotalMsgSize: tlb.StorageUsedShort{
-			Cells: big.NewInt(0),
-			Bits:  big.NewInt(0),
+			Cells: bigint.FromInt64(0),
+			Bits:  bigint.FromInt64(0),
 		},
 	}
 	out.phase = actionPhase
@@ -147,10 +151,10 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	actions := loadedActions.actions
 	outMsgs := make([]OutMessage, 0, len(actions))
 	totalUsage := transactionUsage{}
-	totalFwdFees := big.NewInt(0)
-	totalActionFees := big.NewInt(0)
-	actionFine := big.NewInt(0)
-	failActionFine := big.NewInt(0)
+	totalFwdFees := bigint.FromInt64(0)
+	totalActionFees := bigint.FromInt64(0)
+	actionFine := bigint.FromInt64(0)
+	failActionFine := bigint.FromInt64(0)
 	specActions := uint16(0)
 	nextCode := acc.code
 	nextLibraries := acc.libraries
@@ -160,12 +164,21 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	}
 	msgBalanceRemaining := msgBalance.copy()
 	reservedBalance := transactionZeroCurrencyBalance()
-	originalBalance := remainingBalance.copy()
-	if gasFees != nil {
-		originalBalance.grams.Add(originalBalance.grams, gasFees)
-	}
-	if !originalBalance.sub(msgBalance) {
+	// Since global version 9 the RAWRESERVE mode&4 base is the balance at
+	// compute-phase start minus the remaining message value; below it, the
+	// pre-transaction balance minus the fees collected so far (nil when that
+	// went negative, which fails the reserve).
+	var originalBalance *transactionCurrencyBalance
+	if globalVersion < 9 {
+		originalBalance = preV9OriginalBalance
+	} else {
 		originalBalance = remainingBalance.copy()
+		if gasFees != nil {
+			originalBalance.grams.Add(originalBalance.grams, gasFees)
+		}
+		if !originalBalance.sub(msgBalance) {
+			originalBalance = remainingBalance.copy()
+		}
 	}
 	lastProcessedActionIdx := -1
 	msgBalanceBeforeActions := msgBalanceRemaining.copy()
@@ -176,7 +189,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		return msgBalanceRemaining.copy()
 	}
 	finalActionFine := func() *big.Int {
-		fine := new(big.Int).Set(actionFine)
+		fine := bigint.Set(actionFine)
 		if globalVersion < 15 {
 			return fine
 		}
@@ -189,7 +202,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	}
 
 	failAction := func(resultCode int32, idx int, bounceOnFail bool, noFunds bool, valid bool) {
-		stateLimitExceeded, stateLimitErr := transactionAccountStateExceedsLimits(acc, acc.code, acc.data, nextLibraries, cfg, true)
+		stateLimitExceeded, stateLimitErr := transactionAccountStateExceedsLimitsWithHint(acc, acc.code, acc.data, nextLibraries, cfg, true, &res.loadedCells)
 		if stateLimitErr != nil {
 			err = stateLimitErr
 			return
@@ -208,23 +221,23 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		actionPhase.MessagesCreated = uint16(len(outMsgs))
 		actionPhase.TotalFwdFees = transactionCoinsPtr(totalFwdFees)
 		fine := finalActionFine()
-		failureActionFees := new(big.Int).Set(totalActionFees)
+		failureActionFees := bigint.Set(totalActionFees)
 		if globalVersion >= 4 {
 			actionPhase.TotalActionFees = transactionCoinsPtr(fine)
 		} else {
 			actionPhase.TotalActionFees = transactionCoinsPtr(failureActionFees)
 		}
 		actionPhase.TotalMsgSize = tlb.StorageUsedShort{
-			Cells: new(big.Int).SetUint64(totalUsage.cells),
-			Bits:  new(big.Int).SetUint64(totalUsage.bits),
+			Cells: bigint.FromUint64(totalUsage.cells),
+			Bits:  bigint.FromUint64(totalUsage.bits),
 		}
 		if bounceOnFail {
 			out.bounce = true
 		}
 		out.nextLibraries = nextLibraries
 		out.msgBalanceRemaining = failedActionMsgBalance()
-		out.actionFine = new(big.Int).Set(fine)
-		out.actionFees = new(big.Int).Set(fine)
+		out.actionFine = bigint.Set(fine)
+		out.actionFees = bigint.Set(fine)
 		out.balance = new(big.Int).Sub(transactionBigOrZero(balanceAfterGas), fine)
 		if out.balance.Sign() < 0 {
 			out.balance.SetInt64(0)
@@ -292,7 +305,20 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			totalFwdFees.Add(totalFwdFees, sendRes.totalFwdFees)
 			totalActionFees.Add(totalActionFees, sendRes.totalActionFees)
 			if sendRes.deleteAccount {
-				out.deleteAccount = remainingBalance.grams.Sign() == 0 && reservedBalance.grams.Sign() == 0
+				// Below version 10 extra currencies live in the same
+				// collection as the grams, so both the leftover and the
+				// reserved balance must be empty as a whole; since then only
+				// the grams decide, and leftover extras stay on the account.
+				remainingEmpty := remainingBalance.grams.Sign() == 0
+				reservedEmpty := reservedBalance.grams.Sign() == 0
+				if globalVersion < 10 {
+					remainingEmpty = remainingEmpty && remainingBalance.extraEmpty()
+					reservedEmpty = reservedEmpty && reservedBalance.extraEmpty()
+				}
+				if !remainingEmpty {
+					return nil, errTransactionActionPhaseFatal
+				}
+				out.deleteAccount = reservedEmpty
 			}
 		case tlb.ActionSetCode:
 			specActions++
@@ -338,7 +364,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 
 	remainingBalance.add(reservedBalance)
 
-	stateLimitExceeded, err := transactionAccountStateExceedsLimits(acc, nextCode, res.Data, nextLibraries, cfg, true)
+	stateLimitExceeded, err := transactionAccountStateExceedsLimitsWithHint(acc, nextCode, res.Data, nextLibraries, cfg, true, &res.loadedCells)
 	if err != nil {
 		return nil, err
 	}
@@ -356,8 +382,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		actionPhase.MessagesCreated = uint16(len(outMsgs))
 		actionPhase.TotalFwdFees = transactionCoinsPtr(totalFwdFees)
 		actionPhase.TotalMsgSize = tlb.StorageUsedShort{
-			Cells: new(big.Int).SetUint64(totalUsage.cells),
-			Bits:  new(big.Int).SetUint64(totalUsage.bits),
+			Cells: bigint.FromUint64(totalUsage.cells),
+			Bits:  bigint.FromUint64(totalUsage.bits),
 		}
 		out.bounce = true
 		out.msgBalanceRemaining = failedActionMsgBalance()
@@ -375,8 +401,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 			// the phase record but does not actually withhold them, and end_lt
 			// stays past the (discarded) outbound messages.
 			actionPhase.TotalActionFees = transactionCoinsPtr(totalActionFees)
-			out.actionFine = new(big.Int).Set(actionFine)
-			out.actionFees = big.NewInt(0)
+			out.actionFine = bigint.Set(actionFine)
+			out.actionFees = bigint.FromInt64(0)
 			out.balance = transactionBigOrZero(balanceAfterGas)
 			out.endLT = startLT + 1 + uint64(len(outMsgs))
 		}
@@ -398,8 +424,8 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	actionPhase.TotalFwdFees = transactionCoinsPtr(totalFwdFees)
 	actionPhase.TotalActionFees = transactionCoinsPtr(totalActionFees)
 	actionPhase.TotalMsgSize = tlb.StorageUsedShort{
-		Cells: new(big.Int).SetUint64(totalUsage.cells),
-		Bits:  new(big.Int).SetUint64(totalUsage.bits),
+		Cells: bigint.FromUint64(totalUsage.cells),
+		Bits:  bigint.FromUint64(totalUsage.bits),
 	}
 	extraDict, err := remainingBalance.extraDict()
 	if err != nil {
@@ -422,23 +448,27 @@ func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transaction
 	if root == nil {
 		return out, nil
 	}
-	if transactionCellIsEmpty(root) {
-		return out, nil
-	}
 
 	var nodes [256]*cell.Cell
 	nodesNum := 0
-	for cur := root; cur != nil && !transactionCellIsEmpty(cur); {
-		if cur.IsSpecial() {
-			out.resultCode = 32
-			out.resultArg = transactionActionResultArg(nodesNum)
-			return out, nil
-		}
-		sl, err := cur.BeginParseWithoutTrace()
+	for cur := root; cur != nil; {
+		// The reference checks special on the materialized cell returned by
+		// Cell::load_cell(), not on a lazy pruned boundary wrapper.
+		sl, err := cur.BeginParse()
 		if err != nil {
 			out.resultCode = 32
 			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
+		}
+		if sl.RawCell().IsSpecial() {
+			out.resultCode = 32
+			out.resultArg = transactionActionResultArg(nodesNum)
+			return out, nil
+		}
+		// Parse the empty terminator before stopping: when the whole list is
+		// reused, leaving this child unvisited turns it into a pruned branch.
+		if sl.BitsLeft() == 0 && sl.RefsNum() == 0 {
+			break
 		}
 		if sl.RefsNum() == 0 {
 			out.resultCode = 32
@@ -451,7 +481,7 @@ func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transaction
 			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
-		nodes[nodesNum] = cur
+		nodes[nodesNum] = sl.BaseCell()
 		nodesNum++
 		if nodesNum > 255 {
 			out.resultCode = 33
@@ -503,7 +533,7 @@ func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transaction
 }
 
 func transactionParseCellExact(v any, root *cell.Cell) error {
-	sl, err := root.BeginParseWithoutTrace()
+	sl, err := root.BeginParse()
 	if err != nil {
 		return err
 	}
@@ -520,7 +550,7 @@ func transactionParseCellExact(v any, root *cell.Cell) error {
 // the reserve currency: canonical Grams plus positive canonical VarUInteger 32
 // extra currency values.
 func transactionReserveCurrencyCanonical(node *cell.Cell) bool {
-	sl, err := node.BeginParseWithoutTrace()
+	sl, err := node.BeginParse()
 	if err != nil {
 		return false
 	}
@@ -582,12 +612,8 @@ func transactionOutboundActionMessageStructureValid(msgCell *cell.Cell) bool {
 	}
 }
 
-func transactionCellIsEmpty(c *cell.Cell) bool {
-	return c == nil || (c.BitsSize() == 0 && c.RefsNum() == 0)
-}
-
 func transactionParseCell(v any, root *cell.Cell) error {
-	sl, err := root.BeginParseWithoutTrace()
+	sl, err := root.BeginParse()
 	if err != nil {
 		return err
 	}
@@ -598,7 +624,7 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 	if node == nil || node.IsSpecial() {
 		return 0, false
 	}
-	sl, err := node.BeginParseWithoutTrace()
+	sl, err := node.BeginParse()
 	if err != nil {
 		return 0, false
 	}
@@ -625,10 +651,10 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.ActionSendMsg, createdLT uint64, now uint32, cfg *PreparedBlockchainConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, error) {
 	out := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
-		totalFwdFees:    big.NewInt(0),
-		totalActionFees: big.NewInt(0),
-		actionFine:      big.NewInt(0),
-		failActionFine:  big.NewInt(0),
+		totalFwdFees:    bigint.FromInt64(0),
+		totalActionFees: bigint.FromInt64(0),
+		actionFine:      bigint.FromInt64(0),
+		failActionFine:  bigint.FromInt64(0),
 	}
 
 	mode := act.Mode
@@ -666,10 +692,15 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		return transactionSendPrepassInvalidV13(out, mode, globalVersion), nil
 	}
 	var normalizedInternalDst *address.Address
+	var suggestedExtraFlags *big.Int
 	sourceAddr := acc.vmAddress(globalVersion)
 	switch suggestedMsg.MsgType {
 	case tlb.MsgTypeInternal:
 		intMsg := suggestedMsg.AsInternal()
+		suggestedExtraFlags = intMsg.IHRFee.NanoRef()
+		if globalVersion >= 12 && (!msgValidation.extraFlagsCanonical || !suggestedExtraFlags.IsUint64() || suggestedExtraFlags.Uint64()&^uint64(3) != 0) {
+			return transactionSendResultCode(out, mode, 45, globalVersion), nil
+		}
 		if !transactionOutboundSourceValid(intMsg.SrcAddr, sourceAddr, acc.exactAddress()) {
 			return transactionSendInvalidSource(out, mode, globalVersion), nil
 		}
@@ -686,6 +717,12 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		}
 	case tlb.MsgTypeExternalOut:
 		extMsg := suggestedMsg.AsExternalOut()
+		// an outbound external message accepts only the two low mode bits,
+		// and that is rejected before the source address is looked at
+		if mode&^uint8(3) != 0 {
+			out.resultCode = 34
+			return out, nil
+		}
 		if !transactionOutboundSourceValid(extMsg.SrcAddr, sourceAddr, acc.exactAddress()) {
 			return transactionSendInvalidSource(out, mode, globalVersion), nil
 		}
@@ -722,10 +759,6 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		if extMsg.DstAddr != nil && extMsg.DstAddr.Type() != address.NoneAddress && extMsg.DstAddr.Type() != address.ExtAddress {
 			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 		}
-		if mode&^uint8(3) != 0 {
-			out.resultCode = 34
-			return out, nil
-		}
 		actionFineEnabled := globalVersion >= 4
 		stats := normalized.stats
 		if normalized.packingFailed {
@@ -748,10 +781,11 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 			}
 			return transactionSendResultCode(out, mode, sizeCode, globalVersion), nil
 		}
-		fwdFee := transactionComputeForwardFeeForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage)
+		computedFwdFee := transactionComputeForwardFeeForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage)
 		if acc.isSpecial {
-			fwdFee.SetInt64(0)
+			computedFwdFee.SetInt64(0)
 		}
+		fwdFee := transactionSelectComputedMessageFee(computedFwdFee, nil)
 		if remainingBalance.grams.Cmp(fwdFee) < 0 {
 			if actionFineEnabled && !acc.isSpecial {
 				out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage, remainingBalance.grams)
@@ -785,10 +819,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		if globalVersion >= 11 {
 			intMsg.IHRDisabled = true
 		}
-		extraFlags := intMsg.IHRFee.Nano()
-		if globalVersion >= 12 && (!msgValidation.extraFlagsCanonical || !extraFlags.IsUint64() || extraFlags.Uint64()&^uint64(3) != 0) {
-			return transactionSendResultCode(out, mode, 45, globalVersion), nil
-		}
+		extraFlags := suggestedExtraFlags
 
 		req, err := transactionCurrencyFromOwnedParts(intMsg.Amount.Nano(), intMsg.ExtraCurrencies)
 		if err != nil {
@@ -846,7 +877,7 @@ func transactionValidateRelaxedActionMessageCurrencies(root *cell.Cell) (transac
 		return out, fmt.Errorf("%w: outbound message cell is nil", errTransactionInvalidRelaxedActionMessage)
 	}
 
-	sl, err := root.BeginParseWithoutTrace()
+	sl, err := root.BeginParse()
 	if err != nil {
 		return out, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
@@ -927,21 +958,25 @@ func transactionValidateCanonicalExtraCurrencyCollection(sl *cell.Slice) (bool, 
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
-	items, err := root.AsDict(32).LoadAll()
+	iterator, err := root.AsDict(32).Iterator(false, false)
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
 
 	canonical := true
-	for _, item := range items {
-		itemCanonical, err := transactionLoadRelaxedVarUIntCanonical(item.Value, 32, true)
+	for iterator.Next() {
+		value := iterator.View().Value
+		itemCanonical, err := transactionLoadRelaxedVarUIntCanonical(&value, 32, true)
 		if err != nil {
 			return false, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 		}
 		canonical = canonical && itemCanonical
-		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+		if value.BitsLeft() != 0 || value.RefsNum() != 0 {
 			return false, errors.New("extra currency value has trailing data")
 		}
+	}
+	if err = iterator.Err(); err != nil {
+		return false, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
 	return canonical, nil
 }
@@ -1026,10 +1061,10 @@ func transactionValidateRelaxedActionMessageTail(sl *cell.Slice) (transactionOut
 func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc *transactionRuntimeAccount, intMsg *tlb.InternalMessage, layout transactionOutboundLayout, merkleDepth uint16, sendMode uint8, extraFlags *big.Int, cfg *PreparedBlockchainConfig, globalVersion uint32, remainingBalance, msgBalanceRemaining, baseReq *transactionCurrencyBalance, gasFees, currentActionFine *big.Int) (*transactionSendActionResult, transactionOutboundLayout, error) {
 	res := &transactionSendActionResult{
 		debit:           transactionZeroCurrencyBalance(),
-		totalFwdFees:    big.NewInt(0),
-		totalActionFees: big.NewInt(0),
-		actionFine:      big.NewInt(0),
-		failActionFine:  big.NewInt(0),
+		totalFwdFees:    bigint.FromInt64(0),
+		totalActionFees: bigint.FromInt64(0),
+		actionFine:      bigint.FromInt64(0),
+		failActionFine:  bigint.FromInt64(0),
 		bounceOnFail:    out.bounceOnFail,
 	}
 
@@ -1037,7 +1072,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	if err != nil {
 		return nil, layout, err
 	}
-	actionFine := big.NewInt(0)
+	actionFine := bigint.FromInt64(0)
 	maxFineCells := transactionGetSizeLimits(cfg).maxMsgCells
 	fineLimitedByFunds := false
 	if globalVersion >= 4 && !acc.isSpecial {
@@ -1054,15 +1089,16 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 		computedFwdFee.SetInt64(0)
 		computedIHRFee.SetInt64(0)
 	}
-	fwdFee := computedFwdFee
-	ihrFee := computedIHRFee
+	var suggestedFwdFee, suggestedIHRFee *big.Int
 	if globalVersion < 8 {
-		if suggestedFwdFee := intMsg.FwdFee.Nano(); suggestedFwdFee.Cmp(fwdFee) > 0 {
-			fwdFee = suggestedFwdFee
-		}
-		if !intMsg.IHRDisabled && extraFlags.Cmp(ihrFee) > 0 {
-			ihrFee = new(big.Int).Set(extraFlags)
-		}
+		suggestedFwdFee = intMsg.FwdFee.NanoRef()
+		suggestedIHRFee = extraFlags
+	}
+	fwdFee := transactionSelectComputedMessageFee(computedFwdFee, suggestedFwdFee)
+	ihrFee := transactionSelectComputedMessageFee(computedIHRFee, suggestedIHRFee)
+	if intMsg.IHRDisabled {
+		// The reference applies the selector first, then clears IHR fees.
+		ihrFee = computedIHRFee
 	}
 	totalFees := new(big.Int).Add(fwdFee, ihrFee)
 	collectedFwdFee := transactionFirstPartForwardFee(cfg, acc.addr, intMsg.DstAddr, fwdFee)
@@ -1074,7 +1110,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	extraRewritten := globalVersion >= 10
 	if mode&128 != 0 {
 		if globalVersion >= 10 {
-			req.grams = new(big.Int).Set(remainingBalance.grams)
+			req.grams = bigint.Set(remainingBalance.grams)
 		} else {
 			req = remainingBalance.copy()
 			extraRewritten = true
@@ -1084,7 +1120,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	} else if mode&64 != 0 {
 		req.grams.Add(req.grams, msgBalanceRemaining.grams)
 		if globalVersion < 10 && len(msgBalanceRemaining.extra) > 0 {
-			req.add(&transactionCurrencyBalance{grams: big.NewInt(0), extra: msgBalanceRemaining.extra})
+			req.add(&transactionCurrencyBalance{grams: bigint.FromInt64(0), extra: msgBalanceRemaining.extra})
 			extraRewritten = true
 		}
 		clearMsgBalance = true
@@ -1104,7 +1140,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	}
 
 	debit := req.copy()
-	msgAmount := new(big.Int).Set(req.grams)
+	msgAmount := bigint.Set(req.grams)
 	if mode&1 != 0 {
 		debit.grams.Add(debit.grams, totalFees)
 	} else {
@@ -1127,7 +1163,8 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	}
 
 	outMsg := *intMsg
-	outMsg.Amount = tlb.FromNanoTON(msgAmount)
+	// msgAmount was built for this message and is dead after this line.
+	outMsg.Amount = tlb.FromOwnedNanoTON(msgAmount)
 	if extraRewritten {
 		outMsg.ExtraCurrencies, err = req.extraDict()
 		if err != nil {
@@ -1275,6 +1312,11 @@ func transactionProcessReserveAction(act tlb.ActionReserveCurrency, nonCanonical
 	}
 
 	if mode&4 != 0 {
+		if originalBalance == nil {
+			// the base went negative and is not a valid currency collection
+			out.resultCode = 34
+			return out, nil
+		}
 		if mode&8 != 0 {
 			if globalVersion < 10 {
 				nextReserve := originalBalance.copy()
@@ -1416,7 +1458,7 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 		return out, nil
 	}
 
-	stats, err := transactionCellStatsForRoots(libRef)
+	stats, err := transactionCellStatsForRoots(true, libRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1597,16 +1639,16 @@ func transactionInternalMessageToCellWithLayout(msg *tlb.InternalMessage, layout
 		if err := builder.StoreAddr(msg.DstAddr); err != nil {
 			return nil, err
 		}
-		if err := builder.StoreBigCoins(msg.Amount.Nano()); err != nil {
+		if err := builder.StoreBigCoins(msg.Amount.NanoRef()); err != nil {
 			return nil, err
 		}
 		if err := builder.StoreDict(msg.ExtraCurrencies); err != nil {
 			return nil, err
 		}
-		if err := builder.StoreBigCoins(msg.IHRFee.Nano()); err != nil {
+		if err := builder.StoreBigCoins(msg.IHRFee.NanoRef()); err != nil {
 			return nil, err
 		}
-		if err := builder.StoreBigCoins(msg.FwdFee.Nano()); err != nil {
+		if err := builder.StoreBigCoins(msg.FwdFee.NanoRef()); err != nil {
 			return nil, err
 		}
 		if err := builder.StoreUInt(msg.CreatedLT, 64); err != nil {

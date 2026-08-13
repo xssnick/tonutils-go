@@ -26,6 +26,7 @@ type augmentedCombineNode struct {
 
 type augmentedCombineState struct {
 	aug                   Augmentation
+	trace                 *Trace
 	loader, cursor        Slice
 	leftExtra, rightExtra Slice
 	extra, payload, node  Builder
@@ -56,17 +57,24 @@ func (d *AugmentedDictionary) CombineWith(other *AugmentedDictionary) (bool, err
 	}
 
 	if d.root == nil {
-		extra, err := chooseAugmentedRootExtraForCombine(other.root, other.rootExtra, d.keySz, d.aug)
+		root := other.root.withTraceCombined(d.trace)
+		extra, err := chooseAugmentedRootExtraForCombine(root, other.rootExtra, d.keySz, d.aug)
 		if err != nil {
 			return false, err
 		}
-		if err := d.setRootWithExtra(other.root, extra); err != nil {
+		if err := d.setRootWithExtra(root, extra); err != nil {
 			return false, err
 		}
 		return true, nil
 	}
 
-	root, extra, err := combineAugmentedRoots(d.root, other.root, d.keySz, d.aug)
+	root, extra, err := combineAugmentedRoots(
+		d.root.withTraceCombined(d.trace),
+		other.root.withTraceCombined(d.trace),
+		d.keySz,
+		d.aug,
+		d.trace,
+	)
 	if errors.Is(err, errAugmentedDictionaryConflict) {
 		return false, nil
 	}
@@ -81,8 +89,8 @@ func (d *AugmentedDictionary) CombineWith(other *AugmentedDictionary) (bool, err
 	return true, nil
 }
 
-func combineAugmentedRoots(left, right *Cell, keySz uint, aug Augmentation) (*Cell, *Cell, error) {
-	state := augmentedCombineState{aug: aug}
+func combineAugmentedRoots(left, right *Cell, keySz uint, aug Augmentation, trace *Trace) (*Cell, *Cell, error) {
+	state := augmentedCombineState{aug: aug, trace: trace}
 	root, extra, err := combineAugmentedRootViews(
 		augmentedRootView{cell: left, keySz: keySz},
 		augmentedRootView{cell: right, keySz: keySz},
@@ -309,6 +317,11 @@ func parseAugmentedNodeForCombine(view augmentedRootView, state *augmentedCombin
 	if err := view.cell.BeginParseInto(&state.loader); err != nil {
 		return augmentedCombineNode{}, err
 	}
+	if trace := state.loader.Trace(); trace != nil {
+		if err := trace.PendingError(); err != nil {
+			return augmentedCombineNode{}, err
+		}
+	}
 	if state.loader.cell.IsSpecial() {
 		return augmentedCombineNode{}, fmt.Errorf("augmented dictionary merge does not support special cells inside dict tree: %v", state.loader.cell.GetType())
 	}
@@ -419,7 +432,7 @@ func storeAugmentedForkForCombine(label *Slice, left *Cell, leftExtra *Slice, ri
 		return nil, Slice{}, err
 	}
 
-	state.node = Builder{}
+	state.node = Builder{trace: state.trace}
 	if err := storeDictLabel(&state.node, label, keySz); err != nil {
 		return nil, Slice{}, err
 	}
@@ -463,7 +476,7 @@ func materializeAugmentedNodeSuffixForCombine(node augmentedCombineNode, skip ui
 		state.payload.refs[i] = loaded
 	}
 
-	state.node = Builder{}
+	state.node = Builder{trace: state.trace}
 	label := node.visibleLabelValue(skip, node.visibleLabelLen()-skip)
 	if err := storeDictLabel(&state.node, &label, keySz); err != nil {
 		return nil, err

@@ -276,7 +276,7 @@ func (e *continuationEncoder) serializeControlRegisters(b *cell.Builder, registe
 	}
 
 	for i, cont := range registers.C {
-		if cont != nil {
+		if !vm.IsNullContinuation(cont) {
 			if err := store(i, cont); err != nil {
 				return err
 			}
@@ -499,9 +499,13 @@ func parsePushIntContinuation(slice *cell.Slice) (vm.Continuation, error) {
 }
 
 func parseContinuationRef(slice *cell.Slice) (vm.Continuation, error) {
-	ref, err := slice.LoadRef()
+	base, err := slice.LoadRefCell()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load continuation ref: %w", err)
+	}
+	ref, err := loadOrdinaryStackCell(base)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load continuation ref cell: %w", err)
 	}
 	cont, err := parseContinuation(ref)
 	if err != nil {
@@ -573,21 +577,24 @@ func parseControlRegisters(slice *cell.Slice) (vm.Register, error) {
 	if err != nil {
 		return registers, fmt.Errorf("failed to load control register dictionary: %w", err)
 	}
-	items, err := dict.LoadAll()
+	iterator, err := dict.Iterator(false, false)
 	if err != nil {
 		return registers, fmt.Errorf("failed to load control register values: %w", err)
 	}
 
-	for _, item := range items {
-		index, err := item.Key.LoadUInt(4)
+	for iterator.Next() {
+		item := iterator.View()
+		key := item.Key
+		index, err := key.LoadUInt(4)
 		if err != nil {
 			return registers, fmt.Errorf("failed to load control register index: %w", err)
 		}
-		value, err := ParseStackValue(item.Value)
+		encoded := item.Value
+		value, err := ParseStackValue(&encoded)
 		if err != nil {
 			return registers, fmt.Errorf("failed to parse c%d: %w", index, err)
 		}
-		if item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+		if encoded.BitsLeft() != 0 || encoded.RefsNum() != 0 {
 			return registers, fmt.Errorf("c%d has trailing data", index)
 		}
 		value, err = stackValueToVM(value)
@@ -598,32 +605,36 @@ func parseControlRegisters(slice *cell.Slice) (vm.Register, error) {
 			return registers, fmt.Errorf("invalid value for c%d", index)
 		}
 	}
+	if err = iterator.Err(); err != nil {
+		return registers, fmt.Errorf("failed to load control register values: %w", err)
+	}
 
 	return registers, nil
 }
 
 func vmStackValueToTLB(value any) (any, error) {
-	valueTuple, ok := value.(tuple.Tuple)
-	if !ok {
+	switch value := value.(type) {
+	case tuple.Tuple:
+		if value.IsNull() {
+			return nil, fmt.Errorf("cannot serialize nil tuple reference")
+		}
+		if value.Len() > 1<<16-1 {
+			return nil, fmt.Errorf("tuple length does not fit uint16")
+		}
+
+		values := make([]any, value.Len())
+		for i := range values {
+			item, err := value.RawIndex(i)
+			if err != nil {
+				return nil, fmt.Errorf("failed to load tuple element %d: %w", i, err)
+			}
+			values[i] = item
+		}
+
+		return values, nil
+	default:
 		return value, nil
 	}
-	if valueTuple.IsNull() {
-		return nil, nil
-	}
-	if valueTuple.Len() > 1<<16-1 {
-		return nil, fmt.Errorf("tuple length does not fit uint16")
-	}
-
-	values := make([]any, valueTuple.Len())
-	for i := range values {
-		item, err := valueTuple.RawIndex(i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load tuple element %d: %w", i, err)
-		}
-		values[i] = item
-	}
-
-	return values, nil
 }
 
 func stackValueToVM(value any) (any, error) {
