@@ -24,6 +24,26 @@ const readSetInitialSlots = 16
 // as much on its own.
 const readSetMaxPresizedCells = 1 << 20
 
+// referencedFrontierPercent is the frontier's size as a share of the read set.
+// Measured across whole blocks of the fixture family it was 0.525-0.690, and it
+// is far steadier than either count on its own: over that same family the hint
+// itself was wrong by -47% to +88%. That is what makes the hint usable here —
+// not as the frontier's size, but as the thing the frontier is proportional to.
+const referencedFrontierPercent = 70
+
+// referencedMaxPresizedCells caps what the frontier presize honours, so a hint
+// wrong by orders of magnitude allocates a bounded table rather than an
+// arbitrary one. The read half carries the same ceiling for the same reason.
+//
+// It is a separate constant from readSetMaxPresizedCells despite holding the
+// same number, because it bounds a different set of inputs: not only the hint —
+// which reaches this code having already been clamped once, and must not depend
+// on that having happened — but also the read-count floor below, which is a live
+// counter with no ceiling of its own. A frontier genuinely this large stands
+// over a resident tree of at least as many cells, so a table this size is
+// proportionate to what the caller already holds.
+const referencedMaxPresizedCells = 1 << 20
+
 // ReadSet records which cells of a tree were read, and is the sole record a Merkle
 // proof or a state update is built from.
 //
@@ -43,6 +63,15 @@ const readSetMaxPresizedCells = 1 << 20
 type ReadSet struct {
 	source *Cell
 	trace  *Trace
+
+	// sealed closes the recorder for good. Cells handed out while it was open
+	// keep pointing at its trace, so a caller that retains one of them past the
+	// proof it was recording for would otherwise retain the whole set — the
+	// source tree and a six-figure table — and would keep recording into it from
+	// every later descent through that cell. Sealing answers both: the write
+	// paths become no-ops and ChildTrace stops propagating, so descending a
+	// retained cell is a plain descent again, sharing rather than copying.
+	sealed atomic.Bool
 
 	shards [readSetShards]readSetShard
 
@@ -83,6 +112,20 @@ type ReadSet struct {
 	referenced     readSetShard
 	referencedFrom [readSetShards]int
 	referencedAt   atomic.Int64
+
+	// expected is the whole-set estimate NewReadSetSized was given, kept because
+	// the frontier above is sized long after the read half is: its one and only
+	// sizing decision is taken at the first Prunable question, which the
+	// proof-size estimator asks during collation, when a few dozen cells have
+	// been read out of the six figures that will be. Sized from what has been
+	// read at that moment the frontier doubles seven times and discards every
+	// generation but the last; sized from the estimate it is allocated once.
+	//
+	// It is a capacity hint and nothing else. Nothing is pooled or carried
+	// across recorders — a table holds *Cell of the source tree, which is why
+	// Seal exists — and a wrong estimate costs only the growth it failed to
+	// avoid.
+	expected int
 }
 
 // readSetShard is an open-addressed table rather than a map[Hash]*Cell: the key is
@@ -109,17 +152,26 @@ type readSetShard struct {
 // store is a release, so a reader that observes a slot observes a complete entry.
 // Both are allocated at full length, never appended to, so a reader indexing into
 // them cannot race a reallocation.
+//
+// The entry arrays are sized independently of the slot array. They used to be
+// slots/2, which tied the two dimensions that cost the most different amounts: a
+// slot is 8 bytes and exists to keep the probe short, an entry is 40 (a 32-byte
+// hash and a pointer) and exists to hold a cell. With them tied, buying probe
+// headroom bought entry capacity nobody asked for — and because the slot count
+// is rounded to a power of two, a table sized for the same population the shard
+// really reaches landed one doubling above it and paid 56 bytes per slot for the
+// privilege. Sized apart, slots stay generous and entries track the population.
 type readSetTable struct {
 	slots  []atomic.Uint64 // fingerprint<<32 | (index+1); zero is empty
 	hashes []Hash
 	cells  []*Cell
 }
 
-func newReadSetTable(slots int) *readSetTable {
+func newReadSetTable(slots, entries int) *readSetTable {
 	return &readSetTable{
 		slots:  make([]atomic.Uint64, slots),
-		hashes: make([]Hash, slots/2),
-		cells:  make([]*Cell, slots/2),
+		hashes: make([]Hash, entries),
+		cells:  make([]*Cell, entries),
 	}
 }
 
@@ -148,12 +200,19 @@ func NewReadSet(root *Cell) *ReadSet {
 // this is never worse than NewReadSet by more than the hint is wrong.
 func NewReadSetSized(root *Cell, expectedCells int) *ReadSet {
 	rs := NewReadSet(root)
+	if expectedCells > readSetMaxPresizedCells {
+		expectedCells = readSetMaxPresizedCells
+	}
+	if expectedCells > 0 {
+		rs.expected = expectedCells
+	}
 	slots := readSetSlotsFor(expectedCells)
 	if slots <= readSetInitialSlots {
 		return rs
 	}
+	entries := readSetEntriesFor(expectedCells)
 	for i := range rs.shards {
-		rs.shards[i].table.Store(newReadSetTable(slots))
+		rs.shards[i].table.Store(newReadSetTable(slots, entries))
 	}
 	return rs
 }
@@ -177,6 +236,33 @@ func readSetSlotsFor(expectedCells int) int {
 		slots *= 2
 	}
 	return slots
+}
+
+// readSetShardSkewPercent is how much more than an even split the busiest shard
+// is allowed before its entry array has to grow. Cells are spread by a byte of a
+// cryptographic hash, and across whole-block recorders the busiest shard measured
+// 1.9-4.5% above the average; the allowance is that spread with room to spare.
+//
+// It replaces the 25% the slot sizing carries. That figure never protected
+// anything — rounding the slot count up to a power of two is what absorbs the
+// skew, and it absorbs far more than a quarter — while on the entry side it is
+// the difference between one allocation and two.
+const readSetShardSkewPercent = 15
+
+// readSetEntriesFor is the per-shard entry capacity for a whole-set estimate.
+// Entries are the expensive dimension, so they are sized to the population the
+// shard is expected to hold rather than to the slot count that keeps its probes
+// short. A shard that outgrows the allowance still grows, and it then doubles 40
+// bytes per entry instead of 56 per slot.
+func readSetEntriesFor(expectedCells int) int {
+	if expectedCells <= 0 {
+		return readSetInitialSlots / 2
+	}
+	if expectedCells > readSetMaxPresizedCells {
+		expectedCells = readSetMaxPresizedCells
+	}
+	perShard := (expectedCells + readSetShards - 1) / readSetShards
+	return perShard + perShard*readSetShardSkewPercent/100
 }
 
 // Trace returns the trace that records into this set. It is safe to combine with
@@ -229,14 +315,61 @@ func (rs *ReadSet) OnCreate() {}
 // ChildTrace implements TraceListener. Returning the same trace for every
 // reference is what makes descent free: there is no per-position node to create, so
 // a dictionary walk allocates nothing to stay recorded.
+//
+// A sealed set returns nil, which is what stops a retained cell from dragging a
+// dead recorder down its whole subtree.
 func (rs *ReadSet) ChildTrace(int) *Trace {
+	if rs.sealed.Load() {
+		return nil
+	}
 	return rs.trace
+}
+
+// Seal closes the recorder. Every write path becomes a no-op, ChildTrace stops
+// propagating, and the recorded table and the source tree are dropped.
+//
+// It is for the caller that keeps cells the recorder handed out after the proof
+// or update built from those reads is finished — a produced block, for instance,
+// embeds cells read out of the predecessor. Those cells carry this set's trace,
+// and without sealing they retain its table for as long as the block is retained
+// and record every later descent through them into a set nobody will read again.
+//
+// Reading must be over before this is called: it is the caller's statement that
+// nothing will consult the record again, so it does not synchronize with readers
+// beyond making the write paths safe to hit.
+func (rs *ReadSet) Seal() {
+	if rs == nil || rs.sealed.Swap(true) {
+		return
+	}
+	for i := range rs.shards {
+		shard := &rs.shards[i]
+		shard.mu.Lock()
+		shard.table.Store(nil)
+		shard.used = 0
+		shard.mu.Unlock()
+	}
+	rs.referencedMu.Lock()
+	rs.referenced.table.Store(nil)
+	rs.referenced.used = 0
+	rs.referencedFrom = [readSetShards]int{}
+	rs.referencedAt.Store(0)
+	rs.referencedMu.Unlock()
+	rs.source = nil
+	rs.onRecord = nil
+}
+
+// Sealed reports whether the recorder is closed.
+func (rs *ReadSet) Sealed() bool {
+	return rs != nil && rs.sealed.Load()
 }
 
 // PendingError implements TraceListener. Recording cannot fail.
 func (rs *ReadSet) PendingError() error { return nil }
 
 func (rs *ReadSet) record(c *Cell) {
+	if rs.sealed.Load() {
+		return
+	}
 	// A lazy placeholder carries hashes but no body, so recording it would put a
 	// cell in the proof that cannot be serialized. The materialized cell arrives
 	// through the same trace as soon as it is resolved.
@@ -283,7 +416,7 @@ func (rs *ReadSet) Record(c *Cell) {
 // that are never emitted, and the estimate is a floor with a hard check on the
 // real serialized size behind it, so leaving them uncharged is the safe side.
 func (rs *ReadSet) RecordUnbilled(c *Cell) {
-	if rs == nil || c == nil || c.IsLazy() {
+	if rs == nil || c == nil || c.IsLazy() || rs.sealed.Load() {
 		return
 	}
 	raw := c.getHash(_DataCellMaxLevel)
@@ -428,15 +561,7 @@ func (rs *ReadSet) extendReferencedLocked() {
 	// what makes the next call pick that cell up.
 	upTo := rs.recorded.Load()
 	if rs.referenced.table.Load() == nil {
-		// The frontier ends up the same order of magnitude as the read half, and
-		// growing into it from the default sixteen slots rehashes everything
-		// inserted so far ten times over. The first question already knows how
-		// much has been read, so start there instead.
-		slots := readSetInitialSlots
-		for slots < 4*int(upTo) {
-			slots *= 2
-		}
-		rs.referenced.table.Store(newReadSetTable(slots))
+		rs.referenced.table.Store(newReadSetTable(referencedTableFor(upTo, rs.expected)))
 	}
 
 	for i := range rs.shards {
@@ -479,6 +604,75 @@ func (rs *ReadSet) extendReferencedLocked() {
 		}
 	}
 	rs.referencedAt.Store(upTo)
+}
+
+// referencedTableFor is the frontier's one and only sizing decision: how many
+// slots and how many entries to allocate, given the cells read so far and the
+// whole-set hint the recorder was opened with.
+//
+// The frontier ends up the same order of magnitude as the read half, and growing
+// into it from the default sixteen slots rehashes everything inserted so far ten
+// times over. What has been read at the moment of the decision is a poor thing
+// to size it from, because of when that moment is: the proof-size estimator asks
+// its first Prunable question during prepare, with a few dozen cells recorded out
+// of the six figures a block reads, so a table sized from it doubles seven more
+// times and throws away every generation but the last.
+//
+// So the hint sizes it — but as a proportion and inside a ceiling, never as the
+// figure itself. The hint is the previous block's read count, and one builder
+// serves collations whose read sets differ by an order of magnitude, so a stale
+// one arriving unbounded is what turns this single decision into tens of
+// megabytes the block being collated will never fill. Three things hold it:
+//
+//   - the measured share of the hint, not the hint;
+//   - the read count as a floor, which is what ties the table to the block
+//     actually being collated and is the whole sizing for a recorder opened
+//     without a hint (the behaviour this replaced, unchanged);
+//   - the ceiling, which bounds both of the above.
+//
+// Which of those decided the population also decides how the entry arrays are
+// sized, and that is not a detail: a slot is 8 bytes and buys probe headroom, an
+// entry is 40 and holds a cell.
+//
+//   - The hint is an estimate of the finished frontier, so the entries are sized
+//     to it. Half the slots would be the same number rounded up to a power of
+//     two — 8192 entries where 6556 are wanted, 65 kB of hashes and pointers for
+//     a table that was never going to grow.
+//   - The floor is not an estimate of anything finished: it is what has been read
+//     by a moment somebody else chose, and the table will therefore grow. Entries
+//     stay at half the slots there, because that is the one ratio at which both
+//     dimensions run out together. Sized any tighter they alternate, and since a
+//     generation rebuilds the slot array either way, alternating doubles the
+//     number of rehashes.
+func referencedTableFor(upTo int64, expected int) (slots, entries int) {
+	if expected > referencedMaxPresizedCells {
+		expected = referencedMaxPresizedCells
+	}
+	if upTo > referencedMaxPresizedCells {
+		upTo = referencedMaxPresizedCells
+	}
+	population := expected * referencedFrontierPercent / 100
+	// The floor is two entries per cell read, which is the population the four
+	// times upTo slots this used to ask for would have held.
+	fromHint := true
+	if floor := 2 * int(upTo); floor > population {
+		population, fromHint = floor, false
+	}
+	if population > referencedMaxPresizedCells {
+		population = referencedMaxPresizedCells
+	}
+
+	slots = readSetInitialSlots
+	for slots < 2*population {
+		slots *= 2
+	}
+	entries = slots / 2
+	// Never below the lazy default: a recorder with no hint and nothing read is
+	// the ordinary small read set, and it starts where it always did.
+	if fromHint && population < entries && population > readSetInitialSlots/2 {
+		entries = population
+	}
+	return slots, entries
 }
 
 // Size returns how many distinct cells were read. It is the proof's cell count, and
@@ -560,9 +754,9 @@ func (s *readSetShard) insert(hash Hash, c *Cell) bool {
 
 	table := s.table.Load()
 	if table == nil {
-		table = newReadSetTable(readSetInitialSlots)
+		table = newReadSetTable(readSetInitialSlots, readSetInitialSlots/2)
 		s.table.Store(table)
-	} else if s.used*2 >= len(table.slots) {
+	} else if s.used >= len(table.hashes) || s.used*2 >= len(table.slots) {
 		table = s.growLocked(table)
 	}
 
@@ -644,8 +838,22 @@ func (s *readSetShard) lookup(hash Hash) (*Cell, bool) {
 
 // growLocked publishes a larger generation. Readers on the old table keep finding
 // everything it held, so the swap needs no coordination with them.
+//
+// Whichever dimension ran out is the one that doubles: a shard that filled its
+// entries while its slots are still half empty gets entries, and pays for probe
+// headroom only when the probes actually need it. The slot array is rebuilt
+// either way — the two generations cannot share it, since a reader left on the
+// old table would index its shorter entry arrays with a slot the new table
+// published.
 func (s *readSetShard) growLocked(old *readSetTable) *readSetTable {
-	next := newReadSetTable(len(old.slots) * 2)
+	slots, entries := len(old.slots), len(old.hashes)
+	if s.used*2 >= slots {
+		slots *= 2
+	}
+	if s.used >= entries {
+		entries *= 2
+	}
+	next := newReadSetTable(slots, entries)
 	copy(next.hashes, old.hashes[:s.used])
 	copy(next.cells, old.cells[:s.used])
 

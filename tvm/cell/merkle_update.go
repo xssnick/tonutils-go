@@ -17,14 +17,24 @@ type merkleUpdateCellKey struct {
 
 // merkleUpdateKnownCell keeps the depth needed to verify effective masks,
 // hashes and depths when the same source boundary is encountered again.
+//
+// slot is the parent-side boundary slot this hash owns while a plan is being
+// recorded (see merkle_update_prepared.go), and -1 otherwise. It rides here
+// rather than in a second Hash-keyed map because the plan recording happens on
+// the hot path that the plans exist to take Hash-keyed maps off.
 type merkleUpdateKnownCell struct {
 	cell        *Cell
 	merkleDepth int
+	slot        int32
 }
 
 type merkleUpdateValidator struct {
 	known     map[Hash]merkleUpdateKnownCell
 	visitedTo map[merkleUpdateCellKey]struct{}
+	// plan records the destination walk for a PreparedMerkleUpdate. Nil on the
+	// plain ValidateMerkleUpdate path, where every method on it is a no-op, so
+	// there is exactly one destination traversal in this package.
+	plan *merkleUpdateDestPlan
 }
 
 type merkleUpdateSourceIndex struct {
@@ -69,14 +79,31 @@ type merkleUpdateCombiner struct {
 }
 
 func ValidateMerkleUpdate(update *Cell) error {
+	_, _, err := merkleUpdateVerdict(update, nil, nil)
+	return err
+}
+
+// merkleUpdateVerdict runs the two update-side walks that decide a Merkle
+// update's verdict, optionally recording them into plans.
+//
+// The verdict is a pure function of update: neither walk is given a source
+// root, which is why PrepareMerkleUpdate can decide it once for parents it has
+// never seen. src and dst are nil for ValidateMerkleUpdate, so both callers go
+// through the same traversal rather than through two copies of it.
+func merkleUpdateVerdict(
+	update *Cell,
+	src *merkleUpdateSourcePlan,
+	dst *merkleUpdateDestPlan,
+) (*Cell, *Cell, error) {
 	updateFrom, updateTo, err := merkleUpdateRootRefs(update, true)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 
 	validator := merkleUpdateValidator{
 		known:     map[Hash]merkleUpdateKnownCell{},
 		visitedTo: map[merkleUpdateCellKey]struct{}{},
+		plan:      dst,
 	}
 
 	if err := walkMerkleUpdateSource(
@@ -85,10 +112,14 @@ func ValidateMerkleUpdate(update *Cell) error {
 		map[merkleUpdateVisitKey]struct{}{},
 		true,
 		validator.known,
+		src,
 	); err != nil {
-		return err
+		return nil, nil, err
 	}
-	return validator.dfsTo(updateTo, 0)
+	if err := validator.dfsTo(updateTo, 0); err != nil {
+		return nil, nil, err
+	}
+	return updateFrom, updateTo, nil
 }
 
 func MayApplyMerkleUpdate(from, update *Cell) error {
@@ -280,13 +311,18 @@ func normalizeMerkleDepth(cell *Cell, merkleDepth int) int {
 	return cell.getLevelMask().Apply(merkleDepth).GetLevel()
 }
 
-func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateSource bool, known map[Hash]merkleUpdateKnownCell) error {
+func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpdateVisitKey]struct{}, validateSource bool, known map[Hash]merkleUpdateKnownCell, plan *merkleUpdateSourcePlan) error {
 	if source == nil {
 		return fmt.Errorf("merkle update contains nil reference")
 	}
 
 	key := merkleUpdateSeenKey(source, merkleDepth)
 	if _, ok := visited[key]; ok {
+		// walkProof does NOT stop here: it compares the boundary and rewrites
+		// its parent index before its own seen check. A recorded revisit is
+		// therefore a real step, carrying the same slot the first visit
+		// assigned, and only its descent is suppressed.
+		plan.repeat(source, merkleDepth, known)
 		return nil
 	}
 	visited[key] = struct{}{}
@@ -297,22 +333,28 @@ func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpd
 		}
 	}
 
-	if existing, ok := known[source.HashKeyAt(merkleDepth)]; ok {
+	hash := source.HashKeyAt(merkleDepth)
+	slot := int32(-1)
+	if existing, ok := known[hash]; ok {
 		// A repeated hash must describe the same effective cell, including its
 		// mask and depth.
 		if err := compareMerkleBoundaryCells(source, merkleDepth, existing.cell, existing.merkleDepth); err != nil {
 			return fmt.Errorf("conflicting cells in merkle update source: %w", err)
 		}
+		slot = existing.slot
 	} else {
-		known[source.HashKeyAt(merkleDepth)] = merkleUpdateKnownCell{cell: source, merkleDepth: merkleDepth}
+		slot = plan.newSlot()
+		known[hash] = merkleUpdateKnownCell{cell: source, merkleDepth: merkleDepth, slot: slot}
 	}
 	if source.GetType() == PrunedCellType {
+		plan.add(source, hash, merkleDepth, slot, 0, false)
 		return nil
 	}
 
 	sourceRefs := newCellRefView(source)
 	childDepth := merkleChildDepth(source, merkleDepth)
 	refsCount := source.refsCount()
+	step := plan.add(source, hash, merkleDepth, slot, refsCount, true)
 	for i := 0; i < refsCount; i++ {
 		sourceRef, err := sourceRefs.boundaryRef(i)
 		if err != nil {
@@ -322,7 +364,11 @@ func walkMerkleUpdateSource(source *Cell, merkleDepth int, visited map[merkleUpd
 		if err != nil {
 			return fmt.Errorf("failed to load source ref %d: %w", i, err)
 		}
-		if err := walkMerkleUpdateSource(sourceRef, childDepth, visited, validateSource, known); err != nil {
+		// The parent-side load/virtualize choice for this edge, decided from the
+		// update-source shape and recorded now so that no replay can ever
+		// consult the parent for it. See merkleUpdateSourceTreeRef.
+		plan.markPrunedChild(step, i, sourceRef.GetType() == PrunedCellType)
+		if err := walkMerkleUpdateSource(sourceRef, childDepth, visited, validateSource, known, plan); err != nil {
 			return err
 		}
 	}
@@ -447,7 +493,16 @@ func buildMerkleUpdateCell(cell *Cell, merkleDepth int, known map[Hash]*Cell, re
 }
 
 func merkleUpdateSourceTreeRef(refs *cellRefView, shapeRef *Cell, i int) (*Cell, error) {
-	if shapeRef.GetType() == PrunedCellType {
+	return merkleUpdateSourceTreeRefAt(refs, shapeRef.GetType() == PrunedCellType, i)
+}
+
+// merkleUpdateSourceTreeRefAt is the single place where a source-tree edge is
+// either virtualized without touching storage (a pruned shape ref) or actually
+// loaded. shapePruned is read from the UPDATE, never from the parent: choosing
+// from the parent is how a walk starts loading subtrees the reference node
+// never loads, or virtualizes where it must load.
+func merkleUpdateSourceTreeRefAt(refs *cellRefView, shapePruned bool, i int) (*Cell, error) {
+	if shapePruned {
 		return refs.logicalBoundaryRef(i), nil
 	}
 
@@ -486,14 +541,23 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 		return fmt.Errorf("merkle update contains nil reference")
 	}
 
+	// visitedTo is keyed by POINTER, buildMerkleUpdateCell memoizes by hash: two
+	// different identity notions over the same subtree, both deliberate. The
+	// plan keeps both — its step list is this pointer-keyed traversal, and every
+	// rebuildable step additionally carries the hash-keyed memo slot the build
+	// pass dedups on. Collapsing either into the other loses a rejection or
+	// loses the result's shared-subtree reuse.
 	key := merkleUpdateCellKey{cell: cell, merkleDepth: merkleDepth}
-	if _, ok := v.visitedTo[key]; ok {
+	_, repeat := v.visitedTo[key]
+	if repeat && v.plan == nil {
 		return nil
 	}
-	v.visitedTo[key] = struct{}{}
+	if !repeat {
+		v.visitedTo[key] = struct{}{}
 
-	if err := validateLoadedCell(cell); err != nil {
-		return fmt.Errorf("invalid merkle update destination subtree: %w", err)
+		if err := validateLoadedCell(cell); err != nil {
+			return fmt.Errorf("invalid merkle update destination subtree: %w", err)
+		}
 	}
 
 	if hash, ok := merkleUpdatePrunedBoundaryHash(cell, merkleDepth); ok {
@@ -501,18 +565,35 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 		if !found {
 			return merkleUnknownPrunedError(hash)
 		}
-		if err := compareMerkleBoundaryCells(cell, merkleDepth, knownCell.cell, knownCell.merkleDepth); err != nil {
-			return fmt.Errorf("invalid pruned cell in merkle update: %w", err)
+		if !repeat {
+			if err := compareMerkleBoundaryCells(cell, merkleDepth, knownCell.cell, knownCell.merkleDepth); err != nil {
+				return fmt.Errorf("invalid pruned cell in merkle update: %w", err)
+			}
 		}
+		v.plan.addBoundary(cell, merkleDepth, knownCell.slot)
 		return nil
 	}
 	if cell.GetType() == PrunedCellType {
+		v.plan.addPassthrough(cell, merkleDepth)
 		return nil
 	}
 
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	refsNum := cell.refsCount()
+	if refsNum == 0 {
+		// buildMerkleUpdateCell hands a childless destination cell straight
+		// back, without memoizing it, so the plan records the same.
+		v.plan.addPassthrough(cell, merkleDepth)
+		return nil
+	}
+	step := v.plan.addRebuild(cell, merkleDepth, refsNum, repeat)
+	if repeat {
+		// The first visit of this pointer already recorded the subtree, and the
+		// replay reaches this step only through a filled memo slot.
+		v.plan.close(step)
+		return nil
+	}
 	for i := 0; i < refsNum; i++ {
 		ref, err := refView.boundaryRef(i)
 		if err != nil {
@@ -526,6 +607,7 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 			return err
 		}
 	}
+	v.plan.close(step)
 	return nil
 }
 

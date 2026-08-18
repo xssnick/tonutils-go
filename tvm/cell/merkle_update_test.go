@@ -211,7 +211,7 @@ func TestCreateMerkleUpdateRepeatedCallsScopeBoundariesToTheirDestination(t *tes
 	keptBranchB := BeginCell().MustStoreUInt(0x1B, 8).MustStoreRef(prunedSharedB).EndCell()
 
 	toA := BeginCell().MustStoreUInt(0xDA, 8).MustStoreRef(readSharedA).EndCell()
-	updateFromA, _, _, err := rs.createMerkleUpdateRaw(toA, false)
+	updateFromA, _, _, _, err := rs.createMerkleUpdateRaw(toA, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +222,7 @@ func TestCreateMerkleUpdateRepeatedCallsScopeBoundariesToTheirDestination(t *tes
 	}
 
 	toB := BeginCell().MustStoreUInt(0xDB, 8).MustStoreRef(readSharedB).EndCell()
-	updateFromB, _, _, err := rs.createMerkleUpdateRaw(toB, false)
+	updateFromB, _, _, _, err := rs.createMerkleUpdateRaw(toB, false, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -897,7 +897,7 @@ func TestCreateMerkleUpdateRejectsNonZeroLevelRoots(t *testing.T) {
 	if _, err = rs.CreateMerkleUpdate(to); err == nil {
 		t.Fatal("expected merkle update generation to reject non-zero-level roots")
 	}
-	if _, _, _, err = rs.createMerkleUpdateRaw(to, false); err == nil {
+	if _, _, _, _, err = rs.createMerkleUpdateRaw(to, false, 0); err == nil {
 		t.Fatal("expected raw merkle update generation to reject non-zero-level roots")
 	}
 }

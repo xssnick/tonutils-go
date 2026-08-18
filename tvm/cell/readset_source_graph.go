@@ -66,7 +66,13 @@ type sourceNode struct {
 // means "the source tree holds this subtree", which is what an update needs
 // before it may prune a destination subtree onto the predecessor.
 func (rs *ReadSet) buildSourceGraph() (*sourceGraph, error) {
-	hint := rs.Size() * 2
+	// The record's size is already an over-estimate of this graph, not an
+	// under-estimate to be doubled: a node exists for a subtree the source holds,
+	// while the record also carries cells the transition rebuilt and read back,
+	// which the source never held. Measured on a mainnet block the graph is about
+	// seven tenths of the record — so doubling it allocated a nodes array, an
+	// edges array and a map for three times the population that arrives.
+	hint := rs.Size()
 	g := &sourceGraph{
 		nodes:  make([]sourceNode, 0, hint),
 		edges:  make([]int32, 0, hint),

@@ -64,12 +64,20 @@ type PreparedBlockchainConfig struct {
 	hasGlobalID bool
 
 	specialAccounts map[preparedAddr256]struct{}
-	blackholeAddr   *preparedAddr256
-	suspendedUntil  uint32
-	suspended       map[preparedSuspendedAddr]struct{}
-	precompiled     map[preparedAddr256]uint64
-	workchains      map[int32]*tlb.WorkchainDescr
-	hasWorkchains   bool
+	// specialAccountOrder is the same set as a sequence: the fundamental smart
+	// contracts of param 31 in dictionary order, with the configuration contract
+	// of param 0 appended last and only when param 31 does not already list it.
+	// The masterchain collator executes tick/tock in exactly this order, so the
+	// order is consensus data and not a presentation detail.
+	specialAccountOrder [][32]byte
+	// configAddr is param 0 when it is present and exactly 256 bits wide.
+	configAddr     *preparedAddr256
+	blackholeAddr  *preparedAddr256
+	suspendedUntil uint32
+	suspended      map[preparedSuspendedAddr]struct{}
+	precompiled    map[preparedAddr256]uint64
+	workchains     map[int32]*tlb.WorkchainDescr
+	hasWorkchains  bool
 
 	// unpackedParams are the raw param roots for c7 unpacked config elements
 	// 1..6 (see preparedUnpackedParamIDs); nil when the param is absent.
@@ -205,6 +213,51 @@ func (c *PreparedBlockchainConfig) Capabilities() uint64 {
 	return c.capabilities
 }
 
+// GasPrices returns the gas limits and prices of config param 20 (masterchain)
+// or 21 (basechain), decoded when this config was prepared. ok is false only for
+// a lenient config prepared without the param; the strict constructor requires
+// both.
+//
+// It is returned by value because the prepared config is shared between
+// concurrently executing account lanes and must stay immutable.
+func (c *PreparedBlockchainConfig) GasPrices(masterchain bool) (tlb.ConfigGasLimitsPrices, bool) {
+	prices := c.gasPricesFor(masterchain)
+	if prices == nil {
+		return tlb.ConfigGasLimitsPrices{}, false
+	}
+	return *prices, true
+}
+
+// ConfigAddress returns the configuration contract address of config param 0.
+// ok is false when the param is absent or is not 256 bits wide, which is the
+// case prepareSpecialAccounts skips silently; this reports what it decided
+// rather than re-deciding it.
+func (c *PreparedBlockchainConfig) ConfigAddress() (addr [32]byte, ok bool) {
+	if c.configAddr == nil {
+		return [32]byte{}, false
+	}
+	return [32]byte(*c.configAddr), true
+}
+
+// SpecialAccounts returns the fundamental smart contracts of config param 31 in
+// dictionary order, with the configuration contract of param 0 appended last and
+// only when param 31 does not already list it.
+//
+// The order is part of the returned value: a masterchain collator runs tick and
+// tock in it, which decides logical time assignment and therefore block bytes.
+// The backing array is shared with the prepared config, so callers must treat it
+// as read-only.
+func (c *PreparedBlockchainConfig) SpecialAccounts() [][32]byte {
+	return c.specialAccountOrder
+}
+
+// IsSpecialAccount reports membership of the set SpecialAccounts enumerates, by
+// raw masterchain account id.
+func (c *PreparedBlockchainConfig) IsSpecialAccount(addr [32]byte) bool {
+	_, ok := c.specialAccounts[preparedAddr256(addr)]
+	return ok
+}
+
 func (c *PreparedBlockchainConfig) globalVersion() uint32 {
 	return c.version
 }
@@ -292,8 +345,12 @@ func (c *PreparedBlockchainConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 
 func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) error {
 	c.specialAccounts = map[preparedAddr256]struct{}{}
-	if configAddr, err := bc.GetConfigAddress(); err == nil && len(configAddr) == 32 {
-		c.specialAccounts[preparedAddr256(configAddr)] = struct{}{}
+	var configAddr *preparedAddr256
+	if addr, err := bc.GetConfigAddress(); err == nil && len(addr) == 32 {
+		stored := preparedAddr256(addr)
+		configAddr = &stored
+		c.configAddr = &stored
+		c.specialAccounts[stored] = struct{}{}
 	}
 
 	fundamental, err := bc.GetFundamentalSmartContractAddresses()
@@ -309,14 +366,25 @@ func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfi
 	if err != nil {
 		return fmt.Errorf("failed to load fundamental smart contracts dictionary: %w", err)
 	}
+	// The order is built here rather than derived from the map: map iteration is
+	// unordered, and the sequence below is what a masterchain collator executes.
+	order := make([][32]byte, 0, len(items)+1)
+	listed := false
 	for i, item := range items {
 		addr, err := item.Key.LoadSlice(256)
 		if err != nil || len(addr) != 32 || item.Key.BitsLeft() != 0 ||
 			item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
 			return fmt.Errorf("invalid fundamental smart contract entry %d", i)
 		}
-		c.specialAccounts[preparedAddr256(addr)] = struct{}{}
+		stored := preparedAddr256(addr)
+		c.specialAccounts[stored] = struct{}{}
+		order = append(order, stored)
+		listed = listed || configAddr != nil && stored == *configAddr
 	}
+	if configAddr != nil && !listed {
+		order = append(order, *configAddr)
+	}
+	c.specialAccountOrder = order
 	return nil
 }
 

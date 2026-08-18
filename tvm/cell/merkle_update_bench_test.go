@@ -267,3 +267,113 @@ func benchmarkCollectMerkleUpdateReuse(
 	reuse.ready[key] = rebuilt
 	return rebuilt, nil
 }
+
+// BenchmarkPreparedMerkleUpdate is the A/B the fused path exists for, on the
+// two shapes the node actually runs.
+//
+// "validate_apply" is one validation and one apply, which is what the
+// non-validated chain-state path and the remote proof-backed path each do.
+// "validate_apply_validate_apply" is the full-collated live path as it was:
+// the candidate is validated and applied against the proof, then validated
+// again and applied against the full parent this node holds.
+func BenchmarkPreparedMerkleUpdate(b *testing.B) {
+	tc := newMerkleUpdateLargeDictCase(b, 16384, 5, 2026081401)
+	second, err := FromBOC(tc.from.ToBOC())
+	if err != nil {
+		b.Fatalf("build the second parent: %v", err)
+	}
+
+	b.Run("one_apply/separate", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := ValidateMerkleUpdate(tc.update); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ApplyMerkleUpdate(tc.from, tc.update); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("one_apply/prepared", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			prepared, err := PrepareMerkleUpdatePlanned(tc.update)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := prepared.ApplyTo(tc.from); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("two_parents/separate", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := ValidateMerkleUpdate(tc.update); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ApplyMerkleUpdate(tc.from, tc.update); err != nil {
+				b.Fatal(err)
+			}
+			if err := ValidateMerkleUpdate(tc.update); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := ApplyMerkleUpdate(second, tc.update); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("two_parents/prepared", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			prepared, err := PrepareMerkleUpdatePlanned(tc.update)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := prepared.ApplyTo(tc.from); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := prepared.ApplyTo(second); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	// The shape candidate validation actually runs on the proof-backed shard
+	// path: the first apply happens before the verdict is known — it is in the
+	// stage that runs ahead of the masterchain view, where a lagging node
+	// abandons attempts and must not be made to walk the update — so it is the
+	// plain one, and only the second apply, onto the live parent the caller
+	// holds, replays the plans. It sits between the two above: it keeps the
+	// second apply's saving and gives up the first one's.
+	b.Run("two_parents/prepared_second_only", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := ApplyMerkleUpdate(tc.from, tc.update); err != nil {
+				b.Fatal(err)
+			}
+			prepared, err := PrepareMerkleUpdatePlanned(tc.update)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := prepared.ApplyTo(second); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("verdict_only/separate", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if err := ValidateMerkleUpdate(tc.update); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("verdict_only/prepared", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			if _, err := PrepareMerkleUpdate(tc.update); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+}

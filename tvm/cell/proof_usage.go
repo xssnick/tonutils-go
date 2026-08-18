@@ -79,6 +79,41 @@ func (b *MerkleProofBuilder) CreateProof() (*Cell, error) {
 // logically identical subtree under a synthetic path while the proof is rooted
 // in the original state tree.
 func (c *Cell) CreateHashUsageProof(isLoaded func(Hash) bool) (*Cell, error) {
+	return c.CreateHashUsageProofResolved(isLoaded, nil)
+}
+
+// CreateHashUsageProofResolved is CreateHashUsageProof for a caller that already
+// holds the loaded form of the source cells — a ReadSet recorded over this very
+// tree, through ReadSet.RecordedCell. Handing them back keeps the build from
+// resolving a lazy source cell through its loader a second time, which for a
+// disk-backed loader is a second read.
+//
+// The proof is byte-identical either way: a recorded cell and the cell its
+// loader would return are the same cell, which is the same equality
+// ReadSet.Proof already relies on. resolveLoaded may return nil for any hash,
+// and the build then resolves it itself.
+func (c *Cell) CreateHashUsageProofResolved(
+	isLoaded func(Hash) bool,
+	resolveLoaded func(Hash) *Cell,
+) (*Cell, error) {
+	return c.CreateHashUsageProofResolvedSized(isLoaded, resolveLoaded, 0)
+}
+
+// CreateHashUsageProofResolvedSized is CreateHashUsageProofResolved for a caller
+// that can say roughly how many cells the walk will visit. The build memoises
+// every cell it finishes, and the memo is the largest scratch structure a
+// block-sized proof allocates: reached from nothing it doubles two dozen times
+// and discards three quarters of everything it ever allocated. A caller holding
+// a read set over the same tree has the number to hand.
+//
+// The estimate changes no byte of the proof — it is a capacity and nothing else.
+// A wrong one costs only the growth it failed to avoid, and nothing is retained
+// between proofs.
+func (c *Cell) CreateHashUsageProofResolvedSized(
+	isLoaded func(Hash) bool,
+	resolveLoaded func(Hash) *Cell,
+	expectedCells int,
+) (*Cell, error) {
 	if c == nil {
 		return nil, fmt.Errorf("failed to generate Merkle proof: cell is nil")
 	}
@@ -90,7 +125,7 @@ func (c *Cell) CreateHashUsageProof(isLoaded func(Hash) bool) (*Cell, error) {
 	}
 
 	root := true
-	body, err := buildMerkleProofBodyByPruneFunc(c, func(
+	body, err := buildMerkleProofBodyByPruneFuncResolved(c, func(
 		_ *Cell,
 		_ int,
 		hash Hash,
@@ -104,7 +139,7 @@ func (c *Cell) CreateHashUsageProof(isLoaded func(Hash) bool) (*Cell, error) {
 			return nil, false, nil
 		}
 		return nil, !isLoaded(hash), nil
-	}, 0)
+	}, resolveLoaded, 0, expectedCells)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build hash usage proof: %w", err)
 	}
@@ -123,22 +158,25 @@ type merkleProofPruneFunc func(c *Cell, merkleDepth int, hash Hash) (*Cell, bool
 const merkleProofPruneInlineCacheSize = 8
 
 func buildMerkleProofBodyByPruneFunc(c *Cell, shouldPrune merkleProofPruneFunc, merkleDepth int) (*Cell, error) {
-	return buildMerkleProofBodyByPruneFuncResolved(c, shouldPrune, nil, merkleDepth)
+	return buildMerkleProofBodyByPruneFuncResolved(c, shouldPrune, nil, merkleDepth, 0)
 }
 
 // buildMerkleProofBodyByPruneFuncResolved additionally lets the caller hand back
 // the loaded form of a cell it already holds, so building the proof does not
-// resolve a lazy source cell a second time.
+// resolve a lazy source cell a second time, and take the memo capacity the walk
+// should start from.
 func buildMerkleProofBodyByPruneFuncResolved(
 	c *Cell,
 	shouldPrune merkleProofPruneFunc,
 	resolveLoaded func(Hash) *Cell,
 	merkleDepth int,
+	expectedCells int,
 ) (*Cell, error) {
 	state := merkleProofPruneBuildState{
 		shouldPrune:   shouldPrune,
 		resolveLoaded: resolveLoaded,
 		arena:         &proofCellArena{},
+		memoHint:      expectedCells,
 	}
 	proof, _, err := state.build(c, merkleDepth)
 	return proof, err
@@ -170,6 +208,11 @@ type merkleProofPruneBuildState struct {
 	// built. Both sides prune the same subtree roots, and a pruned branch is a
 	// function of the subtree hash and the level it is cut at.
 	prunedShared map[proofBodyKey]*Cell
+	// memoHint is the caller's estimate of how many cells the walk will finish,
+	// used to size built when the inline cache spills. Capacity only: it never
+	// reaches the produced bytes, and an estimate that is wrong costs no more
+	// than the growth it failed to avoid.
+	memoHint int
 	// arena supplies the proof body's cells. A nil arena allocates each cell on
 	// its own, which is what a caller keeping built cells beyond the proof must
 	// use.
@@ -325,13 +368,20 @@ func (s *merkleProofPruneBuildState) cacheBuilt(key proofBodyKey, c, applied *Ce
 
 	s.spilled = true
 	if len(s.built.slots) == 0 {
-		s.built.init(merkleProofPruneInlineCacheSize * 2)
+		s.built.init(max(merkleProofPruneInlineCacheSize*2, s.memoHint))
 	}
 	for i := range s.inlineLen {
 		entry := s.inline[i]
 		s.built.store(entry.key.hash, entry.key.merkleDepth, entry.value, entry.applied)
 	}
 	s.built.store(key.hash, key.merkleDepth, c, applied)
+}
+
+// memoSize is how many cells the walk memoised. It is what a caller sizing the
+// next walk of the same shape should hand back as memoHint; the walk itself
+// never reads it.
+func (s *merkleProofPruneBuildState) memoSize() int {
+	return int(s.inlineLen) + len(s.built.entries)
 }
 
 func (s *merkleProofPruneBuildState) cached(key proofBodyKey) (*Cell, *Cell, bool) {
@@ -381,6 +431,18 @@ const (
 // The zero value is unusable on purpose: a nil arena is the "allocate
 // individually" path, which is what every caller outside the proof builders
 // gets.
+//
+// CAPACITY ONLY — an arena is per-proof and must stay that way. Slab sizes may
+// be tuned freely; reusing a slab across proofs must not be attempted, by a
+// sync.Pool or by hanging one off a longer-lived struct. body() and
+// prunedBranch() hand out interior pointers into a slab, and those pointers
+// become cells of the produced proof: a state update's cells reach the published
+// state and the serialized block, and the previous-state proof's cells reach the
+// candidate's collated data, which a background goroutine is still serializing
+// after the collation that built it has returned. A recycled slab therefore
+// aliases one block's proof cells into the next block's proof and writes into
+// memory the previous block's broadcast is still reading. This project has a
+// name for that failure class: it is how a block once came out 41x too large.
 type proofCellArena struct {
 	bodies     []proofCellWithHashes
 	bodySlab   int

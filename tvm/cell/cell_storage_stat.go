@@ -36,6 +36,11 @@ type StorageStat struct {
 // the proof-side sets do not pay for the block-side ones in memory.
 const seenSetWideGrowFrom = 4096
 
+// storageSeenMaxPresizedCells caps the estimate presize honours, so a caller
+// whose figure is wrong by orders of magnitude allocates a bounded table rather
+// than an arbitrary one.
+const storageSeenMaxPresizedCells = 1 << 20
+
 type storageSeenSet struct {
 	// slots hold usageCellFingerprint(hash)<<32 | entry index+1; zero is empty.
 	slots []uint64
@@ -44,6 +49,48 @@ type storageSeenSet struct {
 	// than recomputed per insert: the comparison is on the hot path of every
 	// cell the collation walks.
 	growAt int
+}
+
+// presize allocates for expected cells up front. It is capacity and nothing
+// else: the set is per-CellStorageStat, holds cells of the tree being walked and
+// is dropped with it, and a wrong estimate costs only the growth it failed to
+// avoid. The wide growth above exists because filling a block-sized set from
+// nothing rehashes it ten times over; an estimate removes the question.
+func (s *storageSeenSet) presize(expected int) {
+	if expected <= 0 || s.slots != nil {
+		return
+	}
+	if expected > storageSeenMaxPresizedCells {
+		expected = storageSeenMaxPresizedCells
+	}
+	slots := 64
+	for slots < 2*expected {
+		slots *= 2
+	}
+	s.slots = make([]uint64, slots)
+	s.cells = make([]*Cell, 0, slots/2)
+	s.growAt = slots / 2
+}
+
+// contains reports whether hash is already recorded, without recording it.
+func (s *storageSeenSet) contains(hash Hash) bool {
+	if s.slots == nil {
+		return false
+	}
+	fingerprint := usageCellFingerprint(hash)
+	mask := len(s.slots) - 1
+	pos := int(fingerprint) & mask
+	for {
+		slot := s.slots[pos]
+		if slot == 0 {
+			return false
+		}
+		if uint32(slot>>32) == fingerprint &&
+			bytes.Equal(s.cells[uint32(slot)-1].getHash(_DataCellMaxLevel), hash[:]) {
+			return true
+		}
+		pos = (pos + 1) & mask
+	}
 }
 
 // addIfAbsent reports whether hash was new and records it if so. hash must be
@@ -127,6 +174,29 @@ func NewCellStorageStat() *CellStorageStat {
 	return &CellStorageStat{}
 }
 
+// NewCellStorageStatSized allocates both dedup sets for the populations the
+// caller expects: expectedCells distinct ordinary cells and expectedProofCells
+// distinct cells outside the read set. The two differ by an order of magnitude
+// on the same walk, which is why they are estimated separately and why sizing
+// one for the other was measured to cost more than it saved.
+//
+// The counts to hand back are CellCounts() of the previous walk of the same
+// shape. Capacity only: nothing is carried across instances, and a wrong
+// estimate costs only the growth it failed to avoid.
+func NewCellStorageStatSized(expectedCells, expectedProofCells int) *CellStorageStat {
+	s := &CellStorageStat{}
+	s.seen.presize(expectedCells)
+	s.proofSeen.presize(expectedProofCells)
+	return s
+}
+
+// CellCounts returns how many distinct cells each dedup set ended up holding —
+// the ordinary walk and the proof walk. It is what NewCellStorageStatSized wants
+// for the next walk of the same shape.
+func (s *CellStorageStat) CellCounts() (cells, proofCells uint64) {
+	return s.stat.Cells, s.proofStat.Cells
+}
+
 func (s *CellStorageStat) TotalStat() StorageStat {
 	return StorageStat{
 		Cells:        s.stat.Cells + s.proofStat.Cells,
@@ -163,17 +233,52 @@ func (s *CellStorageStat) walk(c *Cell, countCell, countProof bool, read *ReadSe
 	}
 
 	if countProof {
-		// A cell the read set already knows about — read or merely referenced —
-		// stands outside this proof, exactly as owning a usage node used to mean.
-		if _, known := read.Prunable(c.HashKey()); known {
-			s.proofStat.ExternalRefs++
-			countProof = false
-		} else {
+		hash := c.HashKey()
+		switch {
+		case s.proofSeen.contains(hash):
+			// This proof already carries the body, so a further edge onto it is an
+			// ordinary reference — whatever the read set has learned in between.
+			//
+			// The dedup memo is consulted BEFORE the read set, and that order is the
+			// whole correctness of this walk. Prunable answers "was this content
+			// parsed through the recording trace", which is not the same question as
+			// "does the source tree hold this subtree": a cell the transition rebuilt
+			// and then read back is recorded even though the predecessor never held
+			// it (see readset_source_graph.go, which exists to separate exactly these
+			// two and is what the update builder prunes by). Prunable also grows
+			// during a collation, so asking it first let such a cell be serialized in
+			// full early on and then charged as a 40-byte boundary on every later
+			// edge — a boundary the produced update never emits, because the source
+			// graph does not hold that hash either.
+			//
+			// Measured on the mainnet-heavy fixture at the message the block stopped
+			// at: 113 hashes, 138 edges, every one of them absent from the source
+			// graph and every one of them previously serialized in full by this same
+			// walk. They inflated the admission estimate by 4,732 B on a 1,048,576 B
+			// budget and cost the block six inbound messages the reference
+			// implementation admitted. The reference cannot express the mistake at
+			// all: its predicate is per-object usage-tree provenance
+			// (NewCellStorageStat::dfs, is_from_tree), which is fixed when the cell
+			// is created and cannot change under it.
+			//
+			// A genuine boundary never reaches this branch. To carry a predecessor
+			// subtree the destination had to descend to it, which means its parent
+			// was read, which puts it in the frontier before any proof walk can see
+			// it — so it is classified external on first sight and never enters the
+			// memo.
 			s.proofStat.InternalRefs++
-			if s.proofSeen.addIfAbsent(c, c.HashKey()) {
-				s.proofStat.Cells++
-			} else {
+			countProof = false
+		default:
+			if _, known := read.Prunable(hash); known {
+				// A cell the read set already knows about — read or merely
+				// referenced — stands outside this proof, exactly as owning a usage
+				// node used to mean.
+				s.proofStat.ExternalRefs++
 				countProof = false
+			} else {
+				s.proofStat.InternalRefs++
+				s.proofSeen.addIfAbsent(c, hash)
+				s.proofStat.Cells++
 			}
 		}
 	}

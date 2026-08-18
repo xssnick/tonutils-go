@@ -78,8 +78,14 @@ func TestCreateWithLazyRefsUnsafeCreatesRegularCellWithLazyRef(t *testing.T) {
 	if cell.BitsSize() != src.BitsSize() {
 		t.Fatalf("unexpected bits size: got=%d want=%d", cell.BitsSize(), src.BitsSize())
 	}
-	if len(data) > 0 && &cell.data[0] != &data[0] {
-		t.Fatal("cell data was copied")
+	// The slab constructor COPIES data — the old zero-copy ownership contract
+	// is gone, and callers may reuse their buffers immediately. Aliasing here
+	// would mean the body escaped the slab.
+	if len(data) > 0 && &cell.data[0] == &data[0] {
+		t.Fatal("cell data aliases the caller's buffer; the slab contract copies")
+	}
+	if len(data) > 0 && !bytes.Equal(cell.data, data[:len(cell.data)]) {
+		t.Fatal("cell data differs from the input")
 	}
 
 	boundary, err := cell.PeekRef(0)

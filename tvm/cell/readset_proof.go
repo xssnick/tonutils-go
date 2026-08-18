@@ -26,7 +26,9 @@ func (rs *ReadSet) Proof() (*Cell, error) {
 	) (*Cell, bool, error) {
 		_, read := rs.Contains(hash)
 		return nil, !read, nil
-	}, rs.recordedCell, 0)
+		// The proof keeps exactly the recorded cells, so the record's own size
+		// is not an estimate of the memo's population — it is the population.
+	}, rs.recordedCell, 0, rs.Size())
 	if err != nil {
 		return nil, fmt.Errorf("failed to build read set proof: %w", err)
 	}
@@ -38,6 +40,17 @@ func (rs *ReadSet) Proof() (*Cell, error) {
 func (rs *ReadSet) recordedCell(hash Hash) *Cell {
 	c, _ := rs.Contains(hash)
 	return c
+}
+
+// RecordedCell exposes that same lookup to a proof built outside this recorder
+// over the same source tree — Cell.CreateHashUsageProofResolved, whose selection
+// is a hash predicate rather than the record itself. A hash the recorder never
+// saw simply comes back nil and the build resolves it.
+func (rs *ReadSet) RecordedCell(hash Hash) *Cell {
+	if rs == nil {
+		return nil
+	}
+	return rs.recordedCell(hash)
 }
 
 // ProofOf serializes the reads of a subtree of the source, for callers that record
@@ -61,7 +74,10 @@ func (rs *ReadSet) ProofOf(root *Cell) (*Cell, error) {
 	) (*Cell, bool, error) {
 		_, read := rs.Contains(hash)
 		return nil, !read, nil
-	}, rs.recordedCell, 0)
+		// No estimate here, unlike Proof: this walk covers one subtree of the
+		// source, so the record's size says nothing about how much of it the
+		// walk will reach and would size the memo for the whole set.
+	}, rs.recordedCell, 0, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build read set proof: %w", err)
 	}
