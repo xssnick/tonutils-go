@@ -62,7 +62,7 @@ func storageStatBindingAccountSized(t *testing.T, payload uint64, chain int) (*P
 		MustStoreBoolBit(true).
 		MustStoreBuilder(stateInitCell.ToBuilder()).
 		EndCell()
-	usage, _, err := transactionComputeAccountStorageStat(storageOnly)
+	usage, _, err := transactionComputeAccountStorageStat(storageOnly, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestStorageStatBoundHintMatchesFullRecompute(t *testing.T) {
 	if statRoot == nil {
 		t.Skip("account has no storage cell to bind to")
 	}
-	_, carried, err := transactionComputeAccountStorageStat(statRoot)
+	_, carried, err := transactionComputeAccountStorageStat(statRoot, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestStorageStatUnboundHintIsIgnored(t *testing.T) {
 	// A dictionary describing a different account state, offered without a
 	// binding: it must be dropped, not applied.
 	foreignRoot := other.runtime.storageCell
-	_, foreign, err := transactionComputeAccountStorageStat(foreignRoot)
+	_, foreign, err := transactionComputeAccountStorageStat(foreignRoot, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +220,7 @@ func BenchmarkStorageStatIncrementalVsRecompute(b *testing.B) {
 		acc, _ := storageStatBindingAccountSized(t, 1, chain)
 		next := storageStatBindingNextStorage(t, 1, chain, 0xDD)
 		statRoot := acc.runtime.storageCell
-		_, carried, err := transactionComputeAccountStorageStat(statRoot)
+		_, carried, err := transactionComputeAccountStorageStat(statRoot, 0)
 		if err != nil {
 			b.Fatal(err)
 		}

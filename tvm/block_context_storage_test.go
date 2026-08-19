@@ -19,7 +19,7 @@ func TestBlockContextComputeAccountStorageStat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, expected, err := transactionComputeAccountStorageStat(storage)
+	_, expected, err := transactionComputeAccountStorageStat(storage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -72,26 +72,56 @@ func buildCellShellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 		c = &x.c
 	}
 
+	if err := fillCellShell(c, refs, builder, special); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// fillCellShell completes a cell whose data is already in place. It is shared
+// by the allocating path above and by the arena path below, so the two cannot
+// drift apart in what they validate.
+func fillCellShell(c *Cell, refs []*Cell, builder *Builder, special bool) error {
 	c.bitsSz = uint16(builder.bitsSz)
 	c.setSpecial(special)
 	copy(c.refs[:], refs)
 	c.setRefsCount(len(refs))
 	if err := validateCellRefDepthLimit(refs); err != nil {
-		return nil, err
+		return err
 	}
 
 	if special {
 		if err := refreshSpecialCellLevelMask(c); err != nil {
-			return nil, err
+			return err
 		}
 	} else {
 		c.setLevelMask(ordinaryLevelMask(refs))
 	}
 
-	if err := validateBoundaryCell(c); err != nil {
-		return nil, err
+	return validateBoundaryCell(c)
+}
+
+// finalizeCellInto finalizes a builder into a cell and a data window the
+// caller owns, instead of the size-classed allocation buildCellShellFromBuilder
+// makes. It is what lets a bulk dictionary build carve all of its nodes out of
+// two slabs; the aliasing is safe for the same reason the cellWithBuf* types
+// are, since a finalized cell is immutable and its data slice is capped to its
+// length.
+func finalizeCellInto(dst *Cell, buf []byte, builder *Builder, special bool) error {
+	usedBytes := builder.usedBytes()
+	if usedBytes > len(buf) {
+		return fmt.Errorf("cell data of %d bytes does not fit the %d byte arena window", usedBytes, len(buf))
 	}
-	return c, nil
+
+	*dst = Cell{}
+	if usedBytes > 0 {
+		copy(buf, builder.data[:usedBytes])
+		dst.data = buf[:usedBytes:usedBytes]
+	}
+	if err := fillCellShell(dst, builder.rawRefs(), builder, special); err != nil {
+		return err
+	}
+	return dst.calculateHashes()
 }
 
 func refreshSpecialCellLevelMask(c *Cell) error {

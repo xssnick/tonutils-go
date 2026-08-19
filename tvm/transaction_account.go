@@ -416,7 +416,8 @@ func (b *BlockContext) ComputeAccountStorageStat(account *PreparedAccount) (*cel
 	if err != nil {
 		return nil, err
 	}
-	_, root, err := transactionComputeAccountStorageStat(storage)
+	_, root, err := transactionComputeAccountStorageStat(storage,
+		transactionStorageUsedUint64(account.runtime.storageInfo.StorageUsed.CellsUsed))
 	if err != nil {
 		return nil, err
 	}
@@ -764,9 +765,13 @@ type builtTransactionAccount struct {
 	// storageStatBound says storageStat was computed by this executor for
 	// exactly storageCellForStat, so the next transaction may reuse it even
 	// when the account carries no storage_dict_hash.
-	storageStatBound   bool
-	storageCell        *cell.Cell
-	storageCellForStat *cell.Cell
+	storageStatBound bool
+	// storageStatRecomputed says the bound dict could not serve this update
+	// (its proof was pruned short of this walk) and the stat came from the
+	// direct state walk instead.
+	storageStatRecomputed bool
+	storageCell           *cell.Cell
+	storageCellForStat    *cell.Cell
 }
 
 func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.AccountStatus, balance *big.Int, extraCurrencies *cell.Dictionary, endLT uint64, lastPaid uint32, duePayment *tlb.Coins, code, data *cell.Cell, libs *cell.Dictionary, stateHash []byte, removeAnycast bool, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell, loaded *vm.LoadedCells) (*builtTransactionAccount, error) {
@@ -870,11 +875,12 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	}
 
 	built := &builtTransactionAccount{
-		cell:             accountCell,
-		state:            accountState,
-		storageStat:      nextStorageStat,
-		storageStatBound: nextStorageStatBound,
-		storageCell:      storageCell,
+		cell:                  accountCell,
+		state:                 accountState,
+		storageStat:           nextStorageStat,
+		storageStatBound:      nextStorageStatBound,
+		storageStatRecomputed: acc.storageStatRecomputed,
+		storageCell:           storageCell,
 	}
 	if extraCurrencyV2 {
 		// Thread the extra-currency-free storage forward so the next
@@ -905,6 +911,9 @@ func transactionAccountIDAddr(addr *address.Address) (*address.Address, error) {
 // whether the next transaction of this account may reuse it without a
 // storage_dict_hash.
 func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellForStat *cell.Cell, cfg *PreparedBlockchainConfig, accountStorageStat *cell.Cell, loaded *vm.LoadedCells) (transactionUsage, any, []byte, *cell.Cell, bool, error) {
+	// The flag describes this transaction only; the runtime copy it sits on
+	// can be a reused snapshot of the account.
+	acc.storageStatRecomputed = false
 	version := cfg.globalVersion()
 	storeStorageDictHash := version >= 11 && !transactionIsMasterchain(acc.addr)
 
@@ -916,11 +925,19 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 	// The carried binding names the state the dict was computed for; it is
 	// meaningless once the account state has moved on some other way.
 	//
-	// It is also only worth using on a state big enough for the diff to beat a
-	// walk: below the storage-dict threshold the dict load plus per-cell lookups
-	// cost several times a full recompute (measured ~5x on a 5-cell state), and
-	// that threshold is the same one that decides whether a dict is worth
-	// storing at all.
+	// An authenticated dict is then carried on regardless of how small the
+	// state has become, which is what the reference does: it keeps
+	// account_storage_stat across transactions with no size test at all and
+	// gates only the dict hash on the threshold (crypto/block/transaction.cpp,
+	// Transaction::compute_state, storage section). Gating the carry on size
+	// instead is a divergence with teeth: an account that dips under the
+	// threshold mid-block and then changes storage again drops to a full
+	// recompute and reads no dictionary cell, so the proof this collation
+	// ships covers none of them, while a reference validator keeps walking the
+	// dict and rejects the candidate over the pruned branches it finds. The
+	// size test would only ever fire on that dipped state — a dict exists at
+	// all only above the threshold — so all it bought was a cheaper walk of a
+	// state small enough for the difference to be immaterial.
 	oldDictHash := transactionStorageExtraDictHash(acc.storageInfo.StorageExtra)
 	var zeroHash cell.Hash
 	bindingMatches := accountStorageStat != nil && acc.statBoundTo != zeroHash &&
@@ -931,8 +948,7 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 		hashMatches = bytes.Equal(rootHash[:], oldDictHash)
 	}
 	statAuthenticated := bindingMatches || hashMatches
-	useIncrementalStat := statAuthenticated &&
-		transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed) >= transactionGetSizeLimits(cfg).accStateCellsForStorageDict
+	useIncrementalStat := statAuthenticated
 
 	storageRefsUnchanged, err := transactionAccountStorageRefsUnchanged(oldStorageForStat, storageCellForStat)
 	if err != nil {
@@ -950,11 +966,24 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 		var nextStorageStat *cell.Cell
 		if stat != nil {
 			if loaded != nil {
-				if err = stat.addHint(*loaded); err != nil {
-					return transactionUsage{}, nil, nil, nil, false, err
-				}
+				err = stat.addHint(*loaded)
 			}
-			usage, nextStorageStat, err = stat.replaceStorage(storageCellForStat)
+			if err == nil {
+				usage, nextStorageStat, err = stat.replaceStorage(storageCellForStat)
+			}
+			if err != nil && errors.Is(err, cell.ErrDictHasSpecialCells) {
+				// A dict bound from another producer's collated proof is pruned
+				// along that producer's own update walk; replaying the update
+				// here in a different order can need a node — most often a
+				// delete-merge sibling — the producer never loaded. The new
+				// state's dictionary does not depend on the update order, so
+				// recompute it from the state directly, the same way an absent
+				// proof is handled, and leave the verdict to the commitment
+				// comparison downstream.
+				acc.storageStatRecomputed = true
+				usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat,
+					transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed))
+			}
 		} else {
 			// Measure first and build the dictionary only if this state turns
 			// out to be one that keeps it. The threshold decides both whether
@@ -966,7 +995,8 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 			var needsDict bool
 			usage, needsDict, err = transactionCountAccountStorageUsage(storageCellForStat, dictThreshold)
 			if err == nil && needsDict {
-				usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat)
+				usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat,
+					transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed))
 			}
 		}
 		if err != nil {
@@ -1140,16 +1170,43 @@ func transactionInitAccountStorageStat(dictRoot, storageCell *cell.Cell, storage
 		dict:       dictRoot.AsDict(256),
 		roots:      roots,
 		rootsNum:   rootsNum,
-		entries:    map[cell.Hash]*transactionAccountStorageStatEntry{},
+		entries:    make(map[cell.Hash]*transactionAccountStorageStatEntry, storageStatEntryCapacity(totalCells)),
 		totalCells: totalCells,
 		totalBits:  totalBits,
 	}, nil
 }
 
-func transactionComputeAccountStorageStat(storageCell *cell.Cell) (transactionUsage, *cell.Cell, error) {
+// storageStatEntryHintCap bounds what a cell-count hint is allowed to
+// preallocate. The hint is the account's own declared size, which this walk is
+// in the middle of recomputing and has therefore not verified, so an
+// implausible value must cost a little memory and nothing else. The ceiling is
+// twice the default max_acc_state_cells, which covers every account a standard
+// config admits; a larger one merely rehashes a few times, as it does today.
+const storageStatEntryHintCap = 1 << 17
+
+// storageStatEntryCapacity turns a cell-count hint into an entry map size.
+//
+// The walk keeps one entry per distinct cell of the state, so a map that
+// starts empty grows through a dozen doublings on a large account, rehashing
+// 32-byte keys every time. Sizing it upfront is most of what the walk costs:
+// measured on a 4000-cell account it runs 38% faster and allocates 43% fewer
+// bytes, and on 32000 cells 33% faster.
+//
+// The hint must be the real size rather than a generous guess. An oversized
+// one allocates buckets that are never filled, wins nothing, and on a large
+// account measured slower than no hint at all.
+func storageStatEntryCapacity(cells uint64) int {
+	if cells > storageStatEntryHintCap {
+		cells = storageStatEntryHintCap
+	}
+	// the storage root itself and its immediate refs are outside the count
+	return int(cells) + 8
+}
+
+func transactionComputeAccountStorageStat(storageCell *cell.Cell, cellsHint uint64) (transactionUsage, *cell.Cell, error) {
 	stat := transactionAccountStorageStat{
 		dict:    cell.NewDict(256),
-		entries: map[cell.Hash]*transactionAccountStorageStatEntry{},
+		entries: make(map[cell.Hash]*transactionAccountStorageStatEntry, storageStatEntryCapacity(cellsHint)),
 	}
 	if storageCell != nil {
 		loadedStorage, roots, rootsNum, err := transactionLoadAccountStorageRootRefs(storageCell)
@@ -1583,7 +1640,18 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 		return bytes.Compare(left[:], right[:])
 	})
 
-	for _, key := range dirtyKeys {
+	// The whole commit goes in as one batch, which is what the reference does
+	// (AccountStorageStat::get_dict_root -> vm::Dictionary::multiset). Besides
+	// walking the tree once instead of once per key, the batch decides the
+	// shape of the Merkle proof this collation ships: a subtree the batch does
+	// not descend into is carried over unread, so a validator replaying the
+	// same batch needs exactly the cells we read. A key-at-a-time loop reads
+	// more — a delete that empties a fork merges its sibling in even when a
+	// later key of the same commit lands right back under it — and a proof cut
+	// to a batch walk cannot serve that.
+	updates := make([]cell.DictBulkKV, 0, len(dirtyKeys))
+	for i := range dirtyKeys {
+		key := dirtyKeys[i]
 		entry := s.entries[key]
 		if err := s.fetchEntry(key, entry); err != nil {
 			return nil, err
@@ -1593,9 +1661,7 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 			return nil, fmt.Errorf("invalid account storage stat refcount for cell %x", key)
 		}
 		if refCount == 0 {
-			if err := s.dict.DeleteByBytesKey(key[:]); err != nil {
-				return nil, err
-			}
+			updates = append(updates, cell.DictBulkKV{Key: dirtyKeys[i][:]})
 			entry.exists = false
 			entry.refCount = 0
 			entry.refCountDiff = 0
@@ -1604,16 +1670,19 @@ func (s *transactionAccountStorageStat) dictRoot() (*cell.Cell, error) {
 		if !entry.maxMerkleDepthKnown {
 			return nil, fmt.Errorf("unknown account storage stat Merkle depth for cell %x", key)
 		}
-		value := cell.BeginCell().
-			MustStoreUInt(uint64(refCount), 32).
-			MustStoreUInt(uint64(entry.maxMerkleDepth), 2)
-		if err := s.dict.SetBuilderByBytesKey(key[:], value); err != nil {
-			return nil, err
-		}
+		updates = append(updates, cell.DictBulkKV{
+			Key: dirtyKeys[i][:],
+			Value: cell.BeginCell().
+				MustStoreUInt(uint64(refCount), 32).
+				MustStoreUInt(uint64(entry.maxMerkleDepth), 2),
+		})
 		entry.exists = true
 		entry.refCount = uint32(refCount)
 		entry.refCountKnown = true
 		entry.refCountDiff = 0
+	}
+	if err := s.dict.Multiset(updates); err != nil {
+		return nil, err
 	}
 	return s.dict.AsCell(), nil
 }

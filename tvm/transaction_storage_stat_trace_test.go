@@ -46,7 +46,7 @@ func TestTransactionAccountStorageStatTracesChangedPredecessorSubtrees(t *testin
 	}
 
 	rawOldStorage := cell.BeginCell().MustStoreRef(removed).EndCell()
-	oldUsage, oldDict, err := transactionComputeAccountStorageStat(rawOldStorage)
+	oldUsage, oldDict, err := transactionComputeAccountStorageStat(rawOldStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestTransactionAccountStorageStatProofIncludesUnchangedOldRoot(t *testing.T
 		MustStoreRef(newData).
 		EndCell()
 
-	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage)
+	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestTransactionAccountStorageStatHintSkipsLoadedSharedChildLookup(t *testin
 	oldStorage := cell.BeginCell().MustStoreRef(oldRoot).EndCell()
 	newStorage := cell.BeginCell().MustStoreRef(newRoot).EndCell()
 
-	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage)
+	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,7 +255,7 @@ func TestTransactionAccountStorageStatHintSkipsLoadedSharedChildLookup(t *testin
 		t.Fatalf("replace roots with VM hint: %v", err)
 	}
 	usage := transactionUsage{cells: withHint.totalCells + 1, bits: withHint.totalBits + uint64(newStorage.BitsSize())}
-	wantUsage, _, err := transactionComputeAccountStorageStat(newStorage)
+	wantUsage, _, err := transactionComputeAccountStorageStat(newStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

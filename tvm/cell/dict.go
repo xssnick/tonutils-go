@@ -85,9 +85,7 @@ func NewDictFromItems(keySz uint, items []DictBulkKV) (*Dictionary, error) {
 		}
 	}
 
-	sort.SliceStable(items, func(i, j int) bool {
-		return compareDictBulkKeys(items[i].Key, items[j].Key, keySz) < 0
-	})
+	sortDictBulkItems(items, keySz)
 
 	// keep the last item of each equal-key run, like sequential Set
 	unique := items[:0]
@@ -106,7 +104,8 @@ func NewDictFromItems(keySz uint, items []DictBulkKV) (*Dictionary, error) {
 		keyCells[i] = Cell{data: items[i].Key, bitsSz: uint16(keySz)}
 	}
 
-	root, err := d.buildFromSorted(items, keyCells, 0)
+	arena := newDictBuildArena(2*len(items)-1, dictBulkArenaDataBytes(items, keySz))
+	root, err := d.buildFromSorted(items, keyCells, 0, arena)
 	if err != nil {
 		return nil, err
 	}
@@ -116,11 +115,11 @@ func NewDictFromItems(keySz uint, items []DictBulkKV) (*Dictionary, error) {
 
 // buildFromSorted builds the subtree over items whose keys all share the
 // first pos bits and returns its finalized node cell.
-func (d *Dictionary) buildFromSorted(items []DictBulkKV, keyCells []Cell, pos uint) (*Cell, error) {
+func (d *Dictionary) buildFromSorted(items []DictBulkKV, keyCells []Cell, pos uint, arena *dictBuildArena) (*Cell, error) {
 	remaining := d.keySz - pos
 	if len(items) == 1 {
 		label := Slice{cell: &keyCells[0], bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
-		return d.storeLeaf(&label, items[0].Value, remaining)
+		return d.storeLeafArena(arena, &label, items[0].Value, remaining)
 	}
 
 	// with sorted distinct keys the common prefix of the whole run equals the
@@ -137,17 +136,17 @@ func (d *Dictionary) buildFromSorted(items []DictBulkKV, keyCells []Cell, pos ui
 		return items[i].Key[split/8]>>(7-split%8)&1 != 0
 	})
 
-	left, err := d.buildFromSorted(items[:mid], keyCells[:mid], split+1)
+	left, err := d.buildFromSorted(items[:mid], keyCells[:mid], split+1, arena)
 	if err != nil {
 		return nil, err
 	}
-	right, err := d.buildFromSorted(items[mid:], keyCells[mid:], split+1)
+	right, err := d.buildFromSorted(items[mid:], keyCells[mid:], split+1, arena)
 	if err != nil {
 		return nil, err
 	}
 
 	label := Slice{cell: &keyCells[0], bitStart: uint16(pos), bitEnd: uint16(split)}
-	return d.storeFork(&label, left, right, remaining)
+	return d.storeForkArena(arena, &label, left, right, remaining)
 }
 
 // compareDictBulkKeys compares the first keySz bits of two keys.
@@ -520,8 +519,26 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
 
-		slc, err := otherRef.BeginParse()
-		if err != nil {
+		// The merge reads the surviving sibling's content — a node the descent
+		// never visited, so it needs the descent's own special-cell handling.
+		// Parsing a pruned branch here as label+payload would fabricate a
+		// garbage node instead of reporting the honest classified error.
+		var slc *Slice
+		if otherRef.IsSpecial() {
+			resolved, rErr := resolveDictNodeCell(otherRef, branch.Trace(), nil, "dict")
+			if rErr != nil {
+				return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, rErr)
+			}
+			// The resolver already charged the resolved cell per version
+			// rules; parse it charge-free and rebind the walk trace for its
+			// children, exactly as descent resolution does.
+			var loader Slice
+			if err = resolved.BeginParseIntoWithTrace(&loader, nil); err != nil {
+				return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+			}
+			loader.SetTrace(CombineTraces(resolved.Trace(), branch.Trace()))
+			slc = &loader
+		} else if slc, err = otherRef.BeginParse(); err != nil {
 			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
 		if trace := slc.Trace(); trace != nil {

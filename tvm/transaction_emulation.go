@@ -81,6 +81,12 @@ type TransactionExecutionResult struct {
 	// AccountStorageStat is the account storage-stat dictionary to pass to the
 	// next transaction of the same account.
 	AccountStorageStat *cell.Cell
+	// StorageStatRecomputed reports that the storage-stat dict bound for this
+	// transaction (typically from another producer's collated proof) was pruned
+	// short of this update's walk, and the stat was recomputed from the account
+	// state directly. The result is the same function of the state; the flag
+	// exists so a validator can count how often shipped proofs fall short.
+	StorageStatRecomputed bool
 }
 
 // ParseTransaction parses the built transaction cell into its tlb form. The
@@ -251,10 +257,15 @@ type transactionRuntimeAccount struct {
 	// untrusted. Zero means "no provenance".
 	accountStorageStat *cell.Cell
 	statBoundTo        cell.Hash
-	prevTxHash         []byte
-	prevTxLT           uint64
-	originalCell       *cell.Cell
-	isSpecial          bool
+	// storageStatRecomputed is set when a bound storage-stat dict could not
+	// serve this transaction's update — its Merkle-proof pruning followed the
+	// producer's own walk — and the stat was recomputed from the state by the
+	// direct walk instead.
+	storageStatRecomputed bool
+	prevTxHash            []byte
+	prevTxLT              uint64
+	originalCell          *cell.Cell
+	isSpecial             bool
 }
 
 func (a *transactionRuntimeAccount) rawAddress() *address.Address {

@@ -18,7 +18,7 @@ func TestBindAccountStorageStatValidatesAndAvoidsPrunedStateWalk(t *testing.T) {
 	fullCode := makeTransactionExternalSuccessCode(t, fullNewData)
 
 	fullStorage := storageStatProofAccountStorage(t, fullCode, fullOldData)
-	usage, statRoot, err := transactionComputeAccountStorageStat(fullStorage)
+	usage, statRoot, err := transactionComputeAccountStorageStat(fullStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestBindAccountStorageStatValidatesAndAvoidsPrunedStateWalk(t *testing.T) {
 	}
 
 	_, foreignStat, err := transactionComputeAccountStorageStat(
-		cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell()).EndCell(),
+		cell.BeginCell().MustStoreRef(cell.BeginCell().MustStoreUInt(0x99, 8).EndCell()).EndCell(), 0,
 	)
 	if err != nil {
 		t.Fatal(err)

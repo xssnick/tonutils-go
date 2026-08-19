@@ -144,7 +144,7 @@ func TestTVMCrossEmulatorTransactionFrozenFixedPrefixUnfreeze(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to serialize frozen account storage: %v", err)
 	}
-	storageUsage, _, err := transactionComputeAccountStorageStat(storageCell)
+	storageUsage, _, err := transactionComputeAccountStorageStat(storageCell, 0)
 	if err != nil {
 		t.Fatalf("failed to compute frozen account storage usage: %v", err)
 	}

@@ -128,7 +128,7 @@ func newCellLoadObserverFixture(t *testing.T) cellLoadObserverFixture {
 		MustStoreRef(executionProofUnusedDataBranch()).
 		EndCell()
 
-	usage, storageStat, err := transactionComputeAccountStorageStat(storageStatProofAccountStorage(t, code, data))
+	usage, storageStat, err := transactionComputeAccountStorageStat(storageStatProofAccountStorage(t, code, data), 0)
 	if err != nil {
 		t.Fatal(err)
 	}

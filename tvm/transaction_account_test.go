@@ -260,7 +260,7 @@ func TestTransactionAccountStorageStatReplaceSharedRef(t *testing.T) {
 		MustStoreRef(shared).
 		EndCell()
 
-	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage)
+	oldUsage, oldDict, err := transactionComputeAccountStorageStat(oldStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestTransactionAccountStorageStatReplaceSharedRef(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	wantUsage, wantDict, err := transactionComputeAccountStorageStat(newStorage)
+	wantUsage, wantDict, err := transactionComputeAccountStorageStat(newStorage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

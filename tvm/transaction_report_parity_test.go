@@ -394,7 +394,7 @@ func TestTransactionStorageStatHintRequiresAuthenticatedHash(t *testing.T) {
 	storage := cell.BeginCell().MustStoreUInt(0xA, 4).
 		MustStoreRef(cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()).
 		EndCell()
-	usage, dictRoot, err := transactionComputeAccountStorageStat(storage)
+	usage, dictRoot, err := transactionComputeAccountStorageStat(storage, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

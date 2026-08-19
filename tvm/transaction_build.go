@@ -126,6 +126,7 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 	out.OutMessages = outMessages
 	out.EndLT = endLT
 	out.AccountStorageStat = next.storageStat
+	out.StorageStatRecomputed = next.storageStatRecomputed
 	return nil
 }
 
