@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 )
@@ -58,5 +59,39 @@ func TestDeleteManyMatchesRepeatedDelete(t *testing.T) {
 		if err = bulk.DeleteMany(batch[:1]); err == nil {
 			t.Fatalf("round %d: bulk delete of a removed key succeeded", round)
 		}
+	}
+}
+
+func BenchmarkAugDictDeleteManyParallel(b *testing.B) {
+	const keyBits = 256
+	rnd := rand.New(rand.NewSource(2026081903))
+	keys := randomBulkKeys(b, rnd, keyBits, 100_000, nil)
+	base, err := NewAugDict(keyBits, bulkSumAugmentation{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	entries := make([]AugmentedEntry, len(keys))
+	for i, key := range keys {
+		entries[i] = AugmentedEntry{Key: key, Value: bulkValue(key, uint64(i%65_535+1))}
+	}
+	if err = base.SetMany(entries); err != nil {
+		b.Fatal(err)
+	}
+	deleted := append([]*Cell(nil), keys[:1000]...)
+	rnd.Shuffle(len(deleted), func(i, j int) { deleted[i], deleted[j] = deleted[j], deleted[i] })
+
+	for _, parallelism := range []int{1, 8} {
+		b.Run(fmt.Sprintf("parallel=%d", parallelism), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				dict := base.Copy()
+				if err := dict.DeleteMany(deleted, parallelism); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := dict.ToCell(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

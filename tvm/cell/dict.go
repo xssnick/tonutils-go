@@ -520,45 +520,34 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 		}
 
 		// The merge reads the surviving sibling's content — a node the descent
-		// never visited, so it needs the descent's own special-cell handling.
-		// Parsing a pruned branch here as label+payload would fabricate a
-		// garbage node instead of reporting the honest classified error.
-		var slc *Slice
-		if otherRef.IsSpecial() {
-			resolved, rErr := resolveDictNodeCell(otherRef, branch.Trace(), nil, "dict")
-			if rErr != nil {
-				return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, rErr)
-			}
-			// The resolver already charged the resolved cell per version
-			// rules; parse it charge-free and rebind the walk trace for its
-			// children, exactly as descent resolution does.
-			var loader Slice
-			if err = resolved.BeginParseIntoWithTrace(&loader, nil); err != nil {
-				return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
-			}
-			loader.SetTrace(CombineTraces(resolved.Trace(), branch.Trace()))
-			slc = &loader
-		} else if slc, err = otherRef.BeginParse(); err != nil {
+		// never visited. Parse through the same boundary-aware path as ordinary
+		// descent: a lazy CellDB placeholder must materialize before special-cell
+		// classification, while a real library/pruned node keeps the VM resolver
+		// and error semantics attached to the walk trace.
+		otherNode, err := parseFixedDictNodeWithTrace(otherRef, nextKeyOffset, otherRef.Trace())
+		if err != nil {
 			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
-		if trace := slc.Trace(); trace != nil {
+		if err = otherNode.resolveIfSpecial(nextKeyOffset, otherRef.Trace(), nil); err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+		if err = otherNode.rejectSpecial("dict"); err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
+		if trace := otherNode.loader.Trace(); trace != nil {
 			if err = trace.PendingError(); err != nil {
 				return nil, nil, false, err
 			}
 		}
 
-		_, otherLabel, err := loadLabel(nextKeyOffset, slc, BeginCell())
-		if err != nil {
-			return nil, nil, false, fmt.Errorf("failed to load neighbour label: %w", err)
-		}
-
-		mergedLabel, err := node.mergedEdgeLabel(uint64(otherIdx), otherLabel, "neighbour")
+		otherLabel := otherNode.labelSlice()
+		mergedLabel, err := node.mergedEdgeLabel(uint64(otherIdx), &otherLabel, "neighbour")
 		if err != nil {
 			return nil, nil, false, err
 		}
 
 		var survivorPayload Builder
-		slc.ToBuilderInto(&survivorPayload)
+		otherNode.loader.ToBuilderInto(&survivorPayload)
 		merged, err := d.storeLeaf(mergedLabel, &survivorPayload, keyOffset)
 		if err != nil {
 			return nil, nil, false, err

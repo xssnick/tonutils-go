@@ -165,15 +165,27 @@ func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
 	if meta == nil || meta.lazyLoader == nil {
 		return nil, ErrLazyLoaderNotSet
 	}
-	raw := c.rawCell()
 
-	loaded, err := meta.lazyLoader(raw.HashKey())
+	loaded, err := meta.lazyLoader(c.rawCell().HashKey())
 	if err != nil {
 		return nil, err
+	}
+	return resolveLoadedLazyRefWithTrace(c, loaded, trace)
+}
+
+// resolveLoadedLazyRefWithTrace binds an already loaded cell to a lazy
+// placeholder. It is the cache-hit half of loadLazyPrunedRefWithTrace: the
+// represented hash, depth and virtual level are checked exactly as on a loader
+// result, while the caller avoids asking storage for a cell it already owns.
+func resolveLoadedLazyRefWithTrace(c, loaded *Cell, trace *Trace) (*Cell, error) {
+	meta := c.meta
+	if meta == nil {
+		return nil, ErrLazyLoaderNotSet
 	}
 	if loaded == nil {
 		return nil, ErrLazyRefNotFound
 	}
+	raw := c.rawCell()
 	loaded = loaded.rawCell()
 	if !meta.skipLazyRefValidation {
 		if err := validateLoadedLazyRef(raw, loaded); err != nil {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/xssnick/raptorq"
+	"github.com/xssnick/tonutils-go/adnl/keys"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
@@ -828,14 +829,24 @@ func BenchmarkFECBroadcastReceivedPart(b *testing.B) {
 
 func BenchmarkFECBroadcastAddRelayPart(b *testing.B) {
 	stream := fecBroadcastStream{parts: make(map[uint32]broadcastFECRelayPart, 1)}
-	full := &BroadcastFEC{}
+	full := &BroadcastFEC{
+		Source:      keys.PublicKeyED25519{Key: bytes.Repeat([]byte{0x44}, ed25519.PublicKeySize)},
+		Certificate: CertificateEmpty{},
+		DataHash:    bytes.Repeat([]byte{0x55}, 32),
+		DataSize:    1,
+		Data:        []byte{0x66},
+		FEC:         rldp.FECRaptorQ{DataSize: 1, SymbolSize: 1, SymbolsCount: 1},
+		Signature:   bytes.Repeat([]byte{0x77}, ed25519.SignatureSize),
+	}
 	broadcastHash := bytes.Repeat([]byte{0x11}, 32)
 	partDataHash := bytes.Repeat([]byte{0x22}, 32)
 	immediatePeerID := bytes.Repeat([]byte{0x33}, 32)
 
 	b.ReportAllocs()
 	for b.Loop() {
-		stream.addRelayPart(1, full, broadcastHash, partDataHash, immediatePeerID)
+		if err := stream.addRelayPart(1, full, broadcastHash, partDataHash, immediatePeerID); err != nil {
+			b.Fatal(err)
+		}
 		delete(stream.parts, 1)
 	}
 }

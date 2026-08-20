@@ -75,6 +75,10 @@ func (p adnlBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Seriali
 	return p.transport.ADNL.SendCustomMessage(ctx, req)
 }
 
+func (p adnlBroadcastPeer) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return p.transport.ADNL.SendCustomMessage(ctx, tl.Raw(body))
+}
+
 func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
 	return a.ADNL.GetDisconnectHandler()
 }

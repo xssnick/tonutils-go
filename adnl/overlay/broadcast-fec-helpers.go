@@ -3,30 +3,102 @@ package overlay
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"reflect"
 
 	"github.com/xssnick/tonutils-go/adnl/keys"
+	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
-func broadcastSourceID(source any, flags int32) ([]byte, error) {
-	src := make([]byte, 32)
+var (
+	publicKeyED25519TLID   = tl.CRC("pub.ed25519 key:int256 = PublicKey")
+	fecRaptorQTLID         = tl.CRC("fec.raptorQ data_size:int symbol_size:int symbols_count:int = fec.Type")
+	fecRoundRobinTLID      = tl.CRC("fec.roundRobin data_size:int symbol_size:int symbols_count:int = fec.Type")
+	fecOnlineTLID          = tl.CRC("fec.online data_size:int symbol_size:int symbols_count:int = fec.Type")
+	broadcastFECIDTLID     = tl.CRC("overlay.broadcastFec.id src:int256 type:int256 data_hash:int256 size:int flags:int = overlay.broadcastFec.Id")
+	broadcastFECPartIDTLID = tl.CRC("overlay.broadcastFec.partId broadcast_hash:int256 data_hash:int256 seqno:int = overlay.broadcastFec.PartId")
+	broadcastToSignTLID    = tl.CRC("overlay.broadcast.toSign hash:int256 date:int = overlay.broadcast.ToSign")
+)
+
+func broadcastSourceID(source any, flags int32) ([32]byte, error) {
+	var src [32]byte
 	if flags&BroadcastFlagAnySender != 0 {
 		return src, nil
 	}
 
-	src, err := tl.Hash(source)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute source key id: %w", err)
+	var key ed25519.PublicKey
+	switch value := source.(type) {
+	case keys.PublicKeyED25519:
+		key = value.Key
+	case *keys.PublicKeyED25519:
+		if value == nil {
+			return src, fmt.Errorf("failed to compute source key id: invalid signer key format")
+		}
+		key = value.Key
+	default:
+		return src, fmt.Errorf("failed to compute source key id: invalid signer key format")
 	}
-	return src, nil
+	if len(key) != ed25519.PublicKeySize {
+		return src, fmt.Errorf("failed to compute source key id: invalid public key")
+	}
+
+	var wire [4 + ed25519.PublicKeySize]byte
+	binary.LittleEndian.PutUint32(wire[:4], publicKeyED25519TLID)
+	copy(wire[4:], key)
+	return sha256.Sum256(wire[:]), nil
+}
+
+func broadcastFECTypeID(fec any) ([32]byte, error) {
+	var (
+		typeID       uint32
+		dataSize     uint32
+		symbolSize   uint32
+		symbolsCount uint32
+	)
+	switch value := fec.(type) {
+	case rldp.FECRaptorQ:
+		typeID, dataSize, symbolSize, symbolsCount = fecRaptorQTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	case *rldp.FECRaptorQ:
+		if value == nil {
+			return [32]byte{}, fmt.Errorf("failed to compute fec type id: unsupported fec type %T", fec)
+		}
+		typeID, dataSize, symbolSize, symbolsCount = fecRaptorQTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	case rldp.FECRoundRobin:
+		typeID, dataSize, symbolSize, symbolsCount = fecRoundRobinTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	case *rldp.FECRoundRobin:
+		if value == nil {
+			return [32]byte{}, fmt.Errorf("failed to compute fec type id: unsupported fec type %T", fec)
+		}
+		typeID, dataSize, symbolSize, symbolsCount = fecRoundRobinTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	case rldp.FECOnline:
+		typeID, dataSize, symbolSize, symbolsCount = fecOnlineTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	case *rldp.FECOnline:
+		if value == nil {
+			return [32]byte{}, fmt.Errorf("failed to compute fec type id: unsupported fec type %T", fec)
+		}
+		typeID, dataSize, symbolSize, symbolsCount = fecOnlineTLID, value.DataSize, value.SymbolSize, value.SymbolsCount
+	default:
+		return [32]byte{}, fmt.Errorf("failed to compute fec type id: unsupported fec type %T", fec)
+	}
+
+	var wire [16]byte
+	binary.LittleEndian.PutUint32(wire[0:4], typeID)
+	binary.LittleEndian.PutUint32(wire[4:8], dataSize)
+	binary.LittleEndian.PutUint32(wire[8:12], symbolSize)
+	binary.LittleEndian.PutUint32(wire[12:16], symbolsCount)
+	return sha256.Sum256(wire[:]), nil
 }
 
 func calcBroadcastFECID(source any, flags int32, dataHash []byte, dataSize uint32, fec any) ([]byte, error) {
-	typeID, err := tl.Hash(fec)
+	if len(dataHash) != sha256.Size {
+		return nil, fmt.Errorf("failed to compute hash id of the broadcast: data hash should be %d bytes", sha256.Size)
+	}
+
+	typeID, err := broadcastFECTypeID(fec)
 	if err != nil {
-		return nil, fmt.Errorf("failed to compute fec type id: %w", err)
+		return nil, err
 	}
 
 	src, err := broadcastSourceID(source, flags)
@@ -34,29 +106,29 @@ func calcBroadcastFECID(source any, flags int32, dataHash []byte, dataSize uint3
 		return nil, err
 	}
 
-	broadcastHash, err := tl.Hash(&BroadcastFECID{
-		Source:   src,
-		Type:     typeID,
-		DataHash: dataHash,
-		Size:     dataSize,
-		Flags:    flags,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute hash id of the broadcast: %w", err)
-	}
-	return broadcastHash, nil
+	var wire [4 + 32 + 32 + 32 + 4 + 4]byte
+	binary.LittleEndian.PutUint32(wire[0:4], broadcastFECIDTLID)
+	copy(wire[4:36], src[:])
+	copy(wire[36:68], typeID[:])
+	copy(wire[68:100], dataHash)
+	binary.LittleEndian.PutUint32(wire[100:104], dataSize)
+	binary.LittleEndian.PutUint32(wire[104:108], uint32(flags))
+	broadcastHash := sha256.Sum256(wire[:])
+	return broadcastHash[:], nil
 }
 
 func calcBroadcastFECPartID(broadcastHash, partDataHash []byte, seqno uint32) ([]byte, error) {
-	partHash, err := tl.Hash(&BroadcastFECPartID{
-		BroadcastHash: broadcastHash,
-		DataHash:      partDataHash,
-		Seqno:         seqno,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute hash id of the part: %w", err)
+	if len(broadcastHash) != sha256.Size || len(partDataHash) != sha256.Size {
+		return nil, fmt.Errorf("failed to compute hash id of the part: hashes should be %d bytes", sha256.Size)
 	}
-	return partHash, nil
+
+	var wire [4 + 32 + 32 + 4]byte
+	binary.LittleEndian.PutUint32(wire[0:4], broadcastFECPartIDTLID)
+	copy(wire[4:36], broadcastHash)
+	copy(wire[36:68], partDataHash)
+	binary.LittleEndian.PutUint32(wire[68:72], seqno)
+	partHash := sha256.Sum256(wire[:])
+	return partHash[:], nil
 }
 
 func calcBroadcastFECPartData(broadcastHash, data []byte, seqno uint32) (partHash []byte, partDataHash []byte, err error) {
@@ -69,22 +141,30 @@ func calcBroadcastFECPartData(broadcastHash, data []byte, seqno uint32) (partHas
 }
 
 func serializeBroadcastFECToSign(partHash []byte, date uint32) ([]byte, error) {
-	toSign, err := tl.Serialize(&BroadcastToSign{
-		Hash: partHash,
-		Date: date,
-	}, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize broadcast for sign check: %w", err)
+	var wire [4 + 32 + 4]byte
+	if err := fillBroadcastFECToSign(&wire, partHash, date); err != nil {
+		return nil, err
 	}
-	return toSign, nil
+	return append([]byte(nil), wire[:]...), nil
+}
+
+func fillBroadcastFECToSign(wire *[4 + 32 + 4]byte, partHash []byte, date uint32) error {
+	if len(partHash) != sha256.Size {
+		return fmt.Errorf("failed to serialize broadcast for sign check: hash should be %d bytes", sha256.Size)
+	}
+
+	binary.LittleEndian.PutUint32(wire[0:4], broadcastToSignTLID)
+	copy(wire[4:36], partHash)
+	binary.LittleEndian.PutUint32(wire[36:40], date)
+	return nil
 }
 
 func signBroadcastFECPart(key ed25519.PrivateKey, partHash []byte, date uint32) ([]byte, error) {
-	toSign, err := serializeBroadcastFECToSign(partHash, date)
-	if err != nil {
+	var toSign [4 + 32 + 4]byte
+	if err := fillBroadcastFECToSign(&toSign, partHash, date); err != nil {
 		return nil, err
 	}
-	return ed25519.Sign(key, toSign), nil
+	return ed25519.Sign(key, toSign[:]), nil
 }
 
 func verifyBroadcastFECPartSignature(source any, partHash []byte, date uint32, signature []byte) error {
@@ -93,12 +173,12 @@ func verifyBroadcastFECPartSignature(source any, partHash []byte, date uint32, s
 		return fmt.Errorf("invalid signer key format")
 	}
 
-	toSign, err := serializeBroadcastFECToSign(partHash, date)
-	if err != nil {
+	var toSign [4 + 32 + 4]byte
+	if err := fillBroadcastFECToSign(&toSign, partHash, date); err != nil {
 		return err
 	}
 
-	if !ed25519.Verify(sourceKey.Key, toSign, signature) {
+	if !ed25519.Verify(sourceKey.Key, toSign[:], signature) {
 		return fmt.Errorf("invalid broadcast signature")
 	}
 	return nil

@@ -453,7 +453,7 @@ func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {
 }
 
 // mergedEdgeLabel builds label + edge bit + neighbour label for delete-merge.
-func (n *fixedDictNode) mergedEdgeLabel(bit uint64, label *Builder, name string) (*Slice, error) {
+func (n *fixedDictNode) mergedEdgeLabel(bit uint64, label *Slice, name string) (*Slice, error) {
 	merged := BeginCell()
 	own := n.labelSlice()
 	if err := merged.storeSliceFromSlice(&own, n.labelLen); err != nil {
@@ -462,7 +462,7 @@ func (n *fixedDictNode) mergedEdgeLabel(bit uint64, label *Builder, name string)
 	if err := merged.StoreUInt(bit, 1); err != nil {
 		return nil, fmt.Errorf("failed to append %s edge bit: %w", name, err)
 	}
-	if err := merged.StoreBuilder(label); err != nil {
+	if err := merged.storeSliceFromSlice(label, label.BitsLeft()); err != nil {
 		return nil, fmt.Errorf("failed to append %s label: %w", name, err)
 	}
 	return builderSliceView(merged), nil

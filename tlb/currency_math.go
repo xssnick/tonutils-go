@@ -164,9 +164,8 @@ func storeExtraCurrencyAmount(amount *big.Int) (*cell.Cell, error) {
 	return b.EndCell(), nil
 }
 
-// addExtraCurrencyDicts reuses an unchanged dictionary when either side is
-// empty. Unique leaves retain their encoding; colliding values are summed and
-// encoded canonically.
+// addExtraCurrencyDicts structurally reuses unique dictionary subtrees and
+// only decodes and rebuilds colliding currency values.
 func addExtraCurrencyDicts(a, b *cell.Dictionary) (*cell.Dictionary, error) {
 	if b == nil || b.IsEmpty() {
 		return a, nil
@@ -175,63 +174,26 @@ func addExtraCurrencyDicts(a, b *cell.Dictionary) (*cell.Dictionary, error) {
 		return b, nil
 	}
 
-	left, err := loadExtraCurrencyEntries(a)
-	if err != nil {
+	result := a.Copy()
+	if err := result.CombineWith(b, addExtraCurrencyValues); err != nil {
 		return nil, err
 	}
-	right, err := loadExtraCurrencyEntries(b)
-	if err != nil {
-		return nil, err
-	}
-
-	rightByKey := make(map[uint32]*cell.Cell, len(right))
-	for _, e := range right {
-		rightByKey[e.key] = e.value
-	}
-
-	result := cell.NewDict(32)
-	set := func(key uint32, payload *cell.Cell) error {
-		return result.SetIntKey(new(big.Int).SetUint64(uint64(key)), payload)
-	}
-
-	for _, e := range left {
-		otherValue, collides := rightByKey[e.key]
-		if !collides {
-			if err = set(e.key, e.value); err != nil {
-				return nil, err
-			}
-			continue
-		}
-		delete(rightByKey, e.key)
-
-		x, err := loadExtraCurrencyAmount(e.value)
-		if err != nil {
-			return nil, fmt.Errorf("extra currency %d: %w", e.key, err)
-		}
-		y, err := loadExtraCurrencyAmount(otherValue)
-		if err != nil {
-			return nil, fmt.Errorf("extra currency %d: %w", e.key, err)
-		}
-
-		payload, err := storeExtraCurrencyAmount(new(big.Int).Add(x, y))
-		if err != nil {
-			return nil, fmt.Errorf("extra currency %d: %w", e.key, err)
-		}
-		if err = set(e.key, payload); err != nil {
-			return nil, err
-		}
-	}
-
-	for _, e := range right {
-		if _, unmerged := rightByKey[e.key]; !unmerged {
-			continue // already merged above
-		}
-		if err = set(e.key, e.value); err != nil {
-			return nil, err
-		}
-	}
-
 	return result, nil
+}
+
+func addExtraCurrencyValues(left, right *cell.Slice, dst *cell.Builder) error {
+	x, err := loadExtraCurrencyAmountSlice(left)
+	if err != nil {
+		return fmt.Errorf("failed to load left extra currency value: %w", err)
+	}
+	y, err := loadExtraCurrencyAmountSlice(right)
+	if err != nil {
+		return fmt.Errorf("failed to load right extra currency value: %w", err)
+	}
+	if err = dst.StoreBigVarUInt(x.Add(x, y), 32); err != nil {
+		return fmt.Errorf("failed to store extra currency value: %w", err)
+	}
+	return nil
 }
 
 // subExtraCurrencyDicts reuses the minuend when b is empty and drops exact-zero

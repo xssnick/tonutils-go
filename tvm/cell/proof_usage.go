@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"sync"
 )
 
 // MerkleProofBuilder records reads of a tree and serializes them as a Merkle
@@ -217,9 +218,15 @@ type merkleProofPruneBuildState struct {
 	// its own, which is what a caller keeping built cells beyond the proof must
 	// use.
 	arena *proofCellArena
+
+	parallelism int
+	parallel    *proofParallelCache
 }
 
 func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Cell, error) {
+	if s.parallelism > 1 {
+		return s.buildParallel(c, merkleDepth)
+	}
 	if c == nil {
 		return nil, nil, fmt.Errorf("cell is nil")
 	}
@@ -287,6 +294,145 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 		substituted = substituted || applied != next
 	}
 
+	arena := s.arena
+	if s.wantApplied && !substituted {
+		arena = nil
+	}
+	built, err := cloneProofCellWithRefs(loaded, refView, refs, arena)
+	if err != nil {
+		return nil, nil, err
+	}
+	applied := built
+	if s.wantApplied && substituted {
+		applied, err = cloneAppliedCellWithRefs(loaded, refView, appliedRefs)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	s.cacheBuilt(key, built, applied)
+	return built, applied, nil
+}
+
+func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*Cell, *Cell, error) {
+	if c == nil {
+		return nil, nil, fmt.Errorf("cell is nil")
+	}
+
+	hash := c.HashKey()
+	key := proofBodyKey{hash: hash, merkleDepth: merkleDepth}
+	if built, applied, ok := s.cached(key); ok {
+		return built, applied, nil
+	}
+
+	if s.shouldPrune != nil {
+		source, pruned, err := s.shouldPrune(c, merkleDepth, hash)
+		if err != nil {
+			return nil, nil, err
+		}
+		if pruned {
+			built, err := createPrunedBranchFromCellInto(c, merkleDepth+1, s.arena)
+			if err != nil {
+				return nil, nil, err
+			}
+			s.shareBoundary(c, key, built)
+			s.cacheBuilt(key, built, source)
+			return built, source, nil
+		}
+	}
+
+	loaded := c
+	if s.resolveLoaded != nil {
+		if recorded := s.resolveLoaded(hash); recorded != nil {
+			loaded = recorded
+		}
+	}
+	if loaded.IsLazy() || loaded == c {
+		var err error
+		if loaded, err = c.load(); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	refCnt := loaded.refsCount()
+	if refCnt == 0 {
+		built := loaded.WithoutTrace()
+		s.cacheBuilt(key, built, built)
+		return built, built, nil
+	}
+
+	var sourceRefsBuf [4]*Cell
+	sourceRefs := sourceRefsBuf[:refCnt]
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refCnt]
+	var appliedBuf [4]*Cell
+	appliedRefs := appliedBuf[:refCnt]
+	refView := newCellRefView(loaded)
+	childDepth := merkleChildDepth(loaded, merkleDepth)
+	for i := 0; i < refCnt; i++ {
+		ref, err := merkleProofRef(c, refView, i)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
+		}
+		sourceRefs[i] = ref
+	}
+
+	if plan, ok := planProofParallelBranch(sourceRefs, s.parallelism, s.memoHint); ok {
+		branch := s.parallelTask(plan.branchWorkers, plan.branchHint)
+		branch.done.Add(1)
+		go buildMerkleProofParallelBranch(
+			branch,
+			plan.branch,
+			sourceRefs[plan.branch],
+			childDepth,
+		)
+
+		remainingErrIndex := len(sourceRefs)
+		var remainingErr error
+		previousParallelism, previousHint := s.parallelism, s.memoHint
+		s.parallelism, s.memoHint = plan.remainingWorkers, plan.remainingHint
+		for i, ref := range sourceRefs {
+			if i == plan.branch || remainingErr != nil {
+				continue
+			}
+			refs[i], appliedRefs[i], remainingErr = s.build(ref, childDepth)
+			if remainingErr != nil {
+				remainingErrIndex = i
+				remainingErr = fmt.Errorf("failed to proof %d ref: %w", i, remainingErr)
+			}
+		}
+		s.parallelism, s.memoHint = previousParallelism, previousHint
+		branch.done.Wait()
+		result := branch.result
+		refs[result.index] = result.built
+		appliedRefs[result.index] = result.applied
+		if result.err != nil {
+			result.err = fmt.Errorf("failed to proof %d ref: %w", result.index, result.err)
+		}
+		if result.err != nil && result.index < remainingErrIndex {
+			return nil, nil, result.err
+		}
+		if remainingErr != nil {
+			return nil, nil, remainingErr
+		}
+		if result.err != nil {
+			return nil, nil, result.err
+		}
+	} else {
+		for i, ref := range sourceRefs {
+			next, applied, err := s.build(ref, childDepth)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
+			}
+			refs[i] = next
+			appliedRefs[i] = applied
+		}
+	}
+
+	substituted := false
+	for i := range refs {
+		substituted = substituted || appliedRefs[i] != refs[i]
+	}
+
 	// With nothing substituted below it this same cell is also the applied
 	// cell, which the caller keeps as part of the new state root; that outlives
 	// the proof, so it must not hold a slab of proof cells with it.
@@ -309,17 +455,68 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 	return built, applied, nil
 }
 
+type merkleProofParallelTask struct {
+	state merkleProofPruneBuildState
+	arena proofCellArena
+	done  sync.WaitGroup
+
+	result merkleProofParallelResult
+}
+
+type merkleProofParallelResult struct {
+	index   int
+	built   *Cell
+	applied *Cell
+	err     error
+}
+
+func buildMerkleProofParallelBranch(
+	task *merkleProofParallelTask,
+	index int,
+	ref *Cell,
+	merkleDepth int,
+) {
+	defer task.done.Done()
+
+	built, applied, err := task.state.build(ref, merkleDepth)
+	task.result = merkleProofParallelResult{index: index, built: built, applied: applied, err: err}
+}
+
 // shareBoundary keeps a boundary the destination walk built so the source proof
 // can reuse it instead of building an equal one. Only cells with references are
 // offered: a childless one goes through the materializing fast path, whose
 // result depends on the cell it was asked about and not only on its hash.
 func (s *merkleProofPruneBuildState) shareBoundary(c *Cell, key proofBodyKey, built *Cell) {
-	if s.prunedShared == nil || c.refsCount() == 0 || built.GetType() != PrunedCellType {
+	if c.refsCount() == 0 || built.GetType() != PrunedCellType {
+		return
+	}
+	if s.parallel != nil {
+		s.parallel.storeBoundary(key, built)
+		return
+	}
+	if s.prunedShared == nil {
 		return
 	}
 	if _, ok := s.prunedShared[key]; !ok {
 		s.prunedShared[key] = built
 	}
+}
+
+func (s *merkleProofPruneBuildState) parallelTask(workers, hint int) *merkleProofParallelTask {
+	task := &merkleProofParallelTask{
+		arena: newParallelProofArena(hint),
+	}
+	task.state = merkleProofPruneBuildState{
+		shouldPrune:   s.shouldPrune,
+		wantApplied:   s.wantApplied,
+		resolveLoaded: s.resolveLoaded,
+		memoHint:      hint,
+		arena:         &task.arena,
+		parallelism:   workers,
+		parallel:      s.parallel,
+	}
+
+	return task
 }
 
 // cloneAppliedCellWithRefs rebuilds an applied cell around substituted children.
@@ -356,6 +553,9 @@ func cloneAppliedCellWithRefs(src *Cell, view cellRefView, refs []*Cell) (*Cell,
 }
 
 func (s *merkleProofPruneBuildState) cacheBuilt(key proofBodyKey, c, applied *Cell) {
+	if s.parallel != nil {
+		s.parallel.memo.Add(1)
+	}
 	if s.spilled {
 		s.built.store(key.hash, key.merkleDepth, c, applied)
 		return
@@ -381,7 +581,14 @@ func (s *merkleProofPruneBuildState) cacheBuilt(key proofBodyKey, c, applied *Ce
 // next walk of the same shape should hand back as memoHint; the walk itself
 // never reads it.
 func (s *merkleProofPruneBuildState) memoSize() int {
-	return int(s.inlineLen) + len(s.built.entries)
+	if s.parallel != nil {
+		return s.parallel.size()
+	}
+	if s.spilled {
+		return len(s.built.entries)
+	}
+
+	return int(s.inlineLen)
 }
 
 func (s *merkleProofPruneBuildState) cached(key proofBodyKey) (*Cell, *Cell, bool) {
@@ -499,8 +706,12 @@ type proofBodyBuildState struct {
 	cells map[Hash]*Cell
 	built map[proofBodyKey]*Cell
 	// prunedShared holds boundaries a paired destination walk already built.
-	prunedShared map[proofBodyKey]*Cell
-	arena        *proofCellArena
+	prunedShared   map[proofBodyKey]*Cell
+	prunedParallel *proofParallelCache
+	arena          *proofCellArena
+
+	parallelism int
+	memoHint    int
 }
 
 func (s *proofBodyBuildState) cacheLoaded(hash Hash, c *Cell) {
@@ -524,6 +735,53 @@ func (s *proofBodyBuildState) prepareBuiltCache() {
 		// repeated growth of their second build map.
 		s.built = make(map[proofBodyKey]*Cell, len(s.cells))
 	}
+}
+
+func (s *proofBodyBuildState) cachedBuilt(key proofBodyKey) *Cell {
+	return s.built[key]
+}
+
+func (s *proofBodyBuildState) sharedBoundary(key proofBodyKey) (*Cell, bool) {
+	if s.prunedParallel != nil {
+		return s.prunedParallel.loadBoundary(key)
+	}
+	boundary, ok := s.prunedShared[key]
+
+	return boundary, ok
+}
+
+func (s *proofBodyBuildState) parallelTask(workers, hint int) *proofBodyParallelTask {
+	task := &proofBodyParallelTask{
+		arena: newParallelProofArena(hint),
+	}
+	task.state = proofBodyBuildState{
+		cells:          s.cells,
+		prunedShared:   s.prunedShared,
+		prunedParallel: s.prunedParallel,
+		arena:          &task.arena,
+		parallelism:    workers,
+		memoHint:       hint,
+		built:          make(map[proofBodyKey]*Cell, hint),
+	}
+
+	return task
+}
+
+// newParallelProofArena skips the tiny growth slabs when the branch's share of
+// the previous walk says it will immediately outgrow them. Bodies and pruned
+// boundaries share the hint conservatively; either side can still grow through
+// the ordinary bounded slab sequence when the shape differs from the estimate.
+func newParallelProofArena(hint int) proofCellArena {
+	target := proofArenaFirstSlab
+	for target < proofArenaMaxSlab && target < hint/2 {
+		target *= 2
+	}
+	if target == proofArenaFirstSlab {
+		return proofCellArena{}
+	}
+
+	previous := target / 2
+	return proofCellArena{bodySlab: previous, prunedSlab: previous}
 }
 
 func loadedForBoundary(boundary, loaded *Cell) *Cell {
@@ -552,13 +810,16 @@ func buildRecordedProofBody(c *Cell, state *proofBodyBuildState, merkleDepth int
 // and looking them up again at the top of the call is the same two probes over
 // a 32-byte key.
 func buildProofBodyCell(c *Cell, hash Hash, cached *Cell, visited bool, state *proofBodyBuildState, merkleDepth int) (*Cell, error) {
+	if state.parallelism > 1 {
+		return buildProofBodyCellParallel(c, hash, cached, visited, state, merkleDepth)
+	}
 	key := proofBodyKey{hash: hash, merkleDepth: merkleDepth}
-	if built := state.built[key]; built != nil {
+	if built := state.cachedBuilt(key); built != nil {
 		return built, nil
 	}
 
 	if !visited {
-		pruned, ok := state.prunedShared[key]
+		pruned, ok := state.sharedBoundary(key)
 		if !ok || c.refsCount() == 0 {
 			var err error
 			pruned, err = createPrunedBranchFromCellInto(c, merkleDepth+1, state.arena)
@@ -614,6 +875,171 @@ func buildProofBodyCell(c *Cell, hash Hash, cached *Cell, visited bool, state *p
 	}
 	state.cacheBuilt(key, rebuilt)
 	return rebuilt, nil
+}
+
+func buildProofBodyCellParallel(
+	c *Cell,
+	hash Hash,
+	cached *Cell,
+	visited bool,
+	state *proofBodyBuildState,
+	merkleDepth int,
+) (*Cell, error) {
+	key := proofBodyKey{hash: hash, merkleDepth: merkleDepth}
+	if built := state.cachedBuilt(key); built != nil {
+		return built, nil
+	}
+
+	if !visited {
+		pruned, ok := state.sharedBoundary(key)
+		if !ok || c.refsCount() == 0 {
+			var err error
+			pruned, err = createPrunedBranchFromCellInto(c, merkleDepth+1, state.arena)
+			if err != nil {
+				return nil, err
+			}
+		}
+		state.cacheBuilt(key, pruned)
+		return pruned, nil
+	}
+
+	loaded := c
+	if cached != nil {
+		loaded = cached
+	}
+
+	refCnt := loaded.refsCount()
+	if refCnt == 0 {
+		built := loaded.WithoutTrace()
+		state.cacheBuilt(key, built)
+		return built, nil
+	}
+
+	var sourceRefsBuf [4]*Cell
+	sourceRefs := sourceRefsBuf[:refCnt]
+	var sourceHashesBuf [4]Hash
+	sourceHashes := sourceHashesBuf[:refCnt]
+	var loadedRefsBuf [4]*Cell
+	loadedRefs := loadedRefsBuf[:refCnt]
+	var visitedRefsBuf [4]bool
+	visitedRefs := visitedRefsBuf[:refCnt]
+	var refsBuf [4]*Cell
+	refs := refsBuf[:refCnt]
+	refView := newCellRefView(loaded)
+	childDepth := merkleChildDepth(loaded, merkleDepth)
+	for i := 0; i < refCnt; i++ {
+		ref, err := merkleProofRef(loaded, refView, i)
+		if err != nil {
+			return nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
+		}
+
+		refHash := ref.HashKey()
+		loadedRef, refVisited := state.cells[refHash]
+		if refVisited && loadedRef == nil {
+			loadedRef, err = ref.load()
+			if err != nil {
+				return nil, fmt.Errorf("failed to load %d ref: %w", i, err)
+			}
+			state.cacheLoaded(refHash, loadedRef)
+		}
+		sourceRefs[i] = ref
+		sourceHashes[i] = refHash
+		loadedRefs[i] = loadedRef
+		visitedRefs[i] = refVisited
+	}
+
+	if plan, ok := planProofParallelBranch(sourceRefs, state.parallelism, state.memoHint); ok {
+		branch := state.parallelTask(plan.branchWorkers, plan.branchHint)
+		branch.done.Add(1)
+		go buildProofBodyParallelBranch(
+			branch,
+			plan.branch,
+			sourceRefs[plan.branch],
+			sourceHashes[plan.branch],
+			loadedRefs[plan.branch],
+			visitedRefs[plan.branch],
+			childDepth,
+		)
+
+		remainingErrIndex := len(sourceRefs)
+		var remainingErr error
+		previousParallelism, previousHint := state.parallelism, state.memoHint
+		state.parallelism, state.memoHint = plan.remainingWorkers, plan.remainingHint
+		for i, ref := range sourceRefs {
+			if i == plan.branch || remainingErr != nil {
+				continue
+			}
+			refs[i], remainingErr = buildProofBodyCell(
+				ref, sourceHashes[i], loadedRefs[i], visitedRefs[i], state, childDepth,
+			)
+			if remainingErr != nil {
+				remainingErrIndex = i
+				remainingErr = fmt.Errorf("failed to proof %d ref: %w", i, remainingErr)
+			}
+		}
+		state.parallelism, state.memoHint = previousParallelism, previousHint
+		branch.done.Wait()
+		result := branch.result
+		refs[result.index] = result.built
+		if result.err != nil {
+			result.err = fmt.Errorf("failed to proof %d ref: %w", result.index, result.err)
+		}
+		if result.err != nil && result.index < remainingErrIndex {
+			return nil, result.err
+		}
+		if remainingErr != nil {
+			return nil, remainingErr
+		}
+		if result.err != nil {
+			return nil, result.err
+		}
+	} else {
+		for i, ref := range sourceRefs {
+			next, err := buildProofBodyCell(
+				ref, sourceHashes[i], loadedRefs[i], visitedRefs[i], state, childDepth,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to proof %d ref: %w", i, err)
+			}
+			refs[i] = next
+		}
+	}
+
+	rebuilt, err := cloneProofCellWithRefs(loaded, refView, refs, state.arena)
+	if err != nil {
+		return nil, err
+	}
+	state.cacheBuilt(key, rebuilt)
+	return rebuilt, nil
+}
+
+type proofBodyParallelTask struct {
+	state proofBodyBuildState
+	arena proofCellArena
+	done  sync.WaitGroup
+
+	result proofBodyParallelResult
+}
+
+type proofBodyParallelResult struct {
+	index int
+	built *Cell
+	err   error
+}
+
+func buildProofBodyParallelBranch(
+	task *proofBodyParallelTask,
+	index int,
+	ref *Cell,
+	hash Hash,
+	loaded *Cell,
+	visited bool,
+	merkleDepth int,
+) {
+	defer task.done.Done()
+
+	built, err := buildProofBodyCell(ref, hash, loaded, visited, &task.state, merkleDepth)
+	task.result = proofBodyParallelResult{index: index, built: built, err: err}
 }
 
 // cloneProofCellWithRefs rebuilds a proof-body cell in one copy with the same

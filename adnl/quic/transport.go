@@ -755,7 +755,22 @@ func (c *Client) Query(ctx context.Context, payload []byte, maxAnswer int64) ([]
 
 // SendMessage sends a fire-and-forget quic.message.
 func (c *Client) SendMessage(ctx context.Context, payload []byte) error {
-	if err := validateBoxedObjectSize(payload, c.maxObjectSize); err != nil {
+	return c.sendMessageParts(ctx, nil, payload)
+}
+
+// SendMessageParts sends one fire-and-forget quic.message from two immutable
+// payload segments. It avoids joining a stable overlay prefix with a prepared
+// broadcast body for every recipient.
+func (c *Client) SendMessageParts(ctx context.Context, prefix, body []byte) error {
+	return c.sendMessageParts(ctx, prefix, body)
+}
+
+func (c *Client) sendMessageParts(ctx context.Context, prefix, body []byte) error {
+	payloadLen := len(prefix) + len(body)
+	if payloadLen < len(prefix) {
+		return fmt.Errorf("quic: message: payload size overflow")
+	}
+	if err := validateBoxedObjectPayloadSize(payloadLen, c.maxObjectSize); err != nil {
 		return fmt.Errorf("quic: message: %w", err)
 	}
 
@@ -770,7 +785,7 @@ func (c *Client) SendMessage(ctx context.Context, payload []byte) error {
 		stopCancel := cancelStreamOnContext(ctx, st)
 		defer stopCancel()
 	}
-	if err := writeBoxedObject(st, idQuicMessage, payload); err != nil {
+	if err := writeBoxedObjectParts(st, idQuicMessage, prefix, body); err != nil {
 		st.CancelRead(1)
 		return ctxErrOr(ctx, "write message", err)
 	}
@@ -816,37 +831,55 @@ var wireBuffers = sync.Pool{
 
 // writeBoxedObject writes a boxed <id> data:bytes object and closes the stream's send side (FIN).
 func writeBoxedObject(st *quicgo.Stream, id uint32, payload []byte) error {
-	return writeBoxedObjectVia(st, st, id, payload)
+	return writeBoxedObjectPartsVia(st, st, id, nil, payload)
+}
+
+func writeBoxedObjectParts(st *quicgo.Stream, id uint32, prefix, body []byte) error {
+	return writeBoxedObjectPartsVia(st, st, id, prefix, body)
 }
 
 // Split from writeBoxedObject so the answer path can wrap the stream in an
 // idle-deadline writer while small objects keep the pooled single-write path.
 func writeBoxedObjectVia(w io.Writer, st *quicgo.Stream, id uint32, payload []byte) error {
-	if len(payload) < directWriteObjectThreshold {
-		header, headerLen, pad, total, err := boxedObjectHeader(id, len(payload))
+	return writeBoxedObjectPartsVia(w, st, id, nil, payload)
+}
+
+func writeBoxedObjectPartsVia(w io.Writer, st *quicgo.Stream, id uint32, prefix, body []byte) error {
+	payloadLen := len(prefix) + len(body)
+	if payloadLen < len(prefix) {
+		return fmt.Errorf("payload size overflow")
+	}
+	if payloadLen < directWriteObjectThreshold {
+		header, headerLen, pad, total, err := boxedObjectHeader(id, payloadLen)
 		if err != nil {
 			return err
 		}
 		buf := wireBuffers.Get().(*[]byte)
 		wire := (*buf)[:total]
 		copy(wire, header[:headerLen])
-		copy(wire[headerLen:], payload)
+		offset := headerLen + copy(wire[headerLen:], prefix)
+		copy(wire[offset:], body)
 		clear(wire[total-pad:])
-		if err = writeFull(w, wire); err != nil {
+		err = writeFull(w, wire)
+		wireBuffers.Put(buf)
+		if err != nil {
 			return err
 		}
-		wireBuffers.Put(buf)
 		return st.Close()
 	}
 
-	if err := writeBoxedObjectTo(w, id, payload); err != nil {
+	if err := writeBoxedObjectPartsTo(w, id, prefix, body); err != nil {
 		return err
 	}
 	return st.Close()
 }
 
 func validateBoxedObjectSize(payload []byte, maxSize int64) error {
-	_, _, _, total, err := boxedObjectHeader(0, len(payload))
+	return validateBoxedObjectPayloadSize(len(payload), maxSize)
+}
+
+func validateBoxedObjectPayloadSize(payloadLen int, maxSize int64) error {
+	_, _, _, total, err := boxedObjectHeader(0, payloadLen)
 	if err != nil {
 		return err
 	}
@@ -857,14 +890,27 @@ func validateBoxedObjectSize(payload []byte, maxSize int64) error {
 }
 
 func writeBoxedObjectTo(w io.Writer, id uint32, payload []byte) error {
-	header, headerLen, pad, _, err := boxedObjectHeader(id, len(payload))
+	return writeBoxedObjectPartsTo(w, id, nil, payload)
+}
+
+func writeBoxedObjectPartsTo(w io.Writer, id uint32, prefix, body []byte) error {
+	payloadLen := len(prefix) + len(body)
+	if payloadLen < len(prefix) {
+		return fmt.Errorf("payload size overflow")
+	}
+	header, headerLen, pad, _, err := boxedObjectHeader(id, payloadLen)
 	if err != nil {
 		return err
 	}
 	if err = writeFull(w, header[:headerLen]); err != nil {
 		return err
 	}
-	if err = writeFull(w, payload); err != nil {
+	if len(prefix) > 0 {
+		if err = writeFull(w, prefix); err != nil {
+			return err
+		}
+	}
+	if err = writeFull(w, body); err != nil {
 		return err
 	}
 	if pad > 0 {

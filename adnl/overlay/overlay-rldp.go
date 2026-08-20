@@ -73,6 +73,10 @@ func (r *RLDPOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Seria
 	return r.RLDPWrapper.sendOverlayMessage(ctx, r.overlayId, req)
 }
 
+func (r *RLDPOverlayWrapper) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return r.RLDPWrapper.sendOverlayMessage(ctx, r.overlayId, tl.Raw(body))
+}
+
 func (r *RLDPWrapper) sendOverlayMessage(ctx context.Context, overlayID []byte, req tl.Serializable) error {
 	if r.messageSender == nil {
 		return ErrRLDPMessageUnsupported

@@ -21,6 +21,8 @@ const broadcastFECDeliveredTTL = fecBroadcastFinishedTTL
 type broadcastFECRelayPart struct {
 	full            *BroadcastFEC
 	short           *BroadcastFECShort
+	fullWire        []byte
+	shortWire       []byte
 	immediatePeerID broadcastFECImmediatePeerID
 }
 
@@ -86,6 +88,7 @@ type broadcastAdmissionAttempt struct {
 type broadcastFECRelayOp struct {
 	peer  BroadcastPeer
 	msg   tl.Serializable
+	wire  []byte
 	seqno uint32
 }
 
@@ -514,22 +517,35 @@ func checkBroadcastFECDate(date uint32, now time.Time) error {
 	return nil
 }
 
-func (s *fecBroadcastStream) addRelayPart(seqno uint32, full *BroadcastFEC, broadcastHash, partDataHash, immediatePeerID []byte) {
+func (s *fecBroadcastStream) addRelayPart(seqno uint32, full *BroadcastFEC, broadcastHash, partDataHash, immediatePeerID []byte) error {
 	if s.parts == nil {
 		s.parts = map[uint32]broadcastFECRelayPart{}
 	}
+	short := &BroadcastFECShort{
+		Source:        full.Source,
+		Certificate:   full.Certificate,
+		BroadcastHash: broadcastHash,
+		PartDataHash:  partDataHash,
+		Seqno:         int32(seqno),
+		Signature:     full.Signature,
+	}
+	fullWire, err := prepareBroadcastMessage(full)
+	if err != nil {
+		return err
+	}
+	shortWire, err := prepareBroadcastMessage(short)
+	if err != nil {
+		return err
+	}
+
 	s.parts[seqno] = broadcastFECRelayPart{
 		full:            full,
+		short:           short,
+		fullWire:        fullWire,
+		shortWire:       shortWire,
 		immediatePeerID: newBroadcastFECImmediatePeerID(immediatePeerID),
-		short: &BroadcastFECShort{
-			Source:        full.Source,
-			Certificate:   full.Certificate,
-			BroadcastHash: broadcastHash,
-			PartDataHash:  partDataHash,
-			Seqno:         int32(seqno),
-			Signature:     full.Signature,
-		},
 	}
+	return nil
 }
 
 func (s *fecBroadcastStream) relayPartOpsLocked(seqno uint32, peers []BroadcastPeer, localID []byte, erase bool) []broadcastFECRelayOp {
@@ -557,12 +573,15 @@ func (s *fecBroadcastStream) relayPartOpsLocked(seqno uint32, peers []BroadcastP
 		}
 
 		msg := tl.Serializable(part.full)
+		wire := part.fullWire
 		if _, ok = s.receivedPeers[id]; ok {
 			msg = part.short
+			wire = part.shortWire
 		}
 		ops = append(ops, broadcastFECRelayOp{
 			peer:  peer,
 			msg:   msg,
+			wire:  wire,
 			seqno: seqno,
 		})
 	}
@@ -585,7 +604,7 @@ func sendBroadcastFECRelayOps(ctx context.Context, state *BroadcastFECRelayState
 	var sendErr error
 	var sent, failed uint64
 	for _, op := range ops {
-		if err := op.peer.SendCustomMessage(ctx, op.msg); err != nil {
+		if err := sendPreparedBroadcastMessage(ctx, op.peer, op.msg, op.wire); err != nil {
 			failed++
 			if sendErr == nil {
 				sendErr = fmt.Errorf("failed to relay FEC part %d to peer %x: %w", op.seqno, op.peer.ID(), err)

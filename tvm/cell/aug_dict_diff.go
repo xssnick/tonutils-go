@@ -38,12 +38,7 @@ type augDictDiffWalk struct {
 	checkNew bool
 	fn       AugDictDiffFunc
 
-	computed Builder
-	left     Slice
-	right    Slice
-	// scratch backs the fork-extra probes; see augmentedNodeExtraViewScratch.
-	scratch Slice
-	buf     [maxCellDataBytes]byte
+	checker augmentedNodeChecker
 }
 
 func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) error {
@@ -129,7 +124,7 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 					// predecessor closure in a path-based usage tree.
 					newNode.loader.trace = CombineTraces(newNode.loader.trace, oldNode.loader.trace)
 				}
-				if err = w.checkLeaf(newNode, w.newAug); err != nil {
+				if err = w.checker.leaf(newNode, w.newAug); err != nil {
 					return fmt.Errorf("invalid new dictionary leaf augmentation: %w", err)
 				}
 			}
@@ -140,7 +135,7 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 		}
 
 		if w.checkNew {
-			if err = w.checkFork(newNode, remaining-common, w.newAug); err != nil {
+			if err = w.checker.fork(newNode, remaining-common, w.newAug); err != nil {
 				return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 			}
 		}
@@ -193,7 +188,7 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 	}
 
 	if w.checkNew {
-		if err = w.checkFork(newNode, remaining-common, w.newAug); err != nil {
+		if err = w.checker.fork(newNode, remaining-common, w.newAug); err != nil {
 			return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 		}
 	}
@@ -239,7 +234,7 @@ func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) 
 	w.storeLabel(&label, depth)
 	if node.isLeaf(remaining) {
 		if !oldOnly && w.checkNew {
-			if err = w.checkLeaf(node, w.newAug); err != nil {
+			if err = w.checker.leaf(node, w.newAug); err != nil {
 				return fmt.Errorf("invalid new dictionary leaf augmentation: %w", err)
 			}
 		}
@@ -250,7 +245,7 @@ func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) 
 	}
 
 	if !oldOnly && w.checkNew {
-		if err = w.checkFork(node, remaining-node.labelLen, w.newAug); err != nil {
+		if err = w.checker.fork(node, remaining-node.labelLen, w.newAug); err != nil {
 			return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 		}
 	}
@@ -288,7 +283,16 @@ func parseAugDictDiffNode(branch *Cell, remaining uint) (fixedDictNode, error) {
 	return node, nil
 }
 
-func (w *augDictDiffWalk) checkLeaf(node fixedDictNode, aug Augmentation) error {
+type augmentedNodeChecker struct {
+	computed Builder
+	left     Slice
+	right    Slice
+	// scratch backs the fork-extra probes; see augmentedNodeExtraViewScratch.
+	scratch Slice
+	buf     [maxCellDataBytes]byte
+}
+
+func (c *augmentedNodeChecker) leaf(node fixedDictNode, aug Augmentation) error {
 	stored := node.loader
 	value := node.loader
 	if err := aug.SkipExtra(&value); err != nil {
@@ -296,17 +300,17 @@ func (w *augDictDiffWalk) checkLeaf(node fixedDictNode, aug Augmentation) error 
 	}
 	stored.bitEnd, stored.refEnd = value.bitStart, value.refStart
 
-	w.computed = Builder{}
-	if err := aug.LeafExtra(&value, &w.computed); err != nil {
+	c.computed = Builder{}
+	if err := aug.LeafExtra(&value, &c.computed); err != nil {
 		return err
 	}
-	if !w.computed.equalsSlice(&stored, &w.buf) {
+	if !c.computed.equalsSlice(&stored, &c.buf) {
 		return fmt.Errorf("augmented dictionary leaf extra mismatch")
 	}
 	return nil
 }
 
-func (w *augDictDiffWalk) checkFork(node fixedDictNode, remaining uint, aug Augmentation) error {
+func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augmentation) error {
 	left, err := node.ref(0)
 	if err != nil {
 		return err
@@ -316,11 +320,11 @@ func (w *augDictDiffWalk) checkFork(node fixedDictNode, remaining uint, aug Augm
 		return err
 	}
 	childRemaining := remaining - 1
-	w.left, err = extractAugmentedNodeExtraViewScratch(left, childRemaining, aug.SkipExtra, &w.scratch)
+	c.left, err = extractAugmentedNodeExtraViewScratch(left, childRemaining, aug.SkipExtra, &c.scratch)
 	if err != nil {
 		return err
 	}
-	w.right, err = extractAugmentedNodeExtraViewScratch(right, childRemaining, aug.SkipExtra, &w.scratch)
+	c.right, err = extractAugmentedNodeExtraViewScratch(right, childRemaining, aug.SkipExtra, &c.scratch)
 	if err != nil {
 		return err
 	}
@@ -329,11 +333,11 @@ func (w *augDictDiffWalk) checkFork(node fixedDictNode, remaining uint, aug Augm
 	if err = stored.SkipBitsAndRefs(0, 2); err != nil {
 		return err
 	}
-	w.computed = Builder{}
-	if err = aug.CombineExtra(&w.left, &w.right, &w.computed); err != nil {
+	c.computed = Builder{}
+	if err = aug.CombineExtra(&c.left, &c.right, &c.computed); err != nil {
 		return err
 	}
-	if !w.computed.equalsSlice(&stored, &w.buf) {
+	if !c.computed.equalsSlice(&stored, &c.buf) {
 		return fmt.Errorf("augmented dictionary fork extra mismatch")
 	}
 	return nil

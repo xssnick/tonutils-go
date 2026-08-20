@@ -27,6 +27,16 @@ type BroadcastPeer interface {
 	SendCustomMessage(ctx context.Context, req tl.Serializable) error
 }
 
+// PreparedBroadcastPeer accepts an immutable canonical boxed TL body. The body
+// remains valid for the call; implementations that retain it must copy it. It
+// lets broadcast fanout serialize a FEC part once while the peer still owns its
+// transport envelope and encryption. BroadcastPeer stays unchanged for
+// compatibility with external peer implementations.
+type PreparedBroadcastPeer interface {
+	BroadcastPeer
+	SendPreparedCustomMessage(ctx context.Context, body []byte) error
+}
+
 type BroadcastPeerSet interface {
 	Peers() []BroadcastPeer
 }
@@ -55,14 +65,19 @@ type broadcastFECSendPeerState struct {
 }
 
 type broadcastFECSendPart struct {
-	full  *BroadcastFEC
-	short *BroadcastFECShort
+	full      *BroadcastFEC
+	short     *BroadcastFECShort
+	fullWire  []byte
+	shortWire []byte
 }
 
-// BroadcastFECPart contains both full and short wire forms for one FEC seqno.
+// BroadcastFECPart contains both full and short forms for one FEC seqno.
+// Messages and canonical wire bodies share the sender's immutable cache.
 type BroadcastFECPart struct {
-	Full  *BroadcastFEC
-	Short *BroadcastFECShort
+	Full      *BroadcastFEC
+	Short     *BroadcastFECShort
+	FullWire  []byte
+	ShortWire []byte
 }
 
 // BroadcastFECControl is a delivery acknowledgement decoded from FECReceived or FECCompleted.
@@ -77,6 +92,30 @@ func (p BroadcastFECPart) Message(useShort bool) tl.Serializable {
 		return p.Short
 	}
 	return p.Full
+}
+
+func sendPreparedBroadcastMessage(
+	ctx context.Context,
+	peer BroadcastPeer,
+	message tl.Serializable,
+	body []byte,
+) error {
+	if prepared, ok := peer.(PreparedBroadcastPeer); ok {
+		return prepared.SendPreparedCustomMessage(ctx, body)
+	}
+
+	// BroadcastPeer is a released extension point. Keep legacy peers working;
+	// production transports implement PreparedBroadcastPeer and never take this
+	// reflective serialization path.
+	return peer.SendCustomMessage(ctx, message)
+}
+
+func prepareBroadcastMessage(message tl.Serializable) ([]byte, error) {
+	body, err := tl.Serialize(message, true)
+	if err != nil {
+		return nil, fmt.Errorf("serialize broadcast message: %w", err)
+	}
+	return body, nil
 }
 
 type BroadcastFECSender struct {
@@ -328,7 +367,7 @@ func (s *BroadcastFECSender) SendNow(ctx context.Context, peerSet BroadcastPeerS
 
 	var sendErr error
 	for _, op := range ops {
-		if err = op.peer.SendCustomMessage(ctx, op.msg); err != nil && sendErr == nil {
+		if err = sendPreparedBroadcastMessage(ctx, op.peer, op.msg, op.wire); err != nil && sendErr == nil {
 			sendErr = fmt.Errorf("failed to send part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
 		}
 	}
@@ -374,13 +413,16 @@ func (s *BroadcastFECSender) prepareSend(peers []BroadcastPeer, parts uint32) ([
 
 		for _, peer := range activePeers {
 			msg := tl.Serializable(part.full)
+			wire := part.fullWire
 			if peer.state.received {
 				msg = part.short
+				wire = part.shortWire
 			}
 
 			ops = append(ops, broadcastFECSendOp{
 				peer:  peer.peer,
 				msg:   msg,
+				wire:  wire,
 				seqno: seqno,
 			})
 		}
@@ -408,8 +450,10 @@ func (s *BroadcastFECSender) Part(seqno uint32) (BroadcastFECPart, error) {
 	}
 
 	return BroadcastFECPart{
-		Full:  part.full,
-		Short: part.short,
+		Full:      part.full,
+		Short:     part.short,
+		FullWire:  part.fullWire,
+		ShortWire: part.shortWire,
 	}, nil
 }
 
@@ -484,10 +528,20 @@ func (s *BroadcastFECSender) partLocked(seqno uint32) (*broadcastFECSendPart, er
 		Seqno:         int32(seqno),
 		Signature:     append([]byte(nil), signature...),
 	}
+	fullWire, err := prepareBroadcastMessage(full)
+	if err != nil {
+		return nil, fmt.Errorf("prepare full broadcast part %d: %w", seqno, err)
+	}
+	shortWire, err := prepareBroadcastMessage(short)
+	if err != nil {
+		return nil, fmt.Errorf("prepare short broadcast part %d: %w", seqno, err)
+	}
 
 	part := &broadcastFECSendPart{
-		full:  full,
-		short: short,
+		full:      full,
+		short:     short,
+		fullWire:  fullWire,
+		shortWire: shortWire,
 	}
 	s.cachePartLocked(seqno, part)
 	return part, nil
@@ -518,6 +572,7 @@ func (s *BroadcastFECSender) totalPartsLimit() uint32 {
 type broadcastFECSendOp struct {
 	peer  BroadcastPeer
 	msg   tl.Serializable
+	wire  []byte
 	seqno uint32
 }
 

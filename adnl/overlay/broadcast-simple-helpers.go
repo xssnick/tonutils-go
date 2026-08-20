@@ -22,7 +22,7 @@ func calcBroadcastIDFromDataHash(source any, flags int32, dataHash []byte) ([]by
 	}
 
 	broadcastHash, err := tl.Hash(&BroadcastID{
-		Source:   src,
+		Source:   src[:],
 		DataHash: dataHash,
 		Flags:    flags,
 	})

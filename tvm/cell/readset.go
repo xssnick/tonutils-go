@@ -836,6 +836,45 @@ func (s *readSetShard) lookup(hash Hash) (*Cell, bool) {
 	}
 }
 
+// lookupPos is lookup returning the entry's stable position in the current
+// table generation beside the cell. The position numbers the entry arrays, so
+// it is dense, stable while no insert grows the table, and free to obtain —
+// the probe had it in hand. A caller keying its own flat array by it gets a
+// map from recorded hashes to its values without hashing the 32-byte key a
+// second time; sourceGraph is that caller.
+func (s *readSetShard) lookupPos(hash Hash) (*Cell, int32, bool) {
+	table := s.table.Load()
+	if table == nil {
+		return nil, -1, false
+	}
+
+	fingerprint := readSetFingerprint(hash)
+	mask := len(table.slots) - 1
+	pos := int(fingerprint) & mask
+	for {
+		entry := table.slots[pos].Load()
+		if entry == 0 {
+			return nil, -1, false
+		}
+		if uint32(entry>>32) == fingerprint {
+			if idx := int(uint32(entry)) - 1; table.hashes[idx] == hash {
+				return table.cells[idx], int32(idx), true
+			}
+		}
+		pos = (pos + 1) & mask
+	}
+}
+
+// entryCapacity reports the entry-array length of the current generation, the
+// exclusive upper bound of every position lookupPos can return.
+func (s *readSetShard) entryCapacity() int {
+	table := s.table.Load()
+	if table == nil {
+		return 0
+	}
+	return len(table.hashes)
+}
+
 // growLocked publishes a larger generation. Readers on the old table keep finding
 // everything it held, so the swap needs no coordination with them.
 //

@@ -46,6 +46,7 @@ var errFECBroadcastDelivered = errors.New("fec broadcast already delivered")
 
 type fecBroadcastStream struct {
 	decoder        *raptorq.Decoder
+	decodeBuffer   []byte
 	encoder        *raptorq.Encoder
 	partHashes     map[uint32][32]byte
 	parts          map[uint32]broadcastFECRelayPart
@@ -113,6 +114,7 @@ func (s *fecBroadcastStream) waitAdmission() fecAdmissionResult {
 
 func (s *fecBroadcastStream) compactLocked(now time.Time) {
 	s.decoder = nil
+	s.decodeBuffer = nil
 	s.encoder = nil
 	s.partHashes = nil
 	s.parts = nil
@@ -241,6 +243,13 @@ func (a *ADNLWrapper) detachOverlay(w *ADNLOverlayWrapper) {
 
 func (a *ADNLOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
 	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{Message{Overlay: a.overlayId}, req})
+}
+
+func (a *ADNLOverlayWrapper) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return a.ADNLWrapper.SendCustomMessage(ctx, []tl.Serializable{
+		Message{Overlay: a.overlayId},
+		tl.Raw(body),
+	})
 }
 
 func (a *ADNLOverlayWrapper) Query(ctx context.Context, req, result tl.Serializable) error {
@@ -1071,7 +1080,13 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	}
 
 	stream.addReceivedPart(t.Seqno, partDataHash)
-	stream.addRelayPart(t.Seqno, t, broadcastHash, partDataHash, sourcePeerID)
+	if relayCfg.enabled {
+		if err = stream.addRelayPart(t.Seqno, t, broadcastHash, partDataHash, sourcePeerID); err != nil {
+			delete(stream.partHashes, t.Seqno)
+			stream.mx.Unlock()
+			return fmt.Errorf("failed to prepare FEC relay part %d: %w", t.Seqno, err)
+		}
+	}
 
 	if !finished {
 		canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Data)
@@ -1084,7 +1099,10 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 
 		if canTryDecode {
 			decodeStarted := time.Now()
-			decodedNow, data, err := stream.decoder.Decode()
+			if stream.decodeBuffer == nil {
+				stream.decodeBuffer = make([]byte, stream.fec.DataSize)
+			}
+			decodedNow, err := stream.decoder.DecodeInto(stream.decodeBuffer)
 			if err != nil {
 				err = fmt.Errorf("failed to decode raptorq packet: %w", err)
 				return terminalFECBroadcastErrorLocked(state, id, stream, tm, err)
@@ -1092,6 +1110,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 
 			// it may not be decoded due to unsolvable math system, it means we need more symbols
 			if decodedNow {
+				data := stream.decodeBuffer
 				dHash := sha256.Sum256(data)
 				if !bytes.Equal(dHash[:], t.DataHash) {
 					return terminalFECBroadcastErrorLocked(state, id, stream, tm, fmt.Errorf("incorrect data hash"))
@@ -1108,6 +1127,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 				stream.finishedAt = &tm
 				stream.admissionDone = make(chan struct{})
 				stream.decoder = nil
+				stream.decodeBuffer = nil
 				if relayCfg.enabled {
 					encoder, err := raptorq.NewRaptorQ(uint32(stream.fec.SymbolSize)).CreateEncoder(data)
 					if err != nil {
@@ -1372,7 +1392,12 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		}
 		trusted := stream.trusted
 		stream.lastMessageAt = now
-		stream.addRelayPart(seqno, broadcastFEC, t.BroadcastHash, t.PartDataHash, sourcePeerID)
+		if relayCfg.enabled {
+			if err = stream.addRelayPart(seqno, broadcastFEC, t.BroadcastHash, t.PartDataHash, sourcePeerID); err != nil {
+				stream.mx.Unlock()
+				return fmt.Errorf("failed to prepare short FEC relay part %d: %w", seqno, err)
+			}
+		}
 		stream.addReceivedPart(seqno, t.PartDataHash)
 		var relayOps []broadcastFECRelayOp
 		if relayCfg.enabled && (trusted || stream.checked) {

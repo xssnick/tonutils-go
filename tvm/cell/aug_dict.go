@@ -16,7 +16,8 @@ type AugmentedExtraSkipper func(*Slice) error
 // methods, ToCell and BaseCell; both return an owned, finalized cell.
 // Implementations must not use RawCell identity, hashes, levels, or metadata —
 // it exposes an unfinalized shell over reused mutation scratch — and must not
-// retain the Slice pointers after returning.
+// retain the Slice pointers after returning. Bulk mutations with parallelism
+// greater than one may call the implementation concurrently.
 type Augmentation interface {
 	SkipExtra(*Slice) error
 	EmptyExtra(dst *Builder) error
@@ -70,6 +71,17 @@ type augmentedMutationState struct {
 	// the heap; keeping one per mutation instead of one per visited fork turns
 	// a per-node allocation into a per-operation one.
 	skipScratch Slice
+	// pathResolver is set only by SetManyWithLoadedPaths. Other mutations keep
+	// their existing loader behavior.
+	pathResolver *augBulkPathResolver
+	// parallelism is the maximum number of branch workers, including the current
+	// goroutine, available to this subtree. Bulk mutations split the budget
+	// between independent children instead of recursively acquiring a semaphore,
+	// which keeps the bound exact and cannot deadlock.
+	parallelism int
+	// captureDiff enables the receipt-only metadata maintained by bulk writes.
+	// Ordinary mutation APIs keep this false and allocate no replay nodes.
+	captureDiff bool
 }
 
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {

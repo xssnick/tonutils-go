@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/xssnick/tonutils-go/adnl/rldp"
-	"github.com/xssnick/tonutils-go/tl"
 )
 
 const DefaultBroadcastFECWorkerTick = time.Millisecond
@@ -527,8 +526,7 @@ func (w *broadcastFECPeerWorker) sendBatchLocked(ctx context.Context, sender *Br
 			return fmt.Errorf("failed to build part %d: %w", w.nextSeqno, err)
 		}
 
-		msg := tl.Serializable(part.full)
-		if err = w.peer.SendCustomMessage(ctx, msg); err != nil {
+		if err = sendPreparedBroadcastMessage(ctx, w.peer, part.full, part.fullWire); err != nil {
 			return fmt.Errorf("failed to send part %d to peer %x: %w", w.nextSeqno, w.peer.ID(), err)
 		}
 
@@ -560,7 +558,7 @@ func (w *broadcastFECPeerWorker) sendShortProbeLocked(ctx context.Context, sende
 	if err != nil {
 		return fmt.Errorf("failed to build short probe %d: %w", seqno, err)
 	}
-	if err = w.peer.SendCustomMessage(ctx, part.short); err != nil {
+	if err = sendPreparedBroadcastMessage(ctx, w.peer, part.short, part.shortWire); err != nil {
 		return fmt.Errorf("failed to send short probe %d to peer %x: %w", seqno, w.peer.ID(), err)
 	}
 	return nil

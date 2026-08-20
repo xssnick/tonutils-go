@@ -30,7 +30,7 @@ func TestSourceGraphIsPostOrdered(t *testing.T) {
 		}
 	}
 
-	g, err := rs.buildSourceGraph()
+	g, err := rs.buildSourceGraph(1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,11 +71,11 @@ func TestSourceGraphClaimsASharedSubtreeOnce(t *testing.T) {
 		}
 	}
 
-	g, err := rs.buildSourceGraph()
+	g, err := rs.buildSourceGraph(1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sharedIdx, ok := g.byHash[shared.HashKey()]
+	_, sharedIdx, ok := g.held(shared.HashKey())
 	if !ok {
 		t.Fatal("the shared subtree is missing from the graph")
 	}
@@ -94,7 +94,7 @@ func TestSourceGraphClaimsASharedSubtreeOnce(t *testing.T) {
 
 	// With the shared subtree standing in for a boundary, exactly one of the two
 	// parents may end up carrying it.
-	g.markBoundary(sharedIdx)
+	g.markBoundary(sharedIdx, false)
 	kept := g.boundaryAncestors()
 	if g.nodes[sharedIdx].claimedBy < 0 {
 		t.Fatal("the boundary was never claimed")
@@ -108,8 +108,8 @@ func TestSourceGraphClaimsASharedSubtreeOnce(t *testing.T) {
 	if carriers != 1 {
 		t.Fatalf("the claiming parent appears %d times among the kept cells, want once", carriers)
 	}
-	parent0Idx, ok0 := g.byHash[parent0.HashKey()]
-	parent1Idx, ok1 := g.byHash[parent1.HashKey()]
+	_, parent0Idx, ok0 := g.held(parent0.HashKey())
+	_, parent1Idx, ok1 := g.held(parent1.HashKey())
 	if !ok0 || !ok1 {
 		t.Fatal("a parent is missing from the graph")
 	}

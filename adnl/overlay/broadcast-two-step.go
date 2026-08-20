@@ -26,6 +26,7 @@ const broadcastTwoStepStreamTTL = 25 * time.Second
 
 type broadcastTwoStepStream struct {
 	decoder           *raptorq.Decoder
+	decodeBuffer      []byte
 	seenParts         map[uint32]struct{}
 	admission         *broadcastAdmission
 	budgetBytes       int64
@@ -468,6 +469,10 @@ func (a *ADNLOverlayWrapper) rebroadcastTwoStep(ctx context.Context, sourceADNL 
 	if peerSet == nil {
 		return nil
 	}
+	body, err := prepareBroadcastMessage(msg)
+	if err != nil {
+		return fmt.Errorf("prepare two-step rebroadcast: %w", err)
+	}
 
 	var sendErr error
 	for _, peer := range peerSet.Peers() {
@@ -475,7 +480,7 @@ func (a *ADNLOverlayWrapper) rebroadcastTwoStep(ctx context.Context, sourceADNL 
 		if bytes.Equal(peerID, sourceADNL) || (len(localID) > 0 && bytes.Equal(peerID, localID)) {
 			continue
 		}
-		if err := peer.SendCustomMessage(ctx, msg); err != nil && sendErr == nil {
+		if err := sendPreparedBroadcastMessage(ctx, peer, msg, body); err != nil && sendErr == nil {
 			sendErr = fmt.Errorf("failed to rebroadcast two-step message to peer %x: %w", peerID, err)
 		}
 	}
@@ -778,12 +783,16 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 
 		if canTryDecode {
 			decodeStarted := time.Now()
-			decodedNow, data, err := stream.decoder.Decode()
+			if stream.decodeBuffer == nil {
+				stream.decodeBuffer = make([]byte, stream.dataSize)
+			}
+			decodedNow, err := stream.decoder.DecodeInto(stream.decodeBuffer)
 			if err != nil {
 				stream.mx.Unlock()
 				return twoStepFECPartResult{err: fmt.Errorf("failed to decode two-step raptorq packet: %w", err)}
 			}
 			if decodedNow {
+				data := stream.decodeBuffer
 				dHash := sha256.Sum256(data)
 				if !bytes.Equal(dHash[:], t.DataHash) {
 					stream.mx.Unlock()
@@ -793,6 +802,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 				admission = &broadcastAdmission{done: make(chan struct{})}
 				stream.admission = admission
 				stream.decoder = nil
+				stream.decodeBuffer = nil
 				decodedData = data
 				decodeTime = time.Since(decodeStarted)
 				decoded = true

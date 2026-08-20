@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"sync"
 )
+
+const augmentedBulkParallelMinItems = 16
 
 // AugmentedEntry is one update of a bulk dictionary write. The zero Mode means
 // DictSetModeSet; Add and Replace are assertions here rather than silent
@@ -27,28 +30,132 @@ type AugmentedEntry struct {
 // same augmentations — so callers may pick either by cost alone. Keys must all
 // be the dictionary's key size and must be distinct; the batch is sorted here,
 // so the caller's order does not matter.
-func (d *AugmentedDictionary) SetMany(entries []AugmentedEntry) error {
+//
+// parallelism is optional and defaults to 1. A larger value bounds the number
+// of branch workers, including the caller. Independent left branches run on a
+// goroutine only when they hold a meaningful share of a sufficiently large
+// batch. Augmentation and trace callbacks may then run concurrently.
+func (d *AugmentedDictionary) SetMany(entries []AugmentedEntry, parallelism ...int) error {
 	if d == nil {
 		return fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return err
+	}
+	_, err = d.setManyEntries(entries, nil, workers, false)
+	return err
+}
+
+// SetManyWithDiff is SetMany with an exact structural mutation receipt. The
+// receipt replays candidate augmentation checks through their final paths
+// without scanning the old and new dictionaries again.
+func (d *AugmentedDictionary) SetManyWithDiff(entries []AugmentedEntry, parallelism ...int) (*AugmentedDictionaryDiff, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return nil, err
+	}
+	return d.setManyEntries(entries, nil, workers, true)
+}
+
+// SetManyWithLoadedPaths is SetMany for a caller that already looked up the
+// affected keys in the same immutable tree. loadedPaths is the union of those
+// resident Patricia spines; it need not correspond one-to-one with entries.
+//
+// Existing nodes on an update path must be present in loadedPaths. The method
+// deliberately does not fall back to the lazy loader there: doing so would
+// repeat storage reads the caller has already paid for and would hide an
+// incomplete path handoff. Lazy loads remain allowed only for untouched sibling
+// roots whose augmentation is required to rebuild their parent. Each distinct
+// sibling root is loaded at most once during the batch. parallelism has the same
+// optional bounded branch-worker semantics as SetMany.
+func (d *AugmentedDictionary) SetManyWithLoadedPaths(
+	entries []AugmentedEntry,
+	loadedPaths [][]*Cell,
+	parallelism ...int,
+) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return err
 	}
 	if len(entries) == 0 {
 		return nil
 	}
-	if err := d.ensureWritable(); err != nil {
+
+	workers = min(workers, len(entries))
+	resolver, err := newAugBulkPathResolver(
+		loadedPaths,
+		workers > 1 && len(entries) >= augmentedBulkParallelMinItems,
+	)
+	if err != nil {
 		return err
+	}
+	_, err = d.setManyEntries(entries, resolver, workers, false)
+	return err
+}
+
+// SetManyWithLoadedPathsAndDiff combines SetManyWithLoadedPaths with the exact
+// mutation receipt returned by SetManyWithDiff.
+func (d *AugmentedDictionary) SetManyWithLoadedPathsAndDiff(
+	entries []AugmentedEntry,
+	loadedPaths [][]*Cell,
+	parallelism ...int,
+) (*AugmentedDictionaryDiff, error) {
+	if d == nil {
+		return nil, fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return &AugmentedDictionaryDiff{aug: d.aug}, nil
+	}
+
+	workers = min(workers, len(entries))
+	resolver, err := newAugBulkPathResolver(
+		loadedPaths,
+		workers > 1 && len(entries) >= augmentedBulkParallelMinItems,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return d.setManyEntries(entries, resolver, workers, true)
+}
+
+func (d *AugmentedDictionary) setManyEntries(
+	entries []AugmentedEntry,
+	resolver *augBulkPathResolver,
+	parallelism int,
+	captureDiff bool,
+) (*AugmentedDictionaryDiff, error) {
+	if len(entries) == 0 {
+		if captureDiff {
+			return &AugmentedDictionaryDiff{aug: d.aug}, nil
+		}
+		return nil, nil
+	}
+	if err := d.ensureWritable(); err != nil {
+		return nil, err
 	}
 
 	items := make([]augBulkItem, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		if entry.Key == nil || entry.Key.BitsSize() != d.keySz {
-			return fmt.Errorf("invalid key size at entry %d", i)
+			return nil, fmt.Errorf("invalid key size at entry %d", i)
 		}
 		if entry.Value == nil {
-			return fmt.Errorf("value is nil at entry %d", i)
+			return nil, fmt.Errorf("value is nil at entry %d", i)
 		}
 		if err := entry.Key.BeginParseInto(&items[i].key); err != nil {
-			return fmt.Errorf("failed to load key at entry %d: %w", i, err)
+			return nil, fmt.Errorf("failed to load key at entry %d: %w", i, err)
 		}
 		items[i].value = entry.Value.ToBuilder()
 		items[i].mode = entry.Mode
@@ -61,20 +168,206 @@ func (d *AugmentedDictionary) SetMany(entries []AugmentedEntry) error {
 	})
 	for i := 1; i < len(items); i++ {
 		if compareKeySlices(&items[i-1].key, &items[i].key) == 0 {
-			return fmt.Errorf("duplicate key in bulk update")
+			return nil, fmt.Errorf("duplicate key in bulk update")
 		}
 	}
 
-	var state augmentedMutationState
-	root, rootExtra, err := d.setMany(d.root, d.root.Trace(), items, d.keySz, &state)
+	parallelism = min(parallelism, len(items))
+	state := augmentedMutationState{
+		pathResolver: resolver,
+		parallelism:  parallelism,
+		captureDiff:  captureDiff,
+	}
+	root, rootExtra, replay, err := d.setMany(d.root, d.root.Trace(), items, d.keySz, &state, nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	rootExtraCell, err := rootExtra.ToCell()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return d.setRootWithExtra(root, rootExtraCell)
+	if err = d.setRootWithExtra(root, rootExtraCell); err != nil {
+		return nil, err
+	}
+	if !captureDiff {
+		return nil, nil
+	}
+	if replay != nil {
+		// setRootWithExtra attaches the dictionary trace to a copy of the built
+		// root. Replay must start from that final wrapper so child traces follow
+		// the candidate path rather than the untraced construction cells.
+		replay.cell = d.root
+	}
+
+	return &AugmentedDictionaryDiff{
+		aug:    d.aug,
+		replay: replay,
+	}, nil
+}
+
+type augBulkPathResolver struct {
+	paths            [][]*Cell
+	count            int
+	parallel         bool
+	indexOnce        sync.Once
+	pathCells        map[Hash]*Cell
+	loadedSequential map[Hash]*Cell
+	loadedParallel   sync.Map
+}
+
+type augBulkLoadedCell struct {
+	once sync.Once
+	cell *Cell
+	err  error
+}
+
+func newAugBulkPathResolver(paths [][]*Cell, parallel bool) (*augBulkPathResolver, error) {
+	count := 0
+	for _, path := range paths {
+		count += len(path)
+	}
+	resolver := &augBulkPathResolver{paths: paths, count: count, parallel: parallel}
+	for pathIdx, path := range paths {
+		for cellIdx, c := range path {
+			if c == nil || c.IsLazy() {
+				return nil, fmt.Errorf("loaded path %d cell %d is not resident", pathIdx, cellIdx)
+			}
+		}
+	}
+	return resolver, nil
+}
+
+func (r *augBulkPathResolver) resolve(branch *Cell, allowLoad bool) (*Cell, error) {
+	if branch == nil || !branch.IsLazy() {
+		return branch, nil
+	}
+
+	if r.parallel {
+		r.indexOnce.Do(r.indexPaths)
+	} else if r.pathCells == nil {
+		r.indexPaths()
+	}
+	hash := branch.rawCell().HashKey()
+	if loaded := r.pathCells[hash]; loaded != nil {
+		return resolveLoadedLazyRefWithTrace(branch, loaded, nil)
+	}
+	if !allowLoad {
+		return nil, fmt.Errorf("loaded paths do not contain changed branch %x", hash)
+	}
+
+	if !r.parallel {
+		if loaded := r.loadedSequential[hash]; loaded != nil {
+			return resolveLoadedLazyRefWithTrace(branch, loaded, nil)
+		}
+		resolved, err := loadLazyPrunedRefWithTrace(branch, nil)
+		if err != nil {
+			return nil, err
+		}
+		if r.loadedSequential == nil {
+			r.loadedSequential = make(map[Hash]*Cell)
+		}
+		r.loadedSequential[hash] = resolved.rawCell()
+		return resolved, nil
+	}
+
+	entry, _ := r.loadedParallel.LoadOrStore(hash, &augBulkLoadedCell{})
+	loaded := entry.(*augBulkLoadedCell)
+	loaded.once.Do(func() {
+		resolved, err := loadLazyPrunedRefWithTrace(branch, nil)
+		if err != nil {
+			loaded.err = err
+			return
+		}
+		loaded.cell = resolved.rawCell()
+	})
+	if loaded.err != nil {
+		return nil, loaded.err
+	}
+	return resolveLoadedLazyRefWithTrace(branch, loaded.cell, nil)
+}
+
+// indexPaths delays hashing and indexing until the walk actually meets a lazy
+// branch. A fully resident dictionary never consults the resolver and therefore
+// avoids building an index it cannot use.
+func (r *augBulkPathResolver) indexPaths() {
+	r.pathCells = make(map[Hash]*Cell, r.count)
+	for _, path := range r.paths {
+		for _, c := range path {
+			raw := c.rawCell()
+			r.pathCells[raw.HashKey()] = raw
+		}
+	}
+	r.paths = nil
+}
+
+func augmentedBulkParallelism(values []int) (int, error) {
+	if len(values) == 0 {
+		return 1, nil
+	}
+	if len(values) != 1 || values[0] < 1 {
+		return 0, fmt.Errorf("parallelism must be one positive value")
+	}
+	return values[0], nil
+}
+
+type augmentedBranchResult struct {
+	cell   *Cell
+	extra  Slice
+	replay *augDiffReplayNode
+	err    error
+}
+
+type augmentedBranchFunc func(*augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error)
+
+func (s *augmentedMutationState) shouldFork(leftKeys, totalKeys int) bool {
+	if s.parallelism <= 1 || totalKeys < augmentedBulkParallelMinItems {
+		return false
+	}
+	minimumLeftKeys := totalKeys / s.parallelism
+	if totalKeys%s.parallelism != 0 {
+		minimumLeftKeys++
+	}
+	return leftKeys >= minimumLeftKeys
+}
+
+func (s *augmentedMutationState) branch(parallelism int) augmentedMutationState {
+	return augmentedMutationState{
+		pathResolver: s.pathResolver,
+		parallelism:  parallelism,
+		captureDiff:  s.captureDiff,
+	}
+}
+
+// runAugmentedBranches starts only the left branch. The caller remains the
+// right worker and joins the left before rebuilding their parent. Splitting the
+// worker budget recursively bounds the whole operation without a semaphore: no
+// subtree can wait while holding capacity needed by one of its descendants.
+func runAugmentedBranches(
+	state *augmentedMutationState,
+	leftKeys int,
+	totalKeys int,
+	left augmentedBranchFunc,
+	right augmentedBranchFunc,
+) (augmentedBranchResult, augmentedBranchResult) {
+	leftParallelism := state.parallelism * leftKeys / totalKeys
+	leftParallelism = max(1, min(leftParallelism, state.parallelism-1))
+	rightParallelism := state.parallelism - leftParallelism
+
+	leftState := state.branch(leftParallelism)
+	rightState := state.branch(rightParallelism)
+	var leftResult augmentedBranchResult
+	var wait sync.WaitGroup
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+
+		leftResult.cell, leftResult.extra, leftResult.replay, leftResult.err = left(&leftState)
+	}()
+
+	var rightResult augmentedBranchResult
+	rightResult.cell, rightResult.extra, rightResult.replay, rightResult.err = right(&rightState)
+	wait.Wait()
+	return leftResult, rightResult
 }
 
 type augBulkItem struct {
@@ -154,20 +447,29 @@ func (d *AugmentedDictionary) setMany(
 	items []augBulkItem,
 	keyOffset uint,
 	state *augmentedMutationState,
-) (*Cell, Slice, error) {
+	prior *augDiffReplayNode,
+) (*Cell, Slice, *augDiffReplayNode, error) {
 	if branch == nil {
 		return d.buildMany(items, keyOffset, state)
 	}
 
-	node, err := parseFixedDictNodeWithTrace(branch, keyOffset, trace)
+	parseBranch := branch
+	var err error
+	if state.pathResolver != nil {
+		parseBranch, err = state.pathResolver.resolve(branch, false)
+		if err != nil {
+			return nil, Slice{}, nil, err
+		}
+	}
+	node, err := parseFixedDictNodeWithTrace(parseBranch, keyOffset, trace)
 	if err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to load branch: %w", err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to load branch: %w", err)
 	}
 	if err = node.rejectSpecial("augmented dict"); err != nil {
-		return nil, Slice{}, err
+		return nil, Slice{}, nil, err
 	}
 	if err = node.validateForkShape(keyOffset, true); err != nil {
-		return nil, Slice{}, err
+		return nil, Slice{}, nil, err
 	}
 	sz, label := node.labelLen, node.label
 
@@ -179,7 +481,7 @@ func (d *AugmentedDictionary) setMany(
 		labelView, keyView := label, items[i].key
 		shared, err := commonSlicePrefix(&labelView, &keyView, sz)
 		if err != nil {
-			return nil, Slice{}, fmt.Errorf("failed to match key prefix: %w", err)
+			return nil, Slice{}, nil, fmt.Errorf("failed to match key prefix: %w", err)
 		}
 		if shared < matched {
 			matched = shared
@@ -192,35 +494,86 @@ func (d *AugmentedDictionary) setMany(
 	if matched == sz {
 		for i := range items {
 			if err = items[i].key.SkipBits(sz); err != nil {
-				return nil, Slice{}, err
+				return nil, Slice{}, nil, err
 			}
 		}
 		if keyOffset == sz {
 			// The whole key is spent, so the batch is the single key living here.
 			if err = items[0].checkMode(true); err != nil {
-				return nil, Slice{}, err
+				return nil, Slice{}, nil, err
 			}
 			labelView := label
-			return d.storeLeafWithExtra(&labelView, items[0].value, keyOffset, state)
+			leaf, extra, replay, err := d.storeManyLeaf(&labelView, &items[0], keyOffset, state)
+			if err != nil {
+				return nil, Slice{}, nil, err
+			}
+			if state.captureDiff && leaf.HashKey() == branch.HashKey() {
+				replay = prior
+			}
+			return leaf, extra, replay, nil
 		}
 
 		left, right, err := splitBulkOnNextBit(items, augBulkItemKey)
 		if err != nil {
-			return nil, Slice{}, err
+			return nil, Slice{}, nil, err
 		}
 		childOffset := keyOffset - sz - 1
-		leftCell, leftExtra, err := d.setManyChild(&node, 0, left, childOffset, state)
-		if err != nil {
-			return nil, Slice{}, err
+		var leftCell, rightCell *Cell
+		var leftExtra, rightExtra Slice
+		var leftReplay, rightReplay *augDiffReplayNode
+		if prior != nil {
+			leftReplay, rightReplay = prior.left, prior.right
 		}
-		rightCell, rightExtra, err := d.setManyChild(&node, 1, right, childOffset, state)
-		if err != nil {
-			return nil, Slice{}, err
+		// An empty right half is not worth a goroutine: setManyChild returns the
+		// old child untouched for it, so forking would hand one of the workers the
+		// left side needs to a branch with nothing to do. shouldFork already rules
+		// out an empty LEFT half — its minimum-keys bound cannot be met by zero —
+		// so guarding the right one closes the pair. Same shape as deleteMany
+		// (aug_dict_bulk_delete.go:129).
+		if len(right) != 0 && state.shouldFork(len(left), len(items)) {
+			leftResult, rightResult := runAugmentedBranches(
+				state,
+				len(left),
+				len(items),
+				func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+					return d.setManyChild(&node, 0, left, childOffset, branchState, leftReplay)
+				},
+				func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+					return d.setManyChild(&node, 1, right, childOffset, branchState, rightReplay)
+				},
+			)
+			if leftResult.err != nil {
+				return nil, Slice{}, nil, leftResult.err
+			}
+			if rightResult.err != nil {
+				return nil, Slice{}, nil, rightResult.err
+			}
+			leftCell, leftExtra = leftResult.cell, leftResult.extra
+			rightCell, rightExtra = rightResult.cell, rightResult.extra
+			leftReplay, rightReplay = leftResult.replay, rightResult.replay
+		} else {
+			leftCell, leftExtra, leftReplay, err = d.setManyChild(&node, 0, left, childOffset, state, leftReplay)
+			if err != nil {
+				return nil, Slice{}, nil, err
+			}
+			rightCell, rightExtra, rightReplay, err = d.setManyChild(&node, 1, right, childOffset, state, rightReplay)
+			if err != nil {
+				return nil, Slice{}, nil, err
+			}
 		}
 		labelView := label
 		fork, forkExtra, err := d.storeForkWithExtraSlices(
 			&labelView, leftCell, &leftExtra, rightCell, &rightExtra, keyOffset, state)
-		return fork, forkExtra, err
+		if err != nil {
+			return nil, Slice{}, nil, err
+		}
+		if state.captureDiff {
+			if fork.HashKey() == branch.HashKey() {
+				return fork, forkExtra, prior, nil
+			}
+			return fork, forkExtra, computedAugDiffReplay(fork, keyOffset, leftReplay, rightReplay), nil
+		}
+		return fork, forkExtra, nil, nil
 	}
 
 	// Divergence: the node keeps its first matched bits as the fork label and
@@ -228,60 +581,100 @@ func (d *AugmentedDictionary) setMany(
 	// item took the other edge, so that side is always newly built.
 	prefixLabel, labelRemainder, err := node.splitLabel(matched)
 	if err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to split old child label: %w", err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to split old child label: %w", err)
 	}
 	labelBit, err := label.BitAt(matched)
 	if err != nil {
-		return nil, Slice{}, err
+		return nil, Slice{}, nil, err
 	}
 	childOffset := keyOffset - matched - 1
 
 	oldChild := BeginCell().SetTrace(d.trace)
 	if err = storeDictLabel(oldChild, labelRemainder, childOffset); err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to store old child label: %w", err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to store old child label: %w", err)
 	}
 	node.loader.ToBuilderInto(&state.extra)
 	if err = oldChild.StoreBuilderUncheckedDepth(&state.extra); err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to store old child payload: %w", err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 	oldExtra, err := augmentedNodeExtraViewScratch(node, keyOffset, d.aug.SkipExtra, &state.skipScratch)
 	if err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to extract old child extra: %w", err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to extract old child extra: %w", err)
 	}
 	oldChildCell := oldChild.EndCell()
+	var oldReplay *augDiffReplayNode
+	if state.captureDiff {
+		oldReplay = relabeledAugDiffReplay(oldChildCell, childOffset, node.loader.trace, prior)
+	}
 
 	for i := range items {
 		if err = items[i].key.SkipBits(matched); err != nil {
-			return nil, Slice{}, err
+			return nil, Slice{}, nil, err
 		}
 	}
 	left, right, err := splitBulkOnNextBit(items, augBulkItemKey)
 	if err != nil {
-		return nil, Slice{}, err
+		return nil, Slice{}, nil, err
 	}
 	sides := [2][]augBulkItem{left, right}
 
 	var children [2]*Cell
 	var extras [2]Slice
-	for bit := range children {
-		batch := sides[bit]
+	var replays [2]*augDiffReplayNode
+	buildSide := func(bit int, batch []augBulkItem, branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
 		if uint8(bit) == labelBit {
 			if len(batch) == 0 {
-				children[bit], extras[bit] = oldChildCell, oldExtra
-				continue
+				return oldChildCell, oldExtra, oldReplay, nil
 			}
-			children[bit], extras[bit], err = d.setMany(oldChildCell, oldChildCell.Trace(), batch, childOffset, state)
-		} else {
-			children[bit], extras[bit], err = d.buildMany(batch, childOffset, state)
+			return d.setMany(oldChildCell, oldChildCell.Trace(), batch, childOffset, branchState, oldReplay)
 		}
-		if err != nil {
-			return nil, Slice{}, err
+		return d.buildMany(batch, childOffset, branchState)
+	}
+	// An empty right half is not worth a goroutine: setManyChild returns the
+	// old child untouched for it, so forking would hand one of the workers the
+	// left side needs to a branch with nothing to do. shouldFork already rules
+	// out an empty LEFT half — its minimum-keys bound cannot be met by zero —
+	// so guarding the right one closes the pair. Same shape as deleteMany
+	// (aug_dict_bulk_delete.go:129).
+	if len(right) != 0 && state.shouldFork(len(left), len(items)) {
+		leftResult, rightResult := runAugmentedBranches(
+			state,
+			len(left),
+			len(items),
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				return buildSide(0, left, branchState)
+			},
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				return buildSide(1, right, branchState)
+			},
+		)
+		if leftResult.err != nil {
+			return nil, Slice{}, nil, leftResult.err
+		}
+		if rightResult.err != nil {
+			return nil, Slice{}, nil, rightResult.err
+		}
+		children[0], extras[0] = leftResult.cell, leftResult.extra
+		children[1], extras[1] = rightResult.cell, rightResult.extra
+		replays[0], replays[1] = leftResult.replay, rightResult.replay
+	} else {
+		for bit, batch := range sides {
+			children[bit], extras[bit], replays[bit], err = buildSide(bit, batch, state)
+			if err != nil {
+				return nil, Slice{}, nil, err
+			}
 		}
 	}
 
 	fork, forkExtra, err := d.storeForkWithExtraSlices(
 		prefixLabel, children[0], &extras[0], children[1], &extras[1], keyOffset, state)
-	return fork, forkExtra, err
+	if err != nil {
+		return nil, Slice{}, nil, err
+	}
+	if state.captureDiff {
+		return fork, forkExtra, computedAugDiffReplay(fork, keyOffset, replays[0], replays[1]), nil
+	}
+	return fork, forkExtra, nil, nil
 }
 
 // setManyChild descends into one side of an existing fork, leaving it untouched
@@ -292,10 +685,11 @@ func (d *AugmentedDictionary) setManyChild(
 	items []augBulkItem,
 	keyOffset uint,
 	state *augmentedMutationState,
-) (*Cell, Slice, error) {
+	prior *augDiffReplayNode,
+) (*Cell, Slice, *augDiffReplayNode, error) {
 	ref, trace, err := node.refAndTrace(refIdx)
 	if err != nil {
-		return nil, Slice{}, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+		return nil, Slice{}, nil, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 	}
 	if len(items) == 0 {
 		// This child is kept as it stands and becomes a ref of the rebuilt
@@ -304,15 +698,22 @@ func (d *AugmentedDictionary) setManyChild(
 		// to, and a child stored without one is written out in full instead of
 		// being pruned against the source.
 		kept := ref.WithTrace(trace)
-		extra, err := extractAugmentedNodeExtraViewWithTraceScratch(kept, trace, keyOffset, d.aug.SkipExtra, &state.skipScratch)
-		if err != nil {
-			return nil, Slice{}, fmt.Errorf("failed to extract %d ref extra: %w", refIdx, err)
+		parseRef := ref
+		if state.pathResolver != nil {
+			parseRef, err = state.pathResolver.resolve(ref, true)
+			if err != nil {
+				return nil, Slice{}, nil, fmt.Errorf("failed to resolve %d ref extra: %w", refIdx, err)
+			}
 		}
-		return kept, extra, nil
+		extra, err := extractAugmentedNodeExtraViewWithTraceScratch(parseRef, trace, keyOffset, d.aug.SkipExtra, &state.skipScratch)
+		if err != nil {
+			return nil, Slice{}, nil, fmt.Errorf("failed to extract %d ref extra: %w", refIdx, err)
+		}
+		return kept, extra, prior, nil
 	}
 	// The descent rebuilds this child, so nothing that survives the call refers
 	// to the cell and the trace can travel beside it.
-	return d.setMany(ref, trace, items, keyOffset, state)
+	return d.setMany(ref, trace, items, keyOffset, state, prior)
 }
 
 // buildMany creates a fresh subtree holding exactly the batch.
@@ -320,12 +721,12 @@ func (d *AugmentedDictionary) buildMany(
 	items []augBulkItem,
 	keyOffset uint,
 	state *augmentedMutationState,
-) (*Cell, Slice, error) {
+) (*Cell, Slice, *augDiffReplayNode, error) {
 	if len(items) == 1 {
 		if err := items[0].checkMode(false); err != nil {
-			return nil, Slice{}, err
+			return nil, Slice{}, nil, err
 		}
-		return d.storeLeafWithExtra(&items[0].key, items[0].value, keyOffset, state)
+		return d.storeManyLeaf(&items[0].key, &items[0], keyOffset, state)
 	}
 
 	// Distinct keys share less than the whole remaining space, so the common
@@ -335,7 +736,7 @@ func (d *AugmentedDictionary) buildMany(
 		first, other := items[0].key, items[i].key
 		common, err := commonSlicePrefix(&first, &other, keyOffset)
 		if err != nil {
-			return nil, Slice{}, fmt.Errorf("failed to match batch prefix: %w", err)
+			return nil, Slice{}, nil, fmt.Errorf("failed to match batch prefix: %w", err)
 		}
 		if common < shared {
 			shared = common
@@ -349,26 +750,71 @@ func (d *AugmentedDictionary) buildMany(
 	label.bitEnd = label.bitStart + uint16(shared)
 	for i := range items {
 		if err := items[i].key.SkipBits(shared); err != nil {
-			return nil, Slice{}, err
+			return nil, Slice{}, nil, err
 		}
 	}
 	left, right, err := splitBulkOnNextBit(items, augBulkItemKey)
 	if err != nil {
-		return nil, Slice{}, err
+		return nil, Slice{}, nil, err
 	}
 
 	childOffset := keyOffset - shared - 1
-	leftCell, leftExtra, err := d.buildMany(left, childOffset, state)
-	if err != nil {
-		return nil, Slice{}, err
-	}
-	rightCell, rightExtra, err := d.buildMany(right, childOffset, state)
-	if err != nil {
-		return nil, Slice{}, err
+	var leftCell, rightCell *Cell
+	var leftExtra, rightExtra Slice
+	var leftReplay, rightReplay *augDiffReplayNode
+	if state.shouldFork(len(left), len(items)) {
+		leftResult, rightResult := runAugmentedBranches(
+			state,
+			len(left),
+			len(items),
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				return d.buildMany(left, childOffset, branchState)
+			},
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				return d.buildMany(right, childOffset, branchState)
+			},
+		)
+		if leftResult.err != nil {
+			return nil, Slice{}, nil, leftResult.err
+		}
+		if rightResult.err != nil {
+			return nil, Slice{}, nil, rightResult.err
+		}
+		leftCell, leftExtra = leftResult.cell, leftResult.extra
+		rightCell, rightExtra = rightResult.cell, rightResult.extra
+		leftReplay, rightReplay = leftResult.replay, rightResult.replay
+	} else {
+		leftCell, leftExtra, leftReplay, err = d.buildMany(left, childOffset, state)
+		if err != nil {
+			return nil, Slice{}, nil, err
+		}
+		rightCell, rightExtra, rightReplay, err = d.buildMany(right, childOffset, state)
+		if err != nil {
+			return nil, Slice{}, nil, err
+		}
 	}
 	fork, forkExtra, err := d.storeForkWithExtraSlices(
 		&label, leftCell, &leftExtra, rightCell, &rightExtra, keyOffset, state)
-	return fork, forkExtra, err
+	if err != nil {
+		return nil, Slice{}, nil, err
+	}
+	if state.captureDiff {
+		return fork, forkExtra, computedAugDiffReplay(fork, keyOffset, leftReplay, rightReplay), nil
+	}
+	return fork, forkExtra, nil, nil
+}
+
+func (d *AugmentedDictionary) storeManyLeaf(
+	label *Slice,
+	item *augBulkItem,
+	keyOffset uint,
+	state *augmentedMutationState,
+) (*Cell, Slice, *augDiffReplayNode, error) {
+	leaf, extra, err := d.storeLeafWithExtra(label, item.value, keyOffset, state)
+	if err != nil || !state.captureDiff {
+		return leaf, extra, nil, err
+	}
+	return leaf, extra, computedAugDiffReplay(leaf, keyOffset, nil, nil), nil
 }
 
 // splitBulkOnNextBit consumes the edge bit of every item and partitions the

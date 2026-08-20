@@ -67,6 +67,10 @@ func (p rldpBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Seriali
 	return p.transport.sendOverlayMessage(ctx, p.overlayID, req)
 }
 
+func (p rldpBroadcastPeer) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return p.transport.sendOverlayMessage(ctx, p.overlayID, tl.Raw(body))
+}
+
 func CreateExtendedRLDP(rldp RLDP) *RLDPWrapper {
 	messageSender, _ := rldp.(RLDPMessageSender)
 	w := &RLDPWrapper{

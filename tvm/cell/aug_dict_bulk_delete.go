@@ -15,9 +15,16 @@ import (
 // tries are canonical in their key set, so the cells and augmentations come out
 // identical. Keys must all be the dictionary's key size, must be distinct, and
 // must all be present; a missing key fails the whole batch.
-func (d *AugmentedDictionary) DeleteMany(keys []*Cell) error {
+//
+// parallelism is optional and has the same bounded branch-worker semantics as
+// SetMany. It defaults to 1.
+func (d *AugmentedDictionary) DeleteMany(keys []*Cell, parallelism ...int) error {
 	if d == nil {
 		return fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return err
 	}
 	if len(keys) == 0 {
 		return nil
@@ -44,7 +51,8 @@ func (d *AugmentedDictionary) DeleteMany(keys []*Cell) error {
 		}
 	}
 
-	var state augmentedMutationState
+	workers = min(workers, len(items))
+	state := augmentedMutationState{parallelism: workers}
 	root, rootExtra, err := d.deleteMany(d.root, items, d.keySz, &state)
 	if err != nil {
 		return err
@@ -117,19 +125,57 @@ func (d *AugmentedDictionary) deleteMany(
 	var children [2]*Cell
 	var extras [2]Slice
 	var touched [2]bool
-	for bit, batch := range [2][]Slice{left, right} {
-		ref, err := node.ref(bit)
-		if err != nil {
-			return nil, Slice{}, fmt.Errorf("failed to peek %d ref: %w", bit, err)
+	sides := [2][]Slice{left, right}
+	if len(right) != 0 && state.shouldFork(len(left), len(items)) {
+		deleteSide := func(bit int, batch []Slice, branchState *augmentedMutationState) (*Cell, Slice, error) {
+			ref, err := node.ref(bit)
+			if err != nil {
+				return nil, Slice{}, fmt.Errorf("failed to peek %d ref: %w", bit, err)
+			}
+			if len(batch) == 0 {
+				return ref, Slice{}, nil
+			}
+			return d.deleteMany(ref, batch, childOffset, branchState)
 		}
-		if len(batch) == 0 {
-			children[bit] = ref
-			continue
+		leftResult, rightResult := runAugmentedBranches(
+			state,
+			len(left),
+			len(items),
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				cell, extra, err := deleteSide(0, left, branchState)
+				return cell, extra, nil, err
+			},
+			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+				cell, extra, err := deleteSide(1, right, branchState)
+				return cell, extra, nil, err
+			},
+		)
+		if leftResult.err != nil {
+			return nil, Slice{}, leftResult.err
 		}
-		touched[bit] = true
-		children[bit], extras[bit], err = d.deleteMany(ref, batch, childOffset, state)
-		if err != nil {
-			return nil, Slice{}, err
+		if rightResult.err != nil {
+			return nil, Slice{}, rightResult.err
+		}
+		children[0], extras[0] = leftResult.cell, leftResult.extra
+		children[1], extras[1] = rightResult.cell, rightResult.extra
+		for bit, batch := range sides {
+			touched[bit] = len(batch) != 0
+		}
+	} else {
+		for bit, batch := range sides {
+			ref, err := node.ref(bit)
+			if err != nil {
+				return nil, Slice{}, fmt.Errorf("failed to peek %d ref: %w", bit, err)
+			}
+			if len(batch) == 0 {
+				children[bit] = ref
+				continue
+			}
+			touched[bit] = true
+			children[bit], extras[bit], err = d.deleteMany(ref, batch, childOffset, state)
+			if err != nil {
+				return nil, Slice{}, err
+			}
 		}
 	}
 

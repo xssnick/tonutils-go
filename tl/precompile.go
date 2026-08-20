@@ -356,6 +356,10 @@ func Serialize(v Serializable, boxed bool, bufOpt ...*bytes.Buffer) ([]byte, err
 
 	if list, ok := v.([]Serializable); ok {
 		for i, v := range list {
+			if raw, rawOK := v.(Raw); rawOK {
+				buf.Write(raw)
+				continue
+			}
 			e := reflect.ValueOf(v)
 			if err := serializeStruct(e, buf, boxed, nil); err != nil {
 				return nil, fmt.Errorf("serialization of type %s failed (for slice element %d): %w", e.Type().String(), i, err)
@@ -380,6 +384,10 @@ func Append(dst []byte, v Serializable, boxed bool) ([]byte, error) {
 
 	if list, ok := v.([]Serializable); ok {
 		for i, v := range list {
+			if raw, rawOK := v.(Raw); rawOK {
+				dst = append(dst, raw...)
+				continue
+			}
 			e := reflect.ValueOf(v)
 			var err error
 			if dst, err = appendStruct(dst, e, boxed, nil); err != nil {

@@ -13,7 +13,7 @@ import "fmt"
 // the path it came from. This one asks whether the subtree's hash was read. A hash
 // is not inherited, so there is nothing left to disambiguate.
 func (rs *ReadSet) CreateMerkleUpdate(to *Cell) (*Cell, error) {
-	updateFrom, updateTo, _, _, err := rs.createMerkleUpdateRaw(to, false, 0)
+	updateFrom, updateTo, _, _, err := rs.createMerkleUpdateRaw(to, false, 0, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -44,9 +44,19 @@ func (rs *ReadSet) CreateMerkleUpdateApplied(to *Cell) (*Cell, *Cell, error) {
 // figure this call used to have, asks for twice the table the walk fills.
 //
 // Capacity only. The memo holds cells for the duration of one walk and is
-// dropped with it; the estimate cannot reach the produced update.
-func (rs *ReadSet) CreateMerkleUpdateAppliedSized(to *Cell, memoHint int) (*Cell, *Cell, int, error) {
-	updateFrom, updateTo, applied, memoUsed, err := rs.createMerkleUpdateRaw(to, true, memoHint)
+// dropped with it; the estimate cannot reach the produced update. parallelism
+// is optional and defaults to one. Larger values bound branch workers exactly
+// like augmented bulk dictionary mutations; small proofs remain sequential.
+func (rs *ReadSet) CreateMerkleUpdateAppliedSized(
+	to *Cell,
+	memoHint int,
+	parallelism ...int,
+) (*Cell, *Cell, int, error) {
+	workers, err := merkleUpdateParallelism(parallelism)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	updateFrom, updateTo, applied, memoUsed, err := rs.createMerkleUpdateRaw(to, true, memoHint, workers)
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -57,7 +67,23 @@ func (rs *ReadSet) CreateMerkleUpdateAppliedSized(to *Cell, memoHint int) (*Cell
 	return update, applied, memoUsed, nil
 }
 
-func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint int) (*Cell, *Cell, *Cell, int, error) {
+func merkleUpdateParallelism(values []int) (int, error) {
+	if len(values) == 0 {
+		return 1, nil
+	}
+	if len(values) != 1 || values[0] <= 0 {
+		return 0, fmt.Errorf("parallelism must be one positive value")
+	}
+
+	return values[0], nil
+}
+
+func (rs *ReadSet) createMerkleUpdateRaw(
+	to *Cell,
+	wantApplied bool,
+	memoHint int,
+	parallelism int,
+) (*Cell, *Cell, *Cell, int, error) {
 	if rs == nil || rs.source == nil {
 		return nil, nil, nil, 0, fmt.Errorf("failed to build merkle update: no source tree")
 	}
@@ -82,7 +108,7 @@ func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint in
 	// expose, and applying the update then fails on an unknown pruned branch. So
 	// the source is walked once, and only what it really contains may be pruned
 	// onto — the same walk that later says which cells the source proof carries.
-	graph, graphErr := rs.buildSourceGraph()
+	graph, graphErr := rs.buildSourceGraph(parallelism)
 	if graphErr != nil {
 		return nil, nil, nil, 0, graphErr
 	}
@@ -132,11 +158,11 @@ func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint in
 		if !source.IsLazy() && source.refsCount() == 0 {
 			return nil, false, nil
 		}
-		graph.markBoundary(idx)
+		appliedSource := graph.markBoundary(idx, wantApplied)
 		if !wantApplied {
 			return nil, true, nil
 		}
-		return source, true, nil
+		return appliedSource, true, nil
 	}
 
 	// Both proofs end up inside the same update, so they are built from one arena
@@ -156,8 +182,17 @@ func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint in
 	if memoHint > 0 {
 		memoSize = memoHint
 	}
+	if memoSize < proofParallelMinCells {
+		parallelism = 1
+	}
+	graph.parallel = parallelism > 1
 	buildState.memoHint = memoSize
-	buildState.built.init(memoSize)
+	buildState.parallelism = parallelism
+	if parallelism > 1 {
+		buildState.parallel = newProofParallelCache(memoSize)
+	} else {
+		buildState.built.init(memoSize)
+	}
 	// Both proofs prune the same subtree roots — that is what makes them a pair —
 	// so the boundaries the destination walk builds are handed to the source walk
 	// instead of being built a second time.
@@ -167,14 +202,20 @@ func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint in
 	// over four block shapes they were 0.36-0.40 of it while the record was three
 	// times the size of either. Half the memo covers the measured spread with room
 	// left and is never reached, so the map is never rehashed.
-	buildState.prunedShared = make(map[proofBodyKey]*Cell, memoSize/2+1)
+	if buildState.parallel == nil {
+		buildState.prunedShared = make(map[proofBodyKey]*Cell, memoSize/2+1)
+	}
 	updateTo, applied, err := buildState.build(to, to.Level())
 	if err != nil {
 		return nil, nil, nil, 0, fmt.Errorf("failed to build merkle update destination proof: %w", err)
 	}
 
 	kept := graph.boundaryAncestors()
-	sourceState := &proofBodyBuildState{arena: arena, prunedShared: buildState.prunedShared}
+	sourceState := &proofBodyBuildState{
+		arena:          arena,
+		prunedShared:   buildState.prunedShared,
+		prunedParallel: buildState.parallel,
+	}
 	if len(kept) > 0 {
 		sourceState.cells = make(map[Hash]*Cell, len(kept))
 		for _, idx := range kept {
@@ -182,7 +223,14 @@ func (rs *ReadSet) createMerkleUpdateRaw(to *Cell, wantApplied bool, memoHint in
 			sourceState.cacheLoaded(held.HashKey(), held)
 		}
 	}
-	sourceState.prepareBuiltCache()
+	sourceState.memoHint = len(kept)
+	if parallelism > 1 && len(kept) >= proofParallelMinCells {
+		sourceState.parallelism = parallelism
+		sourceState.built = make(map[proofBodyKey]*Cell, 16)
+	} else {
+		sourceState.parallelism = 1
+		sourceState.prepareBuiltCache()
+	}
 	updateFrom, err := buildRecordedProofBody(from, sourceState, from.Level())
 	if err != nil {
 		return nil, nil, nil, 0, fmt.Errorf("failed to build merkle update source proof: %w", err)

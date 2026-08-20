@@ -291,8 +291,12 @@ func sendBroadcastTwoStepSimple(ctx context.Context, signer BroadcastSigner, sou
 	if err != nil {
 		return BroadcastTwoStepSendResult{}, err
 	}
+	prepared, err := prepareTwoStepBroadcastMessage(msg)
+	if err != nil {
+		return BroadcastTwoStepSendResult{}, err
+	}
 
-	attempted, sent, failed, sendErr := sendBroadcastTwoStepMessage(ctx, peers, msg, concurrency)
+	attempted, sent, failed, sendErr := sendBroadcastTwoStepMessage(ctx, peers, prepared, concurrency)
 	return BroadcastTwoStepSendResult{
 		BroadcastID: broadcastID,
 		DataHash:    append([]byte(nil), dataHash...),
@@ -344,7 +348,7 @@ func sendBroadcastTwoStepFEC(ctx context.Context, signer BroadcastSigner, source
 			Extra:       append([]byte(nil), extra...),
 		}
 	}
-	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, func(index int) (tl.Serializable, error) {
+	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, func(index int) (preparedTwoStepBroadcastMessage, error) {
 		message := messages[index]
 		var signErr error
 		message.Signature, signErr = signBroadcastTwoStepFECWithSigner(
@@ -354,7 +358,10 @@ func sendBroadcastTwoStepFEC(ctx context.Context, signer BroadcastSigner, source
 			message.Part,
 		)
 
-		return message, signErr
+		if signErr != nil {
+			return preparedTwoStepBroadcastMessage{}, signErr
+		}
+		return prepareTwoStepBroadcastMessage(message)
 	})
 	sent, failed, sendErr := collectBroadcastTwoStepResults(results, "fec part")
 
@@ -374,8 +381,21 @@ func broadcastTwoStepFECBaseSymbols(otherNodes int) int {
 	return (otherNodes - 1) / 2
 }
 
-func sendBroadcastTwoStepMessage(ctx context.Context, peers []BroadcastPeer, msg tl.Serializable, concurrency int) (int, int, []BroadcastTwoStepPeerError, error) {
-	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, func(int) (tl.Serializable, error) {
+type preparedTwoStepBroadcastMessage struct {
+	message tl.Serializable
+	body    []byte
+}
+
+func prepareTwoStepBroadcastMessage(message tl.Serializable) (preparedTwoStepBroadcastMessage, error) {
+	body, err := prepareBroadcastMessage(message)
+	if err != nil {
+		return preparedTwoStepBroadcastMessage{}, err
+	}
+	return preparedTwoStepBroadcastMessage{message: message, body: body}, nil
+}
+
+func sendBroadcastTwoStepMessage(ctx context.Context, peers []BroadcastPeer, msg preparedTwoStepBroadcastMessage, concurrency int) (int, int, []BroadcastTwoStepPeerError, error) {
+	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, func(int) (preparedTwoStepBroadcastMessage, error) {
 		return msg, nil
 	})
 	sent, failed, sendErr := collectBroadcastTwoStepResults(results, "broadcast")
@@ -397,7 +417,7 @@ func sendBroadcastTwoStepParallel(
 	ctx context.Context,
 	peers []BroadcastPeer,
 	concurrency int,
-	message func(int) (tl.Serializable, error),
+	message func(int) (preparedTwoStepBroadcastMessage, error),
 ) []broadcastTwoStepPeerResult {
 	results := make([]broadcastTwoStepPeerResult, len(peers))
 
@@ -420,7 +440,7 @@ func sendBroadcastTwoStepParallel(
 			peerID := append([]byte(nil), peer.ID()...)
 			msg, err := message(index)
 			if err == nil {
-				err = peer.SendCustomMessage(ctx, msg)
+				err = sendPreparedBroadcastMessage(ctx, peer, msg.message, msg.body)
 			}
 			results[index] = broadcastTwoStepPeerResult{peerID: peerID, err: err}
 

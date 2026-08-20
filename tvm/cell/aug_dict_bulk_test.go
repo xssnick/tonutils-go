@@ -511,5 +511,17 @@ func BenchmarkAugDictSetManyVersusRepeatedSet(b *testing.B) {
 				}
 			}
 		})
+		b.Run(fmt.Sprintf("keys=%d/bulk-parallel=8", len(batch)), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				dict := base.Copy()
+				if err := dict.SetMany(batch, 8); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := dict.ToCell(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }

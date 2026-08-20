@@ -121,6 +121,28 @@ func TestCurrencyCollectionAddBigValues(t *testing.T) {
 	}
 }
 
+func TestCurrencyCollectionAddInvalidCollisionDoesNotMutateInput(t *testing.T) {
+	leftExtra := mustExtraDict(t, map[uint32]int64{1: 10, 2: 20})
+	rightExtra := mustExtraDict(t, map[uint32]int64{3: 30})
+	if err := rightExtra.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreUInt(0, 5).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	left := ccFromNano(100, leftExtra)
+	right := ccFromNano(200, rightExtra)
+	beforeRoot := leftExtra.AsCell()
+	beforeHash := beforeRoot.HashKey()
+
+	if _, err := left.Add(right); err == nil {
+		t.Fatal("addition with an invalid colliding value succeeded")
+	}
+	if leftExtra.AsCell() != beforeRoot || leftExtra.AsCell().HashKey() != beforeHash {
+		t.Fatal("failed addition mutated the left extra-currency dictionary")
+	}
+	if got := extraAmount(t, leftExtra, 1); got.Int64() != 10 {
+		t.Fatalf("left input value changed after failed addition: %s", got)
+	}
+}
+
 func TestCurrencyCollectionSubUnderflow(t *testing.T) {
 	// grams underflow
 	_, err := ccFromNano(5, nil).Sub(ccFromNano(6, nil))

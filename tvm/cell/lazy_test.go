@@ -585,6 +585,49 @@ func TestDictionaryMutatesLazyPrunedRootAfterMaterialization(t *testing.T) {
 	}
 }
 
+func TestDictionaryDeleteMaterializesLazyMergeSibling(t *testing.T) {
+	base := NewDict(8)
+	for key, value := range map[uint64]uint64{
+		0x00: 0xAA,
+		0x80: 0xBB,
+		0x81: 0xCC,
+	} {
+		if err := base.SetIntKey(new(big.Int).SetUint64(key), BeginCell().MustStoreUInt(value, 8).EndCell()); err != nil {
+			t.Fatalf("set %02x: %v", key, err)
+		}
+	}
+
+	root := base.AsCell()
+	loader := &testLazyLoader{cells: make(map[Hash]*Cell, root.RefsNum())}
+	for i := 0; i < int(root.RefsNum()); i++ {
+		ref, err := root.PeekRef(i)
+		if err != nil {
+			t.Fatalf("load root ref %d: %v", i, err)
+		}
+		loader.cells[ref.HashKey()] = ref
+	}
+	lazy := cellWithLazyRefsFromCell(root, loader.LoadCell).AsDict(8)
+
+	removed, err := lazy.LoadValueAndDeleteByIntKey(big.NewInt(0))
+	if err != nil {
+		t.Fatalf("delete through lazy path: %v", err)
+	}
+	if got := removed.MustLoadUInt(8); got != 0xAA {
+		t.Fatalf("removed value = %02x, want aa", got)
+	}
+
+	want := base.Copy()
+	if _, err = want.LoadValueAndDeleteByIntKey(big.NewInt(0)); err != nil {
+		t.Fatalf("delete from materialized control: %v", err)
+	}
+	if got := lazy.AsCell().HashKey(); got != want.AsCell().HashKey() {
+		t.Fatalf("post-delete root = %x, want %x", got, want.AsCell().Hash())
+	}
+	if loader.calls != 2 {
+		t.Fatalf("lazy loads = %d, want deleted leaf and surviving sibling", loader.calls)
+	}
+}
+
 func TestDictionaryLoadAllSkipPrunedLazyChildDoesNotLoad(t *testing.T) {
 	dict := NewDict(8)
 	if err := dict.Set(BeginCell().MustStoreUInt(0x00, 8).EndCell(), BeginCell().MustStoreUInt(0xAA, 8).EndCell()); err != nil {

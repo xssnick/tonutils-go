@@ -931,6 +931,19 @@ func (p *Peer) SendMessage(ctx context.Context, payload []byte) error {
 	return client.SendMessage(ctx, payload)
 }
 
+// SendMessageParts sends one message from immutable prefix and body segments.
+func (p *Peer) SendMessageParts(ctx context.Context, prefix, body []byte) error {
+	if err := p.waitReady(ctx); err != nil {
+		return err
+	}
+	p.noteOutbound()
+	client := p.client()
+	if client == nil {
+		return ErrPeerClosed
+	}
+	return client.SendMessageParts(ctx, prefix, body)
+}
+
 // SendOutboundMessage sends a quic.message using only the outbound connection.
 func (p *Peer) SendOutboundMessage(ctx context.Context, payload []byte) error {
 	if err := p.waitReady(ctx); err != nil {
@@ -942,6 +955,20 @@ func (p *Peer) SendOutboundMessage(ctx context.Context, payload []byte) error {
 		return ErrOutboundPeerNotFound
 	}
 	return client.SendMessage(ctx, payload)
+}
+
+// SendOutboundMessageParts sends one message from immutable prefix and body
+// segments using only the outbound connection.
+func (p *Peer) SendOutboundMessageParts(ctx context.Context, prefix, body []byte) error {
+	if err := p.waitReady(ctx); err != nil {
+		return err
+	}
+	p.noteOutbound()
+	client := p.outboundClient()
+	if client == nil {
+		return ErrOutboundPeerNotFound
+	}
+	return client.SendMessageParts(ctx, prefix, body)
 }
 
 // Close closes all live connections for this path.

@@ -1,6 +1,8 @@
 package cell
 
 import (
+	"bytes"
+	"fmt"
 	"math/rand"
 	"testing"
 )
@@ -90,7 +92,18 @@ type prunedUpdateFixture struct {
 func newPrunedUpdateFixture(tb testing.TB, depth, touches int, seed int64) prunedUpdateFixture {
 	tb.Helper()
 
-	read := NewReadSet(prunedUpdateTree(depth, 0))
+	return newPrunedUpdateFixtureFromRoot(tb, prunedUpdateTree(depth, 0), depth, touches, seed)
+}
+
+func newPrunedUpdateFixtureFromRoot(
+	tb testing.TB,
+	root *Cell,
+	depth, touches int,
+	seed int64,
+) prunedUpdateFixture {
+	tb.Helper()
+
+	read := NewReadSet(root)
 
 	rnd := rand.New(rand.NewSource(seed))
 	touched := make(map[uint64]struct{}, touches)
@@ -163,13 +176,103 @@ func BenchmarkCreateMerkleUpdateAppliedBlockShaped(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.ReportAllocs()
-	for b.Loop() {
-		update, applied, err := fixture.read.CreateMerkleUpdateApplied(fixture.to)
-		if err != nil {
-			b.Fatal(err)
-		}
-		benchmarkCellSink = update
-		benchmarkCellSink = applied
+	for _, parallelism := range []int{1, 8, 16} {
+		b.Run(fmt.Sprintf("parallel=%d", parallelism), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				update, applied, _, err := fixture.read.CreateMerkleUpdateAppliedSized(
+					fixture.to,
+					0,
+					parallelism,
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkCellSink = update
+				benchmarkCellSink = applied
+			}
+		})
 	}
+}
+
+func TestCreateMerkleUpdateAppliedParallelMatchesSequential(t *testing.T) {
+	fixture := newPrunedUpdateFixture(t, 13, 345, 20260820)
+	wantUpdate, wantApplied, wantMemo, err := fixture.read.CreateMerkleUpdateAppliedSized(fixture.to, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBOC := ToBOCWithFlags([]*Cell{wantUpdate}, false)
+
+	for _, parallelism := range []int{8, 16} {
+		t.Run(fmt.Sprintf("parallel=%d", parallelism), func(t *testing.T) {
+			update, applied, memo, err := fixture.read.CreateMerkleUpdateAppliedSized(
+				fixture.to,
+				0,
+				parallelism,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if memo != wantMemo {
+				t.Fatalf("memoised %d cells, want %d", memo, wantMemo)
+			}
+			if !bytes.Equal(ToBOCWithFlags([]*Cell{update}, false), wantBOC) {
+				t.Fatal("parallel update differs from the sequential update")
+			}
+			if applied.HashKey() != wantApplied.HashKey() {
+				t.Fatalf("applied root %x, want %x", applied.Hash()[:8], wantApplied.Hash()[:8])
+			}
+			stepped, err := ApplyMerkleUpdate(fixture.read.Source(), update)
+			if err != nil {
+				t.Fatalf("apply parallel update: %v", err)
+			}
+			if stepped.HashKey() != applied.HashKey() {
+				t.Fatalf("applied update gives %x, direct result is %x", stepped.Hash()[:8], applied.Hash()[:8])
+			}
+			assertNoTrace(t, update)
+			assertNoTrace(t, applied)
+		})
+	}
+
+	if _, _, _, err := fixture.read.CreateMerkleUpdateAppliedSized(fixture.to, 0, 0); err == nil {
+		t.Fatal("zero parallelism was accepted")
+	}
+	if _, _, _, err := fixture.read.CreateMerkleUpdateAppliedSized(fixture.to, 0, 1, 16); err == nil {
+		t.Fatal("multiple parallelism values were accepted")
+	}
+}
+
+func TestCreateMerkleUpdateAppliedParallelMatchesSequentialLazy(t *testing.T) {
+	const depth = 13
+
+	resident := prunedUpdateTree(depth, 0)
+	loader := newPreparedLoader(resident)
+	fixture := newPrunedUpdateFixtureFromRoot(t, loader.lazyRoot(resident), depth, 345, 20260820)
+	wantUpdate, wantApplied, wantMemo, err := fixture.read.CreateMerkleUpdateAppliedSized(fixture.to, 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	update, applied, memo, err := fixture.read.CreateMerkleUpdateAppliedSized(fixture.to, 0, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if memo != wantMemo {
+		t.Fatalf("memoised %d cells, want %d", memo, wantMemo)
+	}
+	if !bytes.Equal(ToBOCWithFlags([]*Cell{update}, false), ToBOCWithFlags([]*Cell{wantUpdate}, false)) {
+		t.Fatal("parallel update over a lazy predecessor differs from the sequential update")
+	}
+	if applied.HashKey() != wantApplied.HashKey() {
+		t.Fatalf("applied root %x, want %x", applied.Hash()[:8], wantApplied.Hash()[:8])
+	}
+	stepped, err := ApplyMerkleUpdate(resident, update)
+	if err != nil {
+		t.Fatalf("apply parallel update to resident predecessor: %v", err)
+	}
+	if stepped.HashKey() != applied.HashKey() {
+		t.Fatalf("applied update gives %x, direct result is %x", stepped.Hash()[:8], applied.Hash()[:8])
+	}
+	assertNoTrace(t, update)
+	assertNoTrace(t, applied)
 }
