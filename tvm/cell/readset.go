@@ -73,11 +73,36 @@ type ReadSet struct {
 	// retained cell is a plain descent again, sharing rather than copying.
 	sealed atomic.Bool
 
+	// detached stops the recorder without dropping what it recorded. It is the
+	// half of Seal that a producer needs at the instant its reading is over but
+	// its record is still being consulted: the collated proof is selected from
+	// the table after the last read, so the table has to outlive the fence, while
+	// any descent through a cell the set handed out must stop being recorded from
+	// that instant on. Sealing at the same point would force the selection to
+	// re-resolve every cell from disk.
+	//
+	// Seal implies it. Nothing clears either one.
+	detached atomic.Bool
+
 	shards [readSetShards]readSetShard
 
 	// onRecord observes the first read of every cell. The collated-size estimators
 	// are fed from here; it may run on several goroutines.
 	onRecord func(*Cell)
+
+	// onIgnored observes the cells an IgnoreReads scope drops, so a caller that
+	// deliberately reads without recording can still keep what it parsed and
+	// decide later — after the point where recording would have been harmful —
+	// whether to Record it. Unlike onRecord it is single-threaded: it fires from
+	// inside a scope only one goroutine may open, for the reason IgnoreReads
+	// itself is whole-set state.
+	//
+	// onIgnoredAt is the nesting depth the observer was installed at, and only
+	// that depth fires. A scope opened underneath it — a dictionary validating
+	// its root, say — is dropping reads for its own reason, and those cells are
+	// not the installer's to keep.
+	onIgnored   func(*Cell)
+	onIgnoredAt int32
 
 	// ignore counts nested IgnoreReads scopes. It is atomic because it is consulted
 	// on every parse, on the same path the lock-free probe exists to keep cheap.
@@ -162,9 +187,24 @@ type readSetShard struct {
 // really reaches landed one doubling above it and paid 56 bytes per slot for the
 // privilege. Sized apart, slots stay generous and entries track the population.
 type readSetTable struct {
-	slots  []atomic.Uint64 // fingerprint<<32 | (index+1); zero is empty
+	// slots hold fingerprint<<32 | readSetUnbilledBit? | (index+1); zero is
+	// empty. The unbilled bit marks an entry RecordUnbilled put there, which
+	// onRecord has not seen yet; the first billed read of that cell clears it
+	// and fires the callback, so a cell is billed exactly once no matter which
+	// route reached it first.
+	slots  []atomic.Uint64
 	hashes []Hash
 	cells  []*Cell
+}
+
+// readSetUnbilledBit rides in the low word of a slot beside the entry index. The
+// index is bounded by readSetMaxPresizedCells and the doubling above it, far
+// below this bit.
+const readSetUnbilledBit = uint64(1) << 31
+
+// readSetSlotIndex is the entry index a slot names.
+func readSetSlotIndex(entry uint64) int {
+	return int(uint32(entry)&^uint32(readSetUnbilledBit)) - 1
 }
 
 func newReadSetTable(slots, entries int) *readSetTable {
@@ -297,12 +337,31 @@ func (rs *ReadSet) SetRecordCallback(fn func(*Cell)) {
 	rs.onRecord = fn
 }
 
+// SetIgnoredObserver registers fn for every cell parsed inside the IgnoreReads
+// scope that is open right now, and only that one. Install it after opening the
+// scope and clear it before closing, on the goroutine that owns the scope.
+//
+// It changes nothing about what is recorded: fn is told about a read the set is
+// dropping, and dropping it remains the whole point of the scope. What it buys
+// is that the cells stay reachable, so a caller whose reads are premature rather
+// than unwanted can hand them back through Record once they are not.
+func (rs *ReadSet) SetIgnoredObserver(fn func(*Cell)) {
+	if rs == nil {
+		return
+	}
+	rs.onIgnored = fn
+	rs.onIgnoredAt = rs.ignore.Load()
+}
+
 // OnLoad implements TraceListener and is the single write path of the recorder.
 func (rs *ReadSet) OnLoad(c *Cell) {
 	if rs == nil || c == nil {
 		return
 	}
-	if rs.ignoring() {
+	if depth := rs.ignore.Load(); depth > 0 {
+		if rs.onIgnored != nil && depth == rs.onIgnoredAt {
+			rs.onIgnored(c)
+		}
 		return
 	}
 	rs.record(c)
@@ -319,10 +378,33 @@ func (rs *ReadSet) OnCreate() {}
 // A sealed set returns nil, which is what stops a retained cell from dragging a
 // dead recorder down its whole subtree.
 func (rs *ReadSet) ChildTrace(int) *Trace {
-	if rs.sealed.Load() {
+	if rs.Inert() {
 		return nil
 	}
 	return rs.trace
+}
+
+// Detach closes the recorder and keeps the record. Every write path becomes a
+// no-op and ChildTrace stops propagating, exactly as after Seal, but the table,
+// the referenced set and the source tree stay readable.
+//
+// It exists for the fence a producer needs partway through finishing a block:
+// reading is over, so nothing more may be recorded — a successor collation may
+// already be descending through cells this set handed out — while the selection
+// that turns the record into a proof has not run yet and must not be made to
+// resolve those cells a second time.
+func (rs *ReadSet) Detach() {
+	if rs == nil {
+		return
+	}
+	rs.detached.Store(true)
+}
+
+// Inert reports whether the recorder is closed, by Detach or by Seal. Every
+// write path tests this rather than sealed: a detached set records nothing, and
+// the difference between the two states is only whether the record survives.
+func (rs *ReadSet) Inert() bool {
+	return rs != nil && (rs.detached.Load() || rs.sealed.Load())
 }
 
 // Seal closes the recorder. Every write path becomes a no-op, ChildTrace stops
@@ -338,7 +420,14 @@ func (rs *ReadSet) ChildTrace(int) *Trace {
 // nothing will consult the record again, so it does not synchronize with readers
 // beyond making the write paths safe to hit.
 func (rs *ReadSet) Seal() {
-	if rs == nil || rs.sealed.Swap(true) {
+	if rs == nil {
+		return
+	}
+	// Detached first, so a concurrent writer that observes neither flag and then
+	// one of them cannot observe the table being dropped while still believing it
+	// may record.
+	rs.Detach()
+	if rs.sealed.Swap(true) {
 		return
 	}
 	for i := range rs.shards {
@@ -356,6 +445,7 @@ func (rs *ReadSet) Seal() {
 	rs.referencedMu.Unlock()
 	rs.source = nil
 	rs.onRecord = nil
+	rs.onIgnored = nil
 }
 
 // Sealed reports whether the recorder is closed.
@@ -367,7 +457,7 @@ func (rs *ReadSet) Sealed() bool {
 func (rs *ReadSet) PendingError() error { return nil }
 
 func (rs *ReadSet) record(c *Cell) {
-	if rs.sealed.Load() {
+	if rs.Inert() {
 		return
 	}
 	// A lazy placeholder carries hashes but no body, so recording it would put a
@@ -382,17 +472,18 @@ func (rs *ReadSet) record(c *Cell) {
 	// Hash value.
 	raw := c.getHash(_DataCellMaxLevel)
 	shard := &rs.shards[raw[0]&(readSetShards-1)]
-	if shard.probe(raw) {
+	if shard.probe(raw) == readSetBilled {
 		return
 	}
 
 	var hash Hash
 	copy(hash[:], raw)
-	if shard.insert(hash, c) {
+	bill, added := shard.insert(hash, c, true)
+	if added {
 		rs.recorded.Add(1)
-		if rs.onRecord != nil {
-			rs.onRecord(c)
-		}
+	}
+	if bill && rs.onRecord != nil {
+		rs.onRecord(c)
 	}
 }
 
@@ -416,17 +507,17 @@ func (rs *ReadSet) Record(c *Cell) {
 // that are never emitted, and the estimate is a floor with a hard check on the
 // real serialized size behind it, so leaving them uncharged is the safe side.
 func (rs *ReadSet) RecordUnbilled(c *Cell) {
-	if rs == nil || c == nil || c.IsLazy() || rs.sealed.Load() {
+	if rs == nil || c == nil || c.IsLazy() || rs.Inert() {
 		return
 	}
 	raw := c.getHash(_DataCellMaxLevel)
 	shard := &rs.shards[raw[0]&(readSetShards-1)]
-	if shard.probe(raw) {
+	if shard.probe(raw) != readSetAbsent {
 		return
 	}
 	var hash Hash
 	copy(hash[:], raw)
-	if shard.insert(hash, c) {
+	if _, added := shard.insert(hash, c, false); added {
 		rs.recorded.Add(1)
 	}
 }
@@ -591,15 +682,15 @@ func (rs *ReadSet) extendReferencedLocked() {
 				// Both probes take the hash in place; only a genuine first sight
 				// of a boundary pays for materializing a Hash value.
 				raw := ref.getHash(_DataCellMaxLevel)
-				if rs.shards[raw[0]&(readSetShards-1)].probe(raw) {
+				if rs.shards[raw[0]&(readSetShards-1)].probe(raw) != readSetAbsent {
 					continue
 				}
-				if rs.referenced.probe(raw) {
+				if rs.referenced.probe(raw) != readSetAbsent {
 					continue
 				}
 				var hash Hash
 				copy(hash[:], raw)
-				rs.referenced.insert(hash, ref)
+				rs.referenced.insert(hash, ref, true)
 			}
 		}
 	}
@@ -742,9 +833,13 @@ func readSetFingerprint(hash Hash) uint32 {
 // insert records a read cell and reports whether it is the first time. Never a
 // truncated compare: the fingerprint only decides whether the full hash is worth
 // comparing.
-func (s *readSetShard) insert(hash Hash, c *Cell) bool {
-	if _, found := s.lookup(hash); found {
-		return false
+// insert records hash as billed or unbilled. It reports whether the caller's
+// onRecord must fire: true for a first billed read, whether the entry is new or
+// was until now unbilled; false for a repeat, and for every unbilled record.
+// s.used moves only for a new entry, which is what recorded counts.
+func (s *readSetShard) insert(hash Hash, c *Cell, billed bool) (bill bool, added bool) {
+	if status := s.status(hash); status == readSetBilled || (status == readSetUnbilled && !billed) {
+		return false, false
 	}
 
 	fingerprint := readSetFingerprint(hash)
@@ -762,7 +857,9 @@ func (s *readSetShard) insert(hash Hash, c *Cell) bool {
 
 	// The lock-free probe above ran before the mutex was taken, so another
 	// goroutine may have inserted this hash in between; the probe is repeated here
-	// under the lock, where it is authoritative.
+	// under the lock, where it is authoritative. An unbilled entry met by a
+	// billed read is promoted in place: the slot word loses its bit, and the
+	// goroutine that clears it is the one that bills.
 	mask := len(table.slots) - 1
 	pos := int(fingerprint) & mask
 	for {
@@ -771,8 +868,12 @@ func (s *readSetShard) insert(hash Hash, c *Cell) bool {
 			break
 		}
 		if uint32(entry>>32) == fingerprint {
-			if idx := int(uint32(entry)) - 1; table.hashes[idx] == hash {
-				return false
+			if idx := readSetSlotIndex(entry); table.hashes[idx] == hash {
+				if billed && entry&readSetUnbilledBit != 0 {
+					table.slots[pos].Store(entry &^ readSetUnbilledBit)
+					return true, false
+				}
+				return false, false
 			}
 		}
 		pos = (pos + 1) & mask
@@ -781,17 +882,30 @@ func (s *readSetShard) insert(hash Hash, c *Cell) bool {
 	idx := s.used
 	table.hashes[idx] = hash
 	table.cells[idx] = c
-	table.slots[pos].Store(uint64(fingerprint)<<32 | uint64(idx+1))
+	slot := uint64(fingerprint)<<32 | uint64(idx+1)
+	if !billed {
+		slot |= readSetUnbilledBit
+	}
+	table.slots[pos].Store(slot)
 	s.used++
-	return true
+	return billed, true
 }
 
 // probe is lookup without materializing a Hash key, for the path that runs on
 // every parse.
-func (s *readSetShard) probe(raw []byte) bool {
+// readSetEntryStatus is what a probe reports about a hash.
+type readSetEntryStatus uint8
+
+const (
+	readSetAbsent readSetEntryStatus = iota
+	readSetUnbilled
+	readSetBilled
+)
+
+func (s *readSetShard) probe(raw []byte) readSetEntryStatus {
 	table := s.table.Load()
 	if table == nil {
-		return false
+		return readSetAbsent
 	}
 
 	fingerprint := uint32(raw[1]) | uint32(raw[2])<<8 | uint32(raw[3])<<16 | uint32(raw[4])<<24
@@ -800,15 +914,23 @@ func (s *readSetShard) probe(raw []byte) bool {
 	for {
 		entry := table.slots[pos].Load()
 		if entry == 0 {
-			return false
+			return readSetAbsent
 		}
 		if uint32(entry>>32) == fingerprint {
-			if idx := int(uint32(entry)) - 1; bytes.Equal(table.hashes[idx][:], raw) {
-				return true
+			if idx := readSetSlotIndex(entry); bytes.Equal(table.hashes[idx][:], raw) {
+				if entry&readSetUnbilledBit != 0 {
+					return readSetUnbilled
+				}
+				return readSetBilled
 			}
 		}
 		pos = (pos + 1) & mask
 	}
+}
+
+// status is probe for a Hash value.
+func (s *readSetShard) status(hash Hash) readSetEntryStatus {
+	return s.probe(hash[:])
 }
 
 // lookup probes without locking. It may miss an entry another goroutine is
@@ -828,7 +950,7 @@ func (s *readSetShard) lookup(hash Hash) (*Cell, bool) {
 			return nil, false
 		}
 		if uint32(entry>>32) == fingerprint {
-			if idx := int(uint32(entry)) - 1; table.hashes[idx] == hash {
+			if idx := readSetSlotIndex(entry); table.hashes[idx] == hash {
 				return table.cells[idx], true
 			}
 		}
@@ -857,7 +979,7 @@ func (s *readSetShard) lookupPos(hash Hash) (*Cell, int32, bool) {
 			return nil, -1, false
 		}
 		if uint32(entry>>32) == fingerprint {
-			if idx := int(uint32(entry)) - 1; table.hashes[idx] == hash {
+			if idx := readSetSlotIndex(entry); table.hashes[idx] == hash {
 				return table.cells[idx], int32(idx), true
 			}
 		}

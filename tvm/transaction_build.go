@@ -106,6 +106,9 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 	if err != nil {
 		return fmt.Errorf("failed to prepare next account state: %w", err)
 	}
+	// account_none has no field for the last transaction end LT. Keep it in
+	// the prepared lane so another transaction cannot overlap this one.
+	nextAccount.runtime.storageLT = endLT
 	if next.storageStatBound {
 		// Bind the emitted storage-stat dict to the state it describes, so the
 		// next transaction of this account can apply it incrementally instead

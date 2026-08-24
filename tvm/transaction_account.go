@@ -489,6 +489,8 @@ func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRunt
 	if err != nil {
 		return nil, nil, err
 	}
+	// The serialized account_none state cannot carry this lane-local bound.
+	runtime.storageLT = a.runtime.storageLT
 	runtime.accountStorageStat = a.runtime.accountStorageStat
 	runtime.statBoundTo = a.runtime.statBoundTo
 	return runtime, proof, nil

@@ -224,7 +224,42 @@ func (rs *ReadSet) createMerkleUpdateRaw(
 		}
 	}
 	sourceState.memoHint = len(kept)
-	if parallelism > 1 && len(kept) >= proofParallelMinCells {
+	// The branch worker is withheld when the source handed the walk unresolved
+	// placeholders, and this is a correctness gate rather than a tuning one.
+	// Forking gives the branch its own build memo, so a subtree reached from
+	// both sides is built twice; over a resident source the two builds agree and
+	// the split is free, but over a lazy one they do not — a cell rebuilt from a
+	// placeholder is not the cell rebuilt from the resolved instance, and the
+	// source proof then depends on where the split happened to fall. Measured on
+	// the mainnet fixture over a store-shaped predecessor, that made the update's
+	// OLD side take three different values under three memo topologies while the
+	// destination side, the collated data and the boundary set were identical.
+	//
+	// Residency is not a property of the block — the same predecessor is lazy or
+	// resident depending on what earlier work materialized — so a block must not
+	// be a function of it. The sequential build is the one both shapes agree on
+	// and is what the pre-parallel implementation produced.
+	//
+	// It costs nothing where it applies, and the fork is kept where it pays.
+	// Measured on the heavy mainnet collation as a paired A/B — the arms
+	// alternate inside one process, because whole-collation timing on a loaded
+	// host cannot resolve a change this size and separate series read as noise —
+	// against the build_state_update stage rather than the whole build:
+	//
+	//	resident      2.70-2.76 ms forked against 3.29-3.30 ms sequential (+20-22%)
+	//	store-shaped  3.55-3.56 ms forked against 3.50-3.56 ms sequential (-1.4..-0.2%)
+	//
+	// So the branch worker is worth a fifth of the stage over a resident source
+	// and nothing at all over a lazy one, which is what makes this gate free.
+	// The asymmetry is the pruning: over a store-shaped predecessor the childless
+	// boundaries are pruned rather than rebuilt, so the source body has far less
+	// left to split.
+	//
+	// The state update issues no cell loads of its own — counted over a
+	// store-shaped predecessor, all 16,093 loads at repeat=1 and 22,004 at
+	// repeat=3 came from execution and none from below createMerkleUpdateRaw —
+	// so nothing here is overlapping I/O, and sequencing it cannot expose one.
+	if parallelism > 1 && len(kept) >= proofParallelMinCells && !graph.sawLazyInstance() {
 		sourceState.parallelism = parallelism
 		sourceState.built = make(map[proofBodyKey]*Cell, 16)
 	} else {

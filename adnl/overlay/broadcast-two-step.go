@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -20,6 +21,11 @@ import (
 const DefaultTwoStepBroadcastMaxActiveStreams = 128
 const DefaultTwoStepBroadcastMaxActiveBytes = 256 << 20
 const DefaultTwoStepDeliveredCacheSize = 4096
+const DefaultTwoStepRelayQueueSize = 1024
+const DefaultTwoStepRelayConcurrency = 64
+const DefaultTwoStepRelayMaxActiveBytes int64 = DefaultTwoStepBroadcastMaxActiveBytes
+
+const DefaultTwoStepRelayPeerTimeout = 750 * time.Millisecond
 
 const broadcastTwoStepDateSkew = 20 * time.Second
 const broadcastTwoStepStreamTTL = 25 * time.Second
@@ -68,6 +74,227 @@ type BroadcastTwoStepStats struct {
 	EvictedTotal            uint64
 	CompletedTotal          uint64
 	DeliveredCacheHitsTotal uint64
+}
+
+// BroadcastTwoStepRelayStats is a per-receiver snapshot of asynchronous
+// two-step peer fanout. All totals count peer sends, not broadcasts.
+type BroadcastTwoStepRelayStats struct {
+	QueueDepth         int
+	ActiveBytes        int64
+	EnqueuedTotal      uint64
+	QueueFullTotal     uint64
+	ByteFullTotal      uint64
+	ClosedTotal        uint64
+	CanceledTotal      uint64
+	PrepareFailedTotal uint64
+	SentTotal          uint64
+	FailedTotal        uint64
+	TimedOutTotal      uint64
+}
+
+type broadcastTwoStepRelayTask struct {
+	peer    BroadcastPeer
+	payload *broadcastTwoStepRelayPayload
+}
+
+type broadcastTwoStepRelayPayload struct {
+	message tl.Serializable
+	body    []byte
+	bytes   int64
+	refs    atomic.Int64
+}
+
+type broadcastTwoStepRelaySubmitStatus uint8
+
+const (
+	broadcastTwoStepRelayQueued broadcastTwoStepRelaySubmitStatus = iota
+	broadcastTwoStepRelayQueueFull
+	broadcastTwoStepRelayClosed
+)
+
+// broadcastTwoStepRelayDispatcher owns a fixed worker pool. Peer sends are
+// bounded by queue slots, while shared serialized bodies are independently
+// bounded by bytes so large broadcasts cannot hide behind small task objects.
+type broadcastTwoStepRelayDispatcher struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
+	queue          chan broadcastTwoStepRelayTask
+	peerTimeout    time.Duration
+	maxActiveBytes int64
+
+	closed   bool
+	submitMx sync.RWMutex
+	close    sync.Once
+	workers  sync.WaitGroup
+
+	enqueued          atomic.Uint64
+	queueFull         atomic.Uint64
+	byteFull          atomic.Uint64
+	closedSubmissions atomic.Uint64
+	canceled          atomic.Uint64
+	prepareFailed     atomic.Uint64
+	sent              atomic.Uint64
+	failed            atomic.Uint64
+	timedOut          atomic.Uint64
+	activeBytes       atomic.Int64
+}
+
+func newBroadcastTwoStepRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration) *broadcastTwoStepRelayDispatcher {
+	if queueSize < 1 {
+		queueSize = DefaultTwoStepRelayQueueSize
+	}
+	if concurrency < 1 {
+		concurrency = DefaultTwoStepRelayConcurrency
+	}
+	if peerTimeout <= 0 {
+		peerTimeout = DefaultTwoStepRelayPeerTimeout
+	}
+	if maxActiveBytes < 1 {
+		maxActiveBytes = DefaultTwoStepRelayMaxActiveBytes
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &broadcastTwoStepRelayDispatcher{
+		ctx:            ctx,
+		cancel:         cancel,
+		queue:          make(chan broadcastTwoStepRelayTask, queueSize),
+		peerTimeout:    peerTimeout,
+		maxActiveBytes: maxActiveBytes,
+	}
+	d.workers.Add(concurrency)
+	for range concurrency {
+		go d.runWorker()
+	}
+	return d
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Submit(task broadcastTwoStepRelayTask) broadcastTwoStepRelaySubmitStatus {
+	d.submitMx.RLock()
+	defer d.submitMx.RUnlock()
+
+	if d.closed {
+		d.closedSubmissions.Add(1)
+		d.releasePayload(task.payload)
+		return broadcastTwoStepRelayClosed
+	}
+
+	select {
+	case d.queue <- task:
+		d.enqueued.Add(1)
+		return broadcastTwoStepRelayQueued
+	default:
+		d.queueFull.Add(1)
+		d.releasePayload(task.payload)
+		return broadcastTwoStepRelayQueueFull
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) reservePayload(message tl.Serializable, body []byte, refs int) (*broadcastTwoStepRelayPayload, bool) {
+	// The slice retains its complete backing allocation while any peer task is
+	// alive, so charge capacity rather than only the serialized length.
+	bodyBytes := int64(cap(body))
+	for {
+		active := d.activeBytes.Load()
+		if bodyBytes > d.maxActiveBytes || active > d.maxActiveBytes-bodyBytes {
+			d.byteFull.Add(uint64(refs))
+			return nil, false
+		}
+		if d.activeBytes.CompareAndSwap(active, active+bodyBytes) {
+			break
+		}
+	}
+
+	payload := &broadcastTwoStepRelayPayload{
+		message: message,
+		body:    body,
+		bytes:   bodyBytes,
+	}
+	payload.refs.Store(int64(refs))
+	return payload, true
+}
+
+func (d *broadcastTwoStepRelayDispatcher) releasePayload(payload *broadcastTwoStepRelayPayload) {
+	if payload != nil && payload.refs.Add(-1) == 0 {
+		d.activeBytes.Add(-payload.bytes)
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Close() {
+	d.close.Do(func() {
+		d.submitMx.Lock()
+		d.closed = true
+		d.cancel()
+		d.submitMx.Unlock()
+
+		d.workers.Wait()
+		for {
+			select {
+			case task := <-d.queue:
+				d.canceled.Add(1)
+				d.releasePayload(task.payload)
+			default:
+				return
+			}
+		}
+	})
+}
+
+func (d *broadcastTwoStepRelayDispatcher) runWorker() {
+	defer d.workers.Done()
+
+	for {
+		// Give shutdown priority over queued work. A task accepted before Close
+		// may be abandoned, but an in-flight peer gets its context cancelled and
+		// Close waits for every worker to return.
+		select {
+		case <-d.ctx.Done():
+			return
+		default:
+		}
+
+		select {
+		case <-d.ctx.Done():
+			return
+		case task := <-d.queue:
+			d.send(task)
+		}
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) send(task broadcastTwoStepRelayTask) {
+	defer d.releasePayload(task.payload)
+
+	ctx, cancel := context.WithTimeout(d.ctx, d.peerTimeout)
+	err := sendPreparedBroadcastMessage(ctx, task.peer, task.payload.message, task.payload.body)
+	cancel()
+	if err == nil {
+		d.sent.Add(1)
+		return
+	}
+
+	d.failed.Add(1)
+	if errors.Is(err, context.Canceled) && d.ctx.Err() != nil {
+		d.canceled.Add(1)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		d.timedOut.Add(1)
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Stats() BroadcastTwoStepRelayStats {
+	return BroadcastTwoStepRelayStats{
+		QueueDepth:         len(d.queue),
+		ActiveBytes:        d.activeBytes.Load(),
+		EnqueuedTotal:      d.enqueued.Load(),
+		QueueFullTotal:     d.queueFull.Load(),
+		ByteFullTotal:      d.byteFull.Load(),
+		ClosedTotal:        d.closedSubmissions.Load(),
+		CanceledTotal:      d.canceled.Load(),
+		PrepareFailedTotal: d.prepareFailed.Load(),
+		SentTotal:          d.sent.Load(),
+		FailedTotal:        d.failed.Load(),
+		TimedOutTotal:      d.timedOut.Load(),
+	}
 }
 
 type BroadcastTwoStepState struct {
@@ -464,27 +691,111 @@ func (a *ADNLOverlayWrapper) twoStepBroadcastInfo(sourceID []byte, sourceKey ed2
 	}
 }
 
-func (a *ADNLOverlayWrapper) rebroadcastTwoStep(ctx context.Context, sourceADNL []byte, msg tl.Serializable) error {
-	peerSet, localID := a.twoStepRelayConfig()
-	if peerSet == nil {
+func (r *BroadcastReceiver) ensureBroadcastTwoStepRelayDispatcher() *broadcastTwoStepRelayDispatcher {
+	r.twoStepRelayMx.Lock()
+	defer r.twoStepRelayMx.Unlock()
+
+	if r.closed.Load() {
 		return nil
 	}
-	body, err := prepareBroadcastMessage(msg)
-	if err != nil {
-		return fmt.Errorf("prepare two-step rebroadcast: %w", err)
+	if relay := r.twoStepRelay.Load(); relay != nil {
+		return relay
 	}
 
-	var sendErr error
-	for _, peer := range peerSet.Peers() {
+	relay := newBroadcastTwoStepRelayDispatcher(
+		DefaultTwoStepRelayQueueSize,
+		DefaultTwoStepRelayConcurrency,
+		DefaultTwoStepRelayMaxActiveBytes,
+		DefaultTwoStepRelayPeerTimeout,
+	)
+	r.twoStepRelay.Store(relay)
+	return relay
+}
+
+// enqueueRebroadcastTwoStep preserves diffuse-before-admission ordering by
+// completing every bounded queue submission before returning to local
+// application delivery. Network sends happen on the owned worker pool, so a
+// slow peer cannot delay decoding or validation. Queue saturation deliberately
+// drops only the affected relay send; it never rejects an otherwise valid
+// candidate that can still be relayed by other overlay members.
+func (a *ADNLOverlayWrapper) enqueueRebroadcastTwoStep(sourceADNL []byte, msg tl.Serializable) {
+	peerSet, localID := a.twoStepRelayConfig()
+	if peerSet == nil {
+		return
+	}
+
+	peers := peerSet.Peers()
+	targets := make([]BroadcastPeer, 0, len(peers))
+	needsLegacyMessage := false
+	for _, peer := range peers {
 		peerID := peer.ID()
 		if bytes.Equal(peerID, sourceADNL) || (len(localID) > 0 && bytes.Equal(peerID, localID)) {
 			continue
 		}
-		if err := sendPreparedBroadcastMessage(ctx, peer, msg, body); err != nil && sendErr == nil {
-			sendErr = fmt.Errorf("failed to rebroadcast two-step message to peer %x: %w", peerID, err)
+
+		targets = append(targets, peer)
+		if _, ok := peer.(PreparedBroadcastPeer); !ok {
+			needsLegacyMessage = true
 		}
 	}
-	return sendErr
+	if len(targets) == 0 {
+		return
+	}
+
+	relay := a.ensureBroadcastTwoStepRelayDispatcher()
+	if relay == nil {
+		return
+	}
+
+	// Incoming TL slices may alias the pooled datagram buffer. Serialize before
+	// local delivery returns, then let every async prepared send share this
+	// immutable owned body.
+	body, err := prepareBroadcastMessage(msg)
+	if err != nil {
+		relay.prepareFailed.Add(uint64(len(targets)))
+		return
+	}
+
+	var stableMessage tl.Serializable
+	if needsLegacyMessage {
+		// Released BroadcastPeer implementations may still use the reflective
+		// message API. Reparse the owned body once so those async calls never
+		// retain pooled receive memory, while preserving the original pointer form.
+		var parsed any
+		if _, err = tl.Parse(&parsed, body, true); err != nil {
+			relay.prepareFailed.Add(uint64(len(targets)))
+			return
+		}
+		switch msg.(type) {
+		case *BroadcastTwoStepSimple:
+			parsedMessage, ok := parsed.(BroadcastTwoStepSimple)
+			if !ok {
+				relay.prepareFailed.Add(uint64(len(targets)))
+				return
+			}
+			stableMessage = &parsedMessage
+		case *BroadcastTwoStepFEC:
+			parsedMessage, ok := parsed.(BroadcastTwoStepFEC)
+			if !ok {
+				relay.prepareFailed.Add(uint64(len(targets)))
+				return
+			}
+			stableMessage = &parsedMessage
+		default:
+			stableMessage = parsed
+		}
+	}
+	payload, ok := relay.reservePayload(stableMessage, body, len(targets))
+	if !ok {
+		return
+	}
+
+	for _, peer := range targets {
+		relay.Submit(broadcastTwoStepRelayTask{
+			peer:    peer,
+			payload: payload,
+		})
+	}
 }
 
 func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSimple, srcPeerID []byte) error {
@@ -567,12 +878,11 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimpleAdmission(
 		return err
 	}
 
-	var rebroadcastErr error
 	if bytes.Equal(srcPeerID, t.SourceADNL) {
 		// Match the C++ node: an authorized, signed two-step message is relayed
 		// before application admission. Retry only rolls back local admission;
-		// packets already sent to peers cannot be rolled back.
-		rebroadcastErr = a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
+		// relay work already accepted by the bounded queue cannot be rolled back.
+		a.enqueueRebroadcastTwoStep(t.SourceADNL, t)
 	}
 
 	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple)
@@ -582,7 +892,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimpleAdmission(
 	if delivery.err != nil {
 		return delivery.err
 	}
-	return rebroadcastErr
+	return nil
 }
 
 func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, srcPeerID []byte) error {
@@ -811,19 +1121,19 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		stream.mx.Unlock()
 	}
 
-	var rebroadcastErr error
 	if rebroadcastNow {
 		// As in the C++ node, valid two-step FEC traffic is diffused before
-		// application admission. A later Retry only forgets local decode state;
-		// the part already sent to peers remains sent.
-		rebroadcastErr = a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
+		// application admission. Submission to the bounded relay queue happens
+		// here; a later Retry only forgets local decode state, while accepted
+		// relay work remains accepted.
+		a.enqueueRebroadcastTwoStep(t.SourceADNL, t)
 	}
 
 	if waitAdmission != nil {
 		<-waitAdmission.done
 		switch waitAdmission.disposition {
 		case BroadcastDispositionAcceptAndRelay, BroadcastDispositionIgnore:
-			return twoStepFECPartResult{err: rebroadcastErr}
+			return twoStepFECPartResult{}
 		case BroadcastDispositionRetry:
 			return twoStepFECPartResult{recontend: true}
 		default:
@@ -831,7 +1141,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		}
 	}
 	if !decoded {
-		return twoStepFECPartResult{err: rebroadcastErr}
+		return twoStepFECPartResult{}
 	}
 
 	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, deliverTrusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC)
@@ -842,7 +1152,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 	if delivery.err != nil {
 		return twoStepFECPartResult{err: delivery.err}
 	}
-	return twoStepFECPartResult{err: rebroadcastErr}
+	return twoStepFECPartResult{}
 }
 
 func (s *BroadcastTwoStepState) finishFECAdmission(id broadcastTwoStepIDKey, stream *broadcastTwoStepStream, admission *broadcastAdmission, disposition BroadcastDisposition) {

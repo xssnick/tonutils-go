@@ -38,6 +38,14 @@ type sourceGraph struct {
 	// none skips the fold entirely.
 	boundaries int
 
+	// lazyInstance records that the source handed this walk an unresolved
+	// placeholder. It is not a property of the block: the same predecessor is
+	// lazy or resident depending on what earlier work happened to materialize,
+	// and cells rebuilt from a placeholder are not interchangeable with cells
+	// rebuilt from the resolved instance. Only the source proof's builder reads
+	// it, to stay on the one path whose output does not depend on which of the
+	// two it arrived through. See buildRecordedProofBody's caller.
+	lazyInstance       atomic.Bool
 	parallel           bool
 	parallelBoundaries atomic.Int64
 	boundaryMu         [sourceGraphBoundaryShards]sync.Mutex
@@ -144,6 +152,7 @@ func (g *sourceGraph) visit(rs *ReadSet, c *Cell, depth int) (int32, bool, error
 	if depth > maxDepth {
 		return 0, false, fmt.Errorf("source walk exceeded the cell depth limit")
 	}
+	g.noteInstance(c)
 	hash := c.HashKey()
 	source, pos, read := rs.shards[shardOf(hash)].lookupPos(hash)
 	if read {
@@ -187,6 +196,20 @@ func (g *sourceGraph) visit(rs *ReadSet, c *Cell, depth int) (int32, bool, error
 		children++
 	}
 	return g.add(hash, pos, source, true, childBuf[:children]), true, nil
+}
+
+// noteInstance records an unresolved arrival. The load guards the store so a
+// store-backed predecessor, where nearly every arrival is a placeholder, pays
+// one uncontended read per cell instead of a write per cell.
+func (g *sourceGraph) noteInstance(c *Cell) {
+	if c.IsLazy() && !g.lazyInstance.Load() {
+		g.lazyInstance.Store(true)
+	}
+}
+
+// sawLazyInstance reports whether any cell reached the walk unresolved.
+func (g *sourceGraph) sawLazyInstance() bool {
+	return g != nil && g.lazyInstance.Load()
 }
 
 func (g *sourceGraph) add(hash Hash, pos int32, held *Cell, read bool, children []int32) int32 {
@@ -387,7 +410,11 @@ type sourceGraphTask struct {
 	cell  *Cell
 	local []sourceGraphLocalNode
 	edges []int32
-	err   error
+	// lazy carries the worker's own unresolved arrivals up to the graph, which
+	// the worker cannot touch: it is folded in by mergeSourceSubtree, and a task
+	// the replay never reaches contributes no nodes and so needs no fold.
+	lazy bool
+	err  error
 }
 
 // buildSourceGraphParallel builds the same graph the sequential walk builds,
@@ -419,6 +446,7 @@ func (rs *ReadSet) buildSourceGraphParallel(g *sourceGraph, workers int) (bool, 
 	collected := make(map[Hash]struct{})
 	var collect func(c *Cell, depth int) error
 	collect = func(c *Cell, depth int) error {
+		g.noteInstance(c)
 		hash := c.HashKey()
 		if _, seen := collected[hash]; seen {
 			return nil
@@ -486,6 +514,7 @@ func (rs *ReadSet) buildSourceGraphParallel(g *sourceGraph, workers int) (bool, 
 		if depth > maxDepth {
 			return 0, fmt.Errorf("source walk exceeded the cell depth limit")
 		}
+		g.noteInstance(c)
 		hash := c.HashKey()
 		source, pos, read := rs.shards[shardOf(hash)].lookupPos(hash)
 		if read {
@@ -564,6 +593,9 @@ func (rs *ReadSet) walkSourceSubtree(task *sourceGraphTask, scratch *sourceGraph
 		if depth > maxDepth {
 			return 0, errSourceGraphDepthRace
 		}
+		if c.IsLazy() {
+			task.lazy = true
+		}
 		hash := c.HashKey()
 		source, pos, read := rs.shards[shardOf(hash)].lookupPos(hash)
 		if read {
@@ -622,6 +654,9 @@ func (rs *ReadSet) walkSourceSubtree(task *sourceGraphTask, scratch *sourceGraph
 // reference only earlier local nodes, so one forward pass with a remap table
 // settles every edge.
 func (g *sourceGraph) mergeSourceSubtree(task *sourceGraphTask) int32 {
+	if task.lazy && !g.lazyInstance.Load() {
+		g.lazyInstance.Store(true)
+	}
 	remap := make([]int32, len(task.local))
 	var childBuf [4]int32
 	for i := range task.local {

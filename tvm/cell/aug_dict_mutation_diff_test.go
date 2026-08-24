@@ -725,3 +725,179 @@ func BenchmarkAugDictSetManyMutationDiff(b *testing.B) {
 		}
 	})
 }
+
+// The parallel replay must record exactly the reads the sequential one
+// records: that set is what the closure exists to put into the collated proof.
+// The dictionary is wide enough that the frontier actually splits — a closure
+// with one task is the sequential walk under another name, and would prove
+// nothing about the split.
+func TestReplayParallelRecordsTheSequentialReads(t *testing.T) {
+	rnd := rand.New(rand.NewSource(0x7a11e1))
+	for round := 0; round < 40; round++ {
+		values := make(map[uint64]uint64)
+		for len(values) < 600 {
+			values[uint64(rnd.Intn(1<<16))] = uint64(rnd.Intn(256))
+		}
+		entries := make([]AugmentedEntry, 0, 300)
+		used := make(map[uint64]struct{}, cap(entries))
+		for len(entries) < cap(entries) {
+			key := uint64(rnd.Intn(1 << 16))
+			if _, exists := used[key]; exists {
+				continue
+			}
+			used[key] = struct{}{}
+			entries = append(entries, AugmentedEntry{
+				Key:   mustTestAugKey16(t, key),
+				Value: mustTestAugValue(t, uint64(rnd.Intn(256)), 8),
+			})
+		}
+
+		record := func(workers int) (map[Hash]struct{}, int) {
+			old := mustDiffDict16(t, testMetricAugmentation{}, values)
+			usage := NewReadSet(old.RootCell())
+			traced := old.Copy().SetTrace(usage.Trace())
+			diff, err := traced.SetManyWithDiff(entries, 4)
+			if err != nil {
+				t.Fatalf("round %d SetManyWithDiff: %v", round, err)
+			}
+			before := usage.Size()
+			var tasks []augDiffReplayTask
+			if workers > 1 {
+				var top augmentedNodeChecker
+				if err = replayAugDiffNodeTo(diff.replay, diff.replay.cell.Trace(), diff.aug, &top, replayFrontierDepth, &tasks); err != nil {
+					t.Fatalf("round %d frontier: %v", round, err)
+				}
+				// Re-record from scratch: the frontier walk above already
+				// recorded the top, so the real run starts on a fresh set.
+				old = mustDiffDict16(t, testMetricAugmentation{}, values)
+				usage = NewReadSet(old.RootCell())
+				traced = old.Copy().SetTrace(usage.Trace())
+				if diff, err = traced.SetManyWithDiff(entries, 4); err != nil {
+					t.Fatal(err)
+				}
+				before = usage.Size()
+				err = diff.ReplayParallel(workers)
+			} else {
+				err = diff.Replay()
+			}
+			if err != nil {
+				t.Fatalf("round %d replay(%d): %v", round, workers, err)
+			}
+			got := make(map[Hash]struct{}, usage.Size()-before)
+			for _, c := range usage.Cells() {
+				got[c.HashKey()] = struct{}{}
+			}
+			return got, len(tasks)
+		}
+		sequential, _ := record(1)
+		parallel, tasks := record(16)
+		if tasks < 4 {
+			t.Fatalf("round %d: the frontier produced %d tasks; the split is vacuous", round, tasks)
+		}
+		if len(parallel) != len(sequential) {
+			t.Fatalf("round %d: parallel replay recorded %d cells, sequential %d", round, len(parallel), len(sequential))
+		}
+		for h := range sequential {
+			if _, ok := parallel[h]; !ok {
+				t.Fatalf("round %d: parallel replay missed cell %x", round, h[:4])
+			}
+		}
+	}
+}
+
+func mustTestAugKey16(t *testing.T, value uint64) *Cell {
+	t.Helper()
+	return BeginCell().MustStoreUInt(value, 16).EndCell()
+}
+
+func mustDiffDict16(t *testing.T, aug Augmentation, values map[uint64]uint64) *AugmentedDictionary {
+	t.Helper()
+	dict, err := NewAugDict(16, aug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, value := range values {
+		if err = dict.Set(mustTestAugKey16(t, key), mustTestAugValue(t, value, 8)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dict
+}
+
+// ScanDiffParallel must record the reads ScanDiff records, and must actually
+// split — a pair of dictionaries that differ under one prefix would be scanned
+// by one task and prove nothing about the workers.
+func TestScanDiffParallelRecordsTheSequentialReads(t *testing.T) {
+	rnd := rand.New(rand.NewSource(0x5ca1d1f))
+	for round := 0; round < 30; round++ {
+		base := make(map[uint64]uint64)
+		for len(base) < 800 {
+			base[uint64(rnd.Intn(1<<16))] = uint64(rnd.Intn(256))
+		}
+		changed := make([]AugmentedEntry, 0, 200)
+		used := map[uint64]struct{}{}
+		for len(changed) < cap(changed) {
+			key := uint64(rnd.Intn(1 << 16))
+			if _, dup := used[key]; dup {
+				continue
+			}
+			used[key] = struct{}{}
+			changed = append(changed, AugmentedEntry{Key: mustTestAugKey16(t, key), Value: mustTestAugValue(t, uint64(rnd.Intn(256)), 8)})
+		}
+		deleted := make([]*Cell, 0, 60)
+		for key := range base {
+			if len(deleted) == cap(deleted) {
+				break
+			}
+			if _, touched := used[key]; !touched {
+				deleted = append(deleted, mustTestAugKey16(t, key))
+			}
+		}
+
+		record := func(parallel bool) (map[Hash]struct{}, int) {
+			old := mustDiffDict16(t, testMetricAugmentation{}, base)
+			usage := NewReadSet(old.RootCell())
+			tracedOld := old.Copy().SetTrace(usage.Trace())
+			next := old.Copy()
+			if err := next.SetMany(changed, 4); err != nil {
+				t.Fatal(err)
+			}
+			if err := next.DeleteMany(deleted, 4); err != nil {
+				t.Fatal(err)
+			}
+			noop := func(*Cell, *Slice, *Slice) error { return nil }
+			tasks := 0
+			if parallel {
+				var collected []augDictDiffTask
+				probe := augDictDiffWalk{keySz: 16, newAug: next.aug, checkNew: true, fn: noop, frontierBits: 6, tasks: &collected}
+				if err := probe.node(old.Copy().root, next.root, 16, 0, 0); err != nil {
+					t.Fatal(err)
+				}
+				tasks = len(collected)
+				if err := tracedOld.scanDiffParallelAt(next, true, noop, 8, 6); err != nil {
+					t.Fatalf("round %d parallel: %v", round, err)
+				}
+			} else if err := tracedOld.ScanDiff(next, true, noop); err != nil {
+				t.Fatalf("round %d sequential: %v", round, err)
+			}
+			got := make(map[Hash]struct{}, usage.Size())
+			for _, c := range usage.Cells() {
+				got[c.HashKey()] = struct{}{}
+			}
+			return got, tasks
+		}
+		sequential, _ := record(false)
+		parallel, tasks := record(true)
+		if tasks < 4 {
+			t.Fatalf("round %d: %d tasks; the split is vacuous", round, tasks)
+		}
+		if len(parallel) != len(sequential) {
+			t.Fatalf("round %d: parallel scan recorded %d cells, sequential %d", round, len(parallel), len(sequential))
+		}
+		for h := range sequential {
+			if _, ok := parallel[h]; !ok {
+				t.Fatalf("round %d: parallel scan missed %x", round, h[:4])
+			}
+		}
+	}
+}

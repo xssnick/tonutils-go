@@ -462,6 +462,27 @@ func (d *AugmentedDictionary) Copy() *AugmentedDictionary {
 	}
 }
 
+// CopyWithTrace returns a copy whose walks notify ONLY trace. SetTrace combines
+// the given trace with whatever the root already carries, which is right for a
+// reader that adds an observer; this is for a reader that must be recorded into
+// its own listener and into nothing else — a collation executing several
+// account lanes at once gives each lane such a view, buffers what the lane read,
+// and replays it into the shared recorder in the order the lanes retire, so the
+// shared record ends up exactly as a sequential walk would have left it.
+//
+// Only the root is rewrapped. Cells loaded beneath it inherit the root's trace
+// through ChildTrace, and a copy of the root carries its own reference array, so
+// what one view materializes is not seen through another.
+func (d *AugmentedDictionary) CopyWithTrace(trace *Trace) *AugmentedDictionary {
+	if d == nil {
+		return nil
+	}
+	cp := d.Copy()
+	cp.trace = trace
+	cp.root = cp.root.WithTrace(trace)
+	return cp
+}
+
 func (d *AugmentedDictionary) SetTrace(trace *Trace) *AugmentedDictionary {
 	if d == nil {
 		return nil

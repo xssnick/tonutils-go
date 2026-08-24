@@ -202,7 +202,47 @@ func (d *AugmentedDictionary) setManyEntries(
 	return &AugmentedDictionaryDiff{
 		aug:    d.aug,
 		replay: replay,
+		warm:   resolver.warmCells(),
 	}, nil
+}
+
+// warmCells is every resident cell the mutation already owned or loaded, keyed
+// by the hash of the lazy placeholder it stands in for. The augmentation
+// closure replayed afterwards forks on the same nodes and reads the same
+// untouched siblings, so handing it this map turns each of those reads into the
+// cache-hit half of a lazy load instead of a second trip to storage.
+//
+// The map is built once the mutation has finished and is only read from there
+// on, which is what makes it safe to share with the concurrent replay workers.
+func (r *augBulkPathResolver) warmCells() map[Hash]*Cell {
+	if r == nil {
+		return nil
+	}
+	if r.parallel {
+		r.indexOnce.Do(r.indexPaths)
+	} else if r.pathCells == nil {
+		r.indexPaths()
+	}
+	// The resolver is done with pathCells by now, so the loaded siblings fold
+	// into it rather than into a second map the lookup would have to consult.
+	warm := r.pathCells
+	put := func(hash Hash, c *Cell) {
+		if c == nil {
+			return
+		}
+		if warm == nil {
+			warm = make(map[Hash]*Cell, len(r.loadedSequential)+1)
+		}
+		warm[hash] = c
+	}
+	for hash, c := range r.loadedSequential {
+		put(hash, c)
+	}
+	r.loadedParallel.Range(func(key, value any) bool {
+		put(key.(Hash), value.(*augBulkLoadedCell).cell)
+		return true
+	})
+	return warm
 }
 
 type augBulkPathResolver struct {

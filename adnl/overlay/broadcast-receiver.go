@@ -62,6 +62,8 @@ type BroadcastReceiver struct {
 	simpleRelay    atomic.Pointer[broadcastSimpleRelayConfig]
 	twoStepState   atomic.Pointer[BroadcastTwoStepState]
 	twoStepConfig  atomic.Pointer[broadcastTwoStepRelayConfig]
+	twoStepRelay   atomic.Pointer[broadcastTwoStepRelayDispatcher]
+	twoStepRelayMx sync.Mutex
 	handler        atomic.Pointer[broadcastHandler]
 	precheck       atomic.Pointer[broadcastPrecheckHandler]
 
@@ -116,8 +118,15 @@ func (r *BroadcastReceiver) IsActive() bool {
 
 func (r *BroadcastReceiver) Close() {
 	r.closeOnce.Do(func() {
+		r.twoStepRelayMx.Lock()
 		r.closed.Store(true)
 		r.active.Store(false)
+		relay := r.twoStepRelay.Load()
+		r.twoStepRelayMx.Unlock()
+
+		if relay != nil {
+			relay.Close()
+		}
 		close(r.cleanupStop)
 		<-r.cleanupDone
 	})
@@ -216,6 +225,15 @@ func (r *BroadcastReceiver) BroadcastTwoStepStats() BroadcastTwoStepStats {
 		return BroadcastTwoStepStats{}
 	}
 	return state.Stats()
+}
+
+// BroadcastTwoStepRelayStats returns the bounded async relay worker snapshot.
+func (r *BroadcastReceiver) BroadcastTwoStepRelayStats() BroadcastTwoStepRelayStats {
+	relay := r.twoStepRelay.Load()
+	if relay == nil {
+		return BroadcastTwoStepRelayStats{}
+	}
+	return relay.Stats()
 }
 
 func (r *BroadcastReceiver) isBroadcastTwoStepEnabled() bool {

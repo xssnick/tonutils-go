@@ -1,6 +1,9 @@
 package cell
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 // AugDictDiffFunc receives changed leaves in key order. A nil oldValueExtra or
 // newValueExtra means that the key is absent from that side of the diff. The
@@ -30,6 +33,90 @@ func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAug
 	return nil
 }
 
+// ScanDiffParallel is ScanDiff with the subtrees below a shared fork at key
+// depth scanDiffFrontierBits scanned on workers goroutines. The scan's
+// observable effect in a collation is the reads it records — the validator's
+// augmentation checks replayed so their cells reach the proof — and a set of
+// reads is the same in any order. fn is called from the workers and must be
+// safe for that; the collator passes one that does nothing. Errors keep the
+// sequential priority: the top of the walk returns the first it meets, and a
+// task's error is reported in trie order.
+//
+// The walk is one of the five tasks of the collation's validation closure and,
+// on a queue thousands of entries deep, the slowest: two tries of that size
+// scanned in lockstep with an augmentation check at every changed fork, on
+// one goroutine. Like the account closure it splits by subtree, and for the
+// same reason pays off: the work is parsing and loading siblings the
+// collation never touched.
+func (d *AugmentedDictionary) ScanDiffParallel(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int) error {
+	return d.scanDiffParallelAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+}
+
+// scanDiffParallelAt is ScanDiffParallel with the frontier depth chosen by the
+// caller; tests use it on dictionaries with short keys.
+func (d *AugmentedDictionary) scanDiffParallelAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int, frontierBits uint) error {
+	if workers < 2 {
+		return d.ScanDiff(other, checkOtherAugmentation, fn)
+	}
+	if d.keySz != other.keySz {
+		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
+	}
+	var tasks []augDictDiffTask
+	top := augDictDiffWalk{
+		keySz:        d.keySz,
+		newAug:       other.aug,
+		checkNew:     checkOtherAugmentation,
+		fn:           fn,
+		frontierBits: frontierBits,
+		tasks:        &tasks,
+	}
+	oldRoot := d.root.withTraceCombined(d.trace)
+	newRoot := other.root.withTraceCombined(other.trace)
+	if err := top.node(oldRoot, newRoot, d.keySz, 0, 0); err != nil {
+		return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
+	}
+	if len(tasks) < 2 {
+		for i := range tasks {
+			walk := augDictDiffWalk{keySz: d.keySz, key: tasks[i].key, newAug: other.aug, checkNew: checkOtherAugmentation, fn: fn}
+			if err := walk.node(tasks[i].old, tasks[i].new, tasks[i].remaining, 0, 0); err != nil {
+				return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
+			}
+		}
+		return nil
+	}
+
+	errs := make([]error, len(tasks))
+	next := make(chan int, len(tasks))
+	for i := range tasks {
+		next <- i
+	}
+	close(next)
+	var wait sync.WaitGroup
+	for range min(workers, len(tasks)) {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for i := range next {
+				walk := augDictDiffWalk{keySz: d.keySz, key: tasks[i].key, newAug: other.aug, checkNew: checkOtherAugmentation, fn: fn}
+				errs[i] = walk.node(tasks[i].old, tasks[i].new, tasks[i].remaining, 0, 0)
+			}
+		}()
+	}
+	wait.Wait()
+	for _, err := range errs {
+		if err != nil {
+			return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
+		}
+	}
+	return nil
+}
+
+// scanDiffFrontierBits is the key depth at which ScanDiffParallel hands
+// subtrees to workers. A queue key leads with 32 bits of workchain, so the
+// frontier sits a few bits past that — deep enough for dozens of pairs,
+// shallow enough that the sequential top stays small.
+const scanDiffFrontierBits = 38
+
 type augDictDiffWalk struct {
 	keySz  uint
 	key    Builder
@@ -39,6 +126,20 @@ type augDictDiffWalk struct {
 	fn       AugDictDiffFunc
 
 	checker augmentedNodeChecker
+
+	// frontierBits, when non-zero, makes the walk stop at the first fork the
+	// two dictionaries share at or below that key depth and hand the pair of
+	// subtrees to tasks instead of recursing. See ScanDiffParallel.
+	frontierBits uint
+	tasks        *[]augDictDiffTask
+}
+
+// augDictDiffTask is one pair of subtrees under a shared fork, with the key
+// prefix that leads to it, waiting to be scanned on a worker.
+type augDictDiffTask struct {
+	old, new  *Cell
+	remaining uint
+	key       Builder
 }
 
 func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) error {
@@ -150,6 +251,17 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 			newChild, err := newNode.ref(child)
 			if err != nil {
 				return fmt.Errorf("failed to load new dictionary child: %w", err)
+			}
+			if w.tasks != nil && depth+common+1 >= w.frontierBits {
+				// Both sides fork here and the pair of children below is an
+				// independent scan: it reads nothing the other pairs read and
+				// its key prefix is fully known. A task carries its own copy
+				// of the prefix, so the worker's walk starts where this one
+				// would have continued.
+				*w.tasks = append(*w.tasks, augDictDiffTask{
+					old: oldChild, new: newChild, remaining: nextRemaining, key: w.key,
+				})
+				continue
 			}
 			if err = w.node(oldChild, newChild, nextRemaining, 0, 0); err != nil {
 				return err
@@ -287,6 +399,9 @@ type augmentedNodeChecker struct {
 	computed Builder
 	left     Slice
 	right    Slice
+	// warm is the producing mutation's resident cells, empty for a checker
+	// that runs outside a replay. See child.
+	warm map[Hash]*Cell
 	// scratch backs the fork-extra probes; see augmentedNodeExtraViewScratch.
 	scratch Slice
 	buf     [maxCellDataBytes]byte
@@ -311,11 +426,11 @@ func (c *augmentedNodeChecker) leaf(node fixedDictNode, aug Augmentation) error 
 }
 
 func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augmentation) error {
-	left, err := node.ref(0)
+	left, err := c.child(node, 0)
 	if err != nil {
 		return err
 	}
-	right, err := node.ref(1)
+	right, err := c.child(node, 1)
 	if err != nil {
 		return err
 	}
@@ -341,6 +456,29 @@ func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augm
 		return fmt.Errorf("augmented dictionary fork extra mismatch")
 	}
 	return nil
+}
+
+// child is node.ref with the producing mutation's warm cells consulted first.
+// A fork reads both children to recombine their augmentation, and the untouched
+// one is exactly the sibling that mutation already resolved; asking storage for
+// it again is the closure's single largest cost.
+//
+// Substituting the resident cell is the cache-hit half of the lazy load the
+// parse would perform anyway: resolveLoadedLazyRefWithTrace validates and
+// virtualizes the placeholder exactly as the loader result is validated, the
+// same trace rides on the result, and the parse then notifies that trace with
+// the same cell. The recorded read set, and the proof selected from it, are
+// therefore unchanged — only the storage read disappears.
+func (c *augmentedNodeChecker) child(node fixedDictNode, i int) (*Cell, error) {
+	ref, err := node.ref(i)
+	if err != nil || c.warm == nil || ref == nil || !ref.IsLazy() {
+		return ref, err
+	}
+	loaded := c.warm[ref.rawCell().HashKey()]
+	if loaded == nil {
+		return ref, nil
+	}
+	return resolveLoadedLazyRefWithTrace(ref, loaded, ref.Trace())
 }
 
 func (w *augDictDiffWalk) emit(oldValueExtra, newValueExtra *Slice) error {
