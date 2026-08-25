@@ -809,6 +809,13 @@ func (w *Wallet) DeployContract(ctx context.Context, amount tlb.Coins, msgBody, 
 	return addr, nil
 }
 
+// SimpleMessage - always sets Bounce to true, regardless of the destination
+// address's own bounceable flag. If the destination account may be
+// uninitialized (e.g. it has never received funds, or is a marker address
+// with no deployed code), a bounceable message that can't be processed will
+// have its funds bounced back to the sender instead of credited - use
+// TransferNoBounce, SimpleMessageAutoBounce, or an explicit
+// InternalMessage.Bounce = false in that case.
 func SimpleMessage(to *address.Address, amount tlb.Coins, payload *cell.Cell) *Message {
 	return &Message{
 		Mode: PayGasSeparately + IgnoreErrors,
