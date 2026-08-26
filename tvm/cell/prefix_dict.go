@@ -537,7 +537,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 
 		var oldPayload Builder
 		node.loader.ToBuilderInto(&oldPayload)
-		oldChild, err := d.storePrefixNode(labelRemainder, &oldPayload, remaining-(bitsMatches+1))
+		oldChild, err := d.storePrefixNode(&labelRemainder, &oldPayload, remaining-(bitsMatches+1))
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to rebuild old child: %w", err)
 		}
@@ -549,7 +549,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 			left, right = newLeaf, oldChild
 		}
 
-		fork, err := d.storePrefixFork(prefixLabel, left, right, remaining)
+		fork, err := d.storePrefixFork(&prefixLabel, left, right, remaining)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to build new fork: %w", err)
 		}

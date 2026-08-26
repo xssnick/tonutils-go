@@ -824,9 +824,8 @@ func mustDiffDict16(t *testing.T, aug Augmentation, values map[uint64]uint64) *A
 	return dict
 }
 
-// ScanDiffParallel must record the reads ScanDiff records, and must actually
-// split — a pair of dictionaries that differ under one prefix would be scanned
-// by one task and prove nothing about the workers.
+// ScanDiffParallel must record the reads ScanDiff records. The structured-key
+// concurrency gate lives in TestAugmentedDictionaryScanDiffParallelUsesAdaptiveWorkers.
 func TestScanDiffParallelRecordsTheSequentialReads(t *testing.T) {
 	rnd := rand.New(rand.NewSource(0x5ca1d1f))
 	for round := 0; round < 30; round++ {
@@ -854,7 +853,7 @@ func TestScanDiffParallelRecordsTheSequentialReads(t *testing.T) {
 			}
 		}
 
-		record := func(parallel bool) (map[Hash]struct{}, int) {
+		record := func(parallel bool) map[Hash]struct{} {
 			old := mustDiffDict16(t, testMetricAugmentation{}, base)
 			usage := NewReadSet(old.RootCell())
 			tracedOld := old.Copy().SetTrace(usage.Trace())
@@ -866,14 +865,7 @@ func TestScanDiffParallelRecordsTheSequentialReads(t *testing.T) {
 				t.Fatal(err)
 			}
 			noop := func(*Cell, *Slice, *Slice) error { return nil }
-			tasks := 0
 			if parallel {
-				var collected []augDictDiffTask
-				probe := augDictDiffWalk{keySz: 16, newAug: next.aug, checkNew: true, fn: noop, frontierBits: 6, tasks: &collected}
-				if err := probe.node(old.Copy().root, next.root, 16, 0, 0); err != nil {
-					t.Fatal(err)
-				}
-				tasks = len(collected)
 				if err := tracedOld.scanDiffParallelAt(next, true, noop, 8, 6); err != nil {
 					t.Fatalf("round %d parallel: %v", round, err)
 				}
@@ -884,13 +876,10 @@ func TestScanDiffParallelRecordsTheSequentialReads(t *testing.T) {
 			for _, c := range usage.Cells() {
 				got[c.HashKey()] = struct{}{}
 			}
-			return got, tasks
+			return got
 		}
-		sequential, _ := record(false)
-		parallel, tasks := record(true)
-		if tasks < 4 {
-			t.Fatalf("round %d: %d tasks; the split is vacuous", round, tasks)
-		}
+		sequential := record(false)
+		parallel := record(true)
 		if len(parallel) != len(sequential) {
 			t.Fatalf("round %d: parallel scan recorded %d cells, sequential %d", round, len(parallel), len(sequential))
 		}

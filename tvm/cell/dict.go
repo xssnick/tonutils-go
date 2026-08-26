@@ -217,6 +217,28 @@ func (c *Slice) LoadDict(keySz uint) (*Dictionary, error) {
 	}).SetTrace(root.Trace()), nil
 }
 
+// LoadOptionalDict loads a HashmapE and returns nil for its empty encoding.
+// Use this when nil and an allocated empty Dictionary have the same domain
+// meaning; LoadDict retains its historical always-non-nil result.
+func (c *Slice) LoadOptionalDict(keySz uint) (*Dictionary, error) {
+	if err := validateDictKeySize(keySz); err != nil {
+		return nil, fmt.Errorf("failed to validate dict: %w", err)
+	}
+
+	root, has, err := c.loadMaybeRefCell()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load ref for dict, err: %w", err)
+	}
+	if !has {
+		return nil, nil
+	}
+
+	return (&Dictionary{
+		keySz: keySz,
+		root:  root,
+	}).SetTrace(root.Trace()), nil
+}
+
 func (d *Dictionary) GetKeySize() uint {
 	if d == nil {
 		return 0
@@ -437,7 +459,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 	}
 
 	oldChild := BeginCell().SetTrace(d.trace)
-	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
+	if err = storeDictLabel(oldChild, &labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, nil, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
 	var oldPayload Builder
@@ -461,7 +483,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		left, right = right, left
 	}
 
-	newBranch, err := d.storeFork(prefixLabel, left, right, keyOffset)
+	newBranch, err := d.storeFork(&prefixLabel, left, right, keyOffset)
 	return newBranch, nil, err == nil, err
 }
 
@@ -735,6 +757,32 @@ func (d *Dictionary) SetBuilderByBytesKeyWithMode(key []byte, value *Builder, mo
 
 	cell := Cell{data: key, bitsSz: uint16(d.keySz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
+
+// SetBuilderByUintKey stores a zero-extended unsigned key without a big.Int or
+// materialized key cell.
+func (d *Dictionary) SetBuilderByUintKey(key uint64, value *Builder) error {
+	_, err := d.SetBuilderByUintKeyWithMode(key, value, DictSetModeSet)
+	return err
+}
+
+// SetBuilderByUintKeyWithMode is SetBuilderWithMode for a zero-extended
+// unsigned key.
+func (d *Dictionary) SetBuilderByUintKeyWithMode(key uint64, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value builder is nil")
+	}
+
+	var keyBuilder Builder
+	var keyCell Cell
+	var keySlice Slice
+	if err := initFixedDictUintKeySlice(key, d.keySz, &keyBuilder, &keyCell, &keySlice); err != nil {
+		return false, err
+	}
 	return d.setBuilderWithModeSlice(&keySlice, value, mode)
 }
 
@@ -1015,6 +1063,48 @@ func (d *Dictionary) LoadValueAndDeleteBySliceKey(key *Slice) (*Slice, error) {
 	return d.loadValueAndDeleteBySliceKey(&keySlice)
 }
 
+// LoadValueAndDeleteBySliceKeyInto removes a slice-backed key and writes the
+// removed value into caller-owned storage without materializing a key cell.
+func (d *Dictionary) LoadValueAndDeleteBySliceKeyInto(key, value *Slice) error {
+	if d == nil {
+		return ErrNoSuchKeyInDict
+	}
+	keySlice, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return err
+	}
+	return d.loadValueAndDeleteBySliceKeyInto(&keySlice, value)
+}
+
+// LoadValueAndDeleteByBytesKeyInto is the byte-backed form of
+// LoadValueAndDeleteBySliceKeyInto.
+func (d *Dictionary) LoadValueAndDeleteByBytesKeyInto(key []byte, value *Slice) error {
+	if d == nil {
+		return ErrNoSuchKeyInDict
+	}
+	var keyCell Cell
+	var keySlice Slice
+	if err := initFixedDictBytesKeySlice(key, d.keySz, &keyCell, &keySlice); err != nil {
+		return err
+	}
+	return d.loadValueAndDeleteBySliceKeyInto(&keySlice, value)
+}
+
+// LoadValueAndDeleteByUintKeyInto removes a zero-extended unsigned key without
+// a big.Int or materialized key cell.
+func (d *Dictionary) LoadValueAndDeleteByUintKeyInto(key uint64, value *Slice) error {
+	if d == nil {
+		return ErrNoSuchKeyInDict
+	}
+	var keyBuilder Builder
+	var keyCell Cell
+	var keySlice Slice
+	if err := initFixedDictUintKeySlice(key, d.keySz, &keyBuilder, &keyCell, &keySlice); err != nil {
+		return err
+	}
+	return d.loadValueAndDeleteBySliceKeyInto(&keySlice, value)
+}
+
 // LoadValueAndDeleteByIntKey is the integer-key variant of
 // LoadValueAndDeleteBySliceKey.
 func (d *Dictionary) LoadValueAndDeleteByIntKey(key *big.Int) (*Slice, error) {
@@ -1040,6 +1130,15 @@ func (d *Dictionary) loadValueAndDeleteBySliceKey(keySlice *Slice) (*Slice, erro
 
 	d.setRoot(newRoot)
 	return removed, nil
+}
+
+func (d *Dictionary) loadValueAndDeleteBySliceKeyInto(keySlice, value *Slice) error {
+	removed, err := d.loadValueAndDeleteBySliceKey(keySlice)
+	if err != nil {
+		return err
+	}
+	*value = *removed
+	return nil
 }
 
 func sameDictRoot(a, b *Cell) bool {

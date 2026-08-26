@@ -10,11 +10,73 @@ import (
 // slices contain the raw extra followed by the value.
 type AugDictDiffFunc func(key *Cell, oldValueExtra, newValueExtra *Slice) error
 
+// AugDictDiffView is one changed augmented-dictionary leaf. The value slices
+// contain the raw extra followed by the value. All three slices are borrowed
+// and valid only until the callback returns; call ToCell or copy their contents
+// to retain them.
+type AugDictDiffView struct {
+	Key           Slice
+	OldValueExtra Slice
+	NewValueExtra Slice
+	HasOld        bool
+	HasNew        bool
+}
+
+// AugDictDiffViewFunc receives borrowed changed-leaf views.
+type AugDictDiffViewFunc func(AugDictDiffView) error
+
+// AugDictDiffRawView is one changed augmented-dictionary leaf with the key
+// exposed as borrowed packed bits. Key, OldValueExtra and NewValueExtra are
+// read-only, valid only until the callback returns, and must not be retained;
+// the first KeyBits bits of Key are significant.
+//
+// Unlike AugDictDiffView, this form does not materialize or hash a temporary
+// Cell for the key. It is intended for validation paths that either do not use
+// the key or only decode it on an error path.
+type AugDictDiffRawView struct {
+	Key           []byte
+	KeyBits       uint
+	OldValueExtra Slice
+	NewValueExtra Slice
+	HasOld        bool
+	HasNew        bool
+}
+
+// AugDictDiffRawViewFunc receives a borrowed raw-key diff view.
+type AugDictDiffRawViewFunc func(AugDictDiffRawView) error
+
 // ScanDiff compares two HashmapAug tries structurally and visits their changed
 // leaves in key order. Equal subtrees are skipped by hash. When
 // checkOtherAugmentation is set, every changed node in other has its stored
 // augmentation checked in the same traversal.
 func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
+	return d.ScanDiffBorrowed(other, checkOtherAugmentation, func(view AugDictDiffView) error {
+		key, err := view.Key.ToCell()
+		if err != nil {
+			return err
+		}
+
+		var oldValueExtra, newValueExtra *Slice
+		if view.HasOld {
+			oldValueExtra = &view.OldValueExtra
+		}
+		if view.HasNew {
+			newValueExtra = &view.NewValueExtra
+		}
+		return fn(key, oldValueExtra, newValueExtra)
+	})
+}
+
+// ScanDiffBorrowed is ScanDiff without materializing a key Cell for every
+// changed leaf. Every Slice in the view is borrowed and must not be retained
+// after the callback returns.
+func (d *AugmentedDictionary) ScanDiffBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
 	if d.keySz != other.keySz {
 		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
 	}
@@ -23,24 +85,48 @@ func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAug
 		keySz:    d.keySz,
 		newAug:   other.aug,
 		checkNew: checkOtherAugmentation,
-		fn:       fn,
+		viewFn:   fn,
 	}
-	oldRoot := d.root.withTraceCombined(d.trace)
-	newRoot := other.root.withTraceCombined(other.trace)
-	if err := walk.node(oldRoot, newRoot, d.keySz, 0, 0); err != nil {
+	oldTrace := combinedCellTrace(d.root, d.trace)
+	newTrace := combinedCellTrace(other.root, other.trace)
+	if err := walk.node(d.root, oldTrace, other.root, newTrace, d.keySz, 0, 0); err != nil {
 		return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
 	}
 	return nil
 }
 
-// ScanDiffParallel is ScanDiff with the subtrees below a shared fork at key
-// depth scanDiffFrontierBits scanned on workers goroutines. The scan's
+// ScanDiffRaw is ScanDiffBorrowed without materializing or hashing a key Cell.
+// The callback receives the key as borrowed packed bits.
+func (d *AugmentedDictionary) ScanDiffRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
+	if d.keySz != other.keySz {
+		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
+	}
+
+	walk := augDictDiffWalk{
+		keySz:    d.keySz,
+		newAug:   other.aug,
+		checkNew: checkOtherAugmentation,
+		rawFn:    fn,
+	}
+	oldTrace := combinedCellTrace(d.root, d.trace)
+	newTrace := combinedCellTrace(other.root, other.trace)
+	if err := walk.node(d.root, oldTrace, other.root, newTrace, d.keySz, 0, 0); err != nil {
+		return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
+	}
+	return nil
+}
+
+// ScanDiffParallel is ScanDiff with shared forks at and below key depth
+// scanDiffFrontierBits scanned on up to workers goroutines. The scan's
 // observable effect in a collation is the reads it records — the validator's
 // augmentation checks replayed so their cells reach the proof — and a set of
 // reads is the same in any order. fn is called from the workers and must be
 // safe for that; the collator passes one that does nothing. Errors keep the
-// sequential priority: the top of the walk returns the first it meets, and a
-// task's error is reported in trie order.
+// sequential priority: every fork reports its left error before its right one,
+// regardless of completion order.
 //
 // The walk is one of the five tasks of the collation's validation closure and,
 // on a queue thousands of entries deep, the slowest: two tries of that size
@@ -52,97 +138,119 @@ func (d *AugmentedDictionary) ScanDiffParallel(other *AugmentedDictionary, check
 	return d.scanDiffParallelAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
 }
 
+// ScanDiffParallelBorrowed is the borrowed-view form of ScanDiffParallel. fn
+// can run concurrently and must not retain a view after that invocation
+// returns.
+func (d *AugmentedDictionary) ScanDiffParallelBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int) error {
+	return d.scanDiffParallelBorrowedAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+}
+
+// ScanDiffParallelRaw is the raw-key form of ScanDiffParallelBorrowed.
+func (d *AugmentedDictionary) ScanDiffParallelRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int) error {
+	return d.scanDiffParallelRawAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+}
+
 // scanDiffParallelAt is ScanDiffParallel with the frontier depth chosen by the
 // caller; tests use it on dictionaries with short keys.
 func (d *AugmentedDictionary) scanDiffParallelAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int, frontierBits uint) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
+	return d.scanDiffParallelBorrowedAt(other, checkOtherAugmentation, func(view AugDictDiffView) error {
+		key, err := view.Key.ToCell()
+		if err != nil {
+			return err
+		}
+
+		var oldValueExtra, newValueExtra *Slice
+		if view.HasOld {
+			oldValueExtra = &view.OldValueExtra
+		}
+		if view.HasNew {
+			newValueExtra = &view.NewValueExtra
+		}
+		return fn(key, oldValueExtra, newValueExtra)
+	}, workers, frontierBits)
+}
+
+func (d *AugmentedDictionary) scanDiffParallelBorrowedAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int, frontierBits uint) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
 	if workers < 2 {
-		return d.ScanDiff(other, checkOtherAugmentation, fn)
+		return d.ScanDiffBorrowed(other, checkOtherAugmentation, fn)
 	}
 	if d.keySz != other.keySz {
 		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
 	}
-	var tasks []augDictDiffTask
-	top := augDictDiffWalk{
+	walk := augDictDiffWalk{
 		keySz:        d.keySz,
 		newAug:       other.aug,
 		checkNew:     checkOtherAugmentation,
-		fn:           fn,
+		viewFn:       fn,
 		frontierBits: frontierBits,
-		tasks:        &tasks,
+		parallelism:  workers,
 	}
-	oldRoot := d.root.withTraceCombined(d.trace)
-	newRoot := other.root.withTraceCombined(other.trace)
-	if err := top.node(oldRoot, newRoot, d.keySz, 0, 0); err != nil {
+	oldTrace := combinedCellTrace(d.root, d.trace)
+	newTrace := combinedCellTrace(other.root, other.trace)
+	if err := walk.node(d.root, oldTrace, other.root, newTrace, d.keySz, 0, 0); err != nil {
 		return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
-	}
-	if len(tasks) < 2 {
-		for i := range tasks {
-			walk := augDictDiffWalk{keySz: d.keySz, key: tasks[i].key, newAug: other.aug, checkNew: checkOtherAugmentation, fn: fn}
-			if err := walk.node(tasks[i].old, tasks[i].new, tasks[i].remaining, 0, 0); err != nil {
-				return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
-			}
-		}
-		return nil
-	}
-
-	errs := make([]error, len(tasks))
-	next := make(chan int, len(tasks))
-	for i := range tasks {
-		next <- i
-	}
-	close(next)
-	var wait sync.WaitGroup
-	for range min(workers, len(tasks)) {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			for i := range next {
-				walk := augDictDiffWalk{keySz: d.keySz, key: tasks[i].key, newAug: other.aug, checkNew: checkOtherAugmentation, fn: fn}
-				errs[i] = walk.node(tasks[i].old, tasks[i].new, tasks[i].remaining, 0, 0)
-			}
-		}()
-	}
-	wait.Wait()
-	for _, err := range errs {
-		if err != nil {
-			return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
-		}
 	}
 	return nil
 }
 
-// scanDiffFrontierBits is the key depth at which ScanDiffParallel hands
-// subtrees to workers. A queue key leads with 32 bits of workchain, so the
-// frontier sits a few bits past that — deep enough for dozens of pairs,
-// shallow enough that the sequential top stays small.
+func (d *AugmentedDictionary) scanDiffParallelRawAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int, frontierBits uint) error {
+	if fn == nil {
+		return fmt.Errorf("augmented dictionary diff callback is required")
+	}
+	if workers < 2 {
+		return d.ScanDiffRaw(other, checkOtherAugmentation, fn)
+	}
+	if d.keySz != other.keySz {
+		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
+	}
+	walk := augDictDiffWalk{
+		keySz:        d.keySz,
+		newAug:       other.aug,
+		checkNew:     checkOtherAugmentation,
+		rawFn:        fn,
+		frontierBits: frontierBits,
+		parallelism:  workers,
+	}
+	oldTrace := combinedCellTrace(d.root, d.trace)
+	newTrace := combinedCellTrace(other.root, other.trace)
+	if err := walk.node(d.root, oldTrace, other.root, newTrace, d.keySz, 0, 0); err != nil {
+		return fmt.Errorf("failed to scan augmented dictionary diff: %w", err)
+	}
+	return nil
+}
+
+// scanDiffFrontierBits is the minimum key depth at which ScanDiffParallel may
+// split a shared fork. After that point the worker budget keeps splitting
+// recursively, instead of stopping at the first fork and leaving only two
+// coarse tasks for a structured key prefix.
 const scanDiffFrontierBits = 38
 
 type augDictDiffWalk struct {
-	keySz  uint
-	key    Builder
-	newAug Augmentation
+	keySz   uint
+	key     Builder
+	keyCell Cell
+	newAug  Augmentation
 
 	checkNew bool
-	fn       AugDictDiffFunc
+	viewFn   AugDictDiffViewFunc
+	rawFn    AugDictDiffRawViewFunc
 
 	checker augmentedNodeChecker
 
-	// frontierBits, when non-zero, makes the walk stop at the first fork the
-	// two dictionaries share at or below that key depth and hand the pair of
-	// subtrees to tasks instead of recursing. See ScanDiffParallel.
+	// frontierBits is the minimum shared-fork depth for parallel descent.
+	// parallelism is an exact subtree budget: every split partitions it between
+	// children, bounding live workers without a semaphore or task queue.
 	frontierBits uint
-	tasks        *[]augDictDiffTask
+	parallelism  int
 }
 
-// augDictDiffTask is one pair of subtrees under a shared fork, with the key
-// prefix that leads to it, waiting to be scanned on a worker.
-type augDictDiffTask struct {
-	old, new  *Cell
-	remaining uint
-	key       Builder
-}
-
-func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) error {
+func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *Trace, remaining, skipOld, skipNew uint) error {
 	if old == nil {
 		if new == nil {
 			return nil
@@ -150,23 +258,23 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 		if skipNew != 0 {
 			return fmt.Errorf("invalid new dictionary alignment")
 		}
-		return w.oneSide(nil, new, remaining, false)
+		return w.oneSide(new, newTrace, remaining, false)
 	}
 	if new == nil {
 		if skipOld != 0 {
 			return fmt.Errorf("invalid old dictionary alignment")
 		}
-		return w.oneSide(old, nil, remaining, true)
+		return w.oneSide(old, oldTrace, remaining, true)
 	}
 	if skipOld == skipNew && old.HashKey() == new.HashKey() {
 		return nil
 	}
 
-	oldNode, err := parseAugDictDiffNode(old, remaining+skipOld)
+	oldNode, err := parseAugDictDiffNode(old, oldTrace, remaining+skipOld)
 	if err != nil {
 		return fmt.Errorf("invalid old dictionary node: %w", err)
 	}
-	newNode, err := parseAugDictDiffNode(new, remaining+skipNew)
+	newNode, err := parseAugDictDiffNode(new, newTrace, remaining+skipNew)
 	if err != nil {
 		return fmt.Errorf("invalid new dictionary node: %w", err)
 	}
@@ -201,21 +309,21 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 	if common < oldLen && common < newLen {
 		w.storeLabel(&newLabel, depth-skipNew)
 		if oldEffective.bitAt(common) == 0 {
-			if err = w.node(old, nil, remaining+skipOld, 0, 0); err != nil {
+			if err = w.node(old, oldTrace, nil, nil, remaining+skipOld, 0, 0); err != nil {
 				return err
 			}
-			return w.node(nil, new, remaining+skipNew, 0, 0)
+			return w.node(nil, nil, new, newTrace, remaining+skipNew, 0, 0)
 		}
-		if err = w.node(nil, new, remaining+skipNew, 0, 0); err != nil {
+		if err = w.node(nil, nil, new, newTrace, remaining+skipNew, 0, 0); err != nil {
 			return err
 		}
-		return w.node(old, nil, remaining+skipOld, 0, 0)
+		return w.node(old, oldTrace, nil, nil, remaining+skipOld, 0, 0)
 	}
 
 	if common == oldLen && common == newLen {
 		if common == remaining {
-			oldValue, newValue := oldNode.value(), newNode.value()
-			equal := equalSliceContents(oldValue, newValue)
+			oldValue, newValue := oldNode.loader, newNode.loader
+			equal := equalSliceContents(&oldValue, &newValue)
 			if w.checkNew {
 				if equal {
 					// A nearby insertion or deletion can rebuild the same logical
@@ -232,7 +340,7 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 			if equal {
 				return nil
 			}
-			return w.emit(oldValue, newValue)
+			return w.emit(oldValue, true, newValue, true)
 		}
 
 		if w.checkNew {
@@ -242,28 +350,24 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 		}
 
 		nextRemaining := remaining - common - 1
-		for child := 0; child < 2; child++ {
-			w.setKeyBit(depth+common, byte(child))
-			oldChild, err := oldNode.ref(child)
+		var oldChildren, newChildren [2]*Cell
+		var oldChildTraces, newChildTraces [2]*Trace
+		for child := range 2 {
+			oldChildren[child], oldChildTraces[child], err = oldNode.refAndTrace(child)
 			if err != nil {
 				return fmt.Errorf("failed to load old dictionary child: %w", err)
 			}
-			newChild, err := newNode.ref(child)
+			newChildren[child], newChildTraces[child], err = newNode.refAndTrace(child)
 			if err != nil {
 				return fmt.Errorf("failed to load new dictionary child: %w", err)
 			}
-			if w.tasks != nil && depth+common+1 >= w.frontierBits {
-				// Both sides fork here and the pair of children below is an
-				// independent scan: it reads nothing the other pairs read and
-				// its key prefix is fully known. A task carries its own copy
-				// of the prefix, so the worker's walk starts where this one
-				// would have continued.
-				*w.tasks = append(*w.tasks, augDictDiffTask{
-					old: oldChild, new: newChild, remaining: nextRemaining, key: w.key,
-				})
-				continue
-			}
-			if err = w.node(oldChild, newChild, nextRemaining, 0, 0); err != nil {
+		}
+		if w.parallelism > 1 && depth+common+1 >= w.frontierBits {
+			return w.parallelSharedFork(oldChildren, oldChildTraces, newChildren, newChildTraces, nextRemaining, depth+common)
+		}
+		for child := range 2 {
+			w.setKeyBit(depth+common, byte(child))
+			if err = w.node(oldChildren[child], oldChildTraces[child], newChildren[child], newChildTraces[child], nextRemaining, 0, 0); err != nil {
 				return err
 			}
 		}
@@ -272,11 +376,11 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 
 	if common == oldLen {
 		w.storeLabel(&newLabel, depth-skipNew)
-		oldLeft, err := oldNode.ref(0)
+		oldLeft, oldLeftTrace, err := oldNode.refAndTrace(0)
 		if err != nil {
 			return fmt.Errorf("failed to load old dictionary left child: %w", err)
 		}
-		oldRight, err := oldNode.ref(1)
+		oldRight, oldRightTrace, err := oldNode.refAndTrace(1)
 		if err != nil {
 			return fmt.Errorf("failed to load old dictionary right child: %w", err)
 		}
@@ -285,18 +389,18 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 		branch := int(newEffective.bitAt(common))
 		w.setKeyBit(depth+common, byte(branch))
 		if branch == 0 {
-			if err = w.node(oldLeft, new, nextRemaining, 0, skipNew+common+1); err != nil {
+			if err = w.node(oldLeft, oldLeftTrace, new, newTrace, nextRemaining, 0, skipNew+common+1); err != nil {
 				return err
 			}
 			w.setKeyBit(depth+common, 1)
-			return w.node(oldRight, nil, nextRemaining, 0, 0)
+			return w.node(oldRight, oldRightTrace, nil, nil, nextRemaining, 0, 0)
 		}
 		w.setKeyBit(depth+common, 0)
-		if err = w.node(oldLeft, nil, nextRemaining, 0, 0); err != nil {
+		if err = w.node(oldLeft, oldLeftTrace, nil, nil, nextRemaining, 0, 0); err != nil {
 			return err
 		}
 		w.setKeyBit(depth+common, 1)
-		return w.node(oldRight, new, nextRemaining, 0, skipNew+common+1)
+		return w.node(oldRight, oldRightTrace, new, newTrace, nextRemaining, 0, skipNew+common+1)
 	}
 
 	if w.checkNew {
@@ -304,11 +408,11 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 			return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 		}
 	}
-	newLeft, err := newNode.ref(0)
+	newLeft, newLeftTrace, err := newNode.refAndTrace(0)
 	if err != nil {
 		return fmt.Errorf("failed to load new dictionary left child: %w", err)
 	}
-	newRight, err := newNode.ref(1)
+	newRight, newRightTrace, err := newNode.refAndTrace(1)
 	if err != nil {
 		return fmt.Errorf("failed to load new dictionary right child: %w", err)
 	}
@@ -317,26 +421,68 @@ func (w *augDictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint)
 	branch := int(oldEffective.bitAt(common))
 	if branch == 0 {
 		w.setKeyBit(depth+common, 0)
-		if err = w.node(old, newLeft, nextRemaining, skipOld+common+1, 0); err != nil {
+		if err = w.node(old, oldTrace, newLeft, newLeftTrace, nextRemaining, skipOld+common+1, 0); err != nil {
 			return err
 		}
 		w.setKeyBit(depth+common, 1)
-		return w.node(nil, newRight, nextRemaining, 0, 0)
+		return w.node(nil, nil, newRight, newRightTrace, nextRemaining, 0, 0)
 	}
 	w.setKeyBit(depth+common, 0)
-	if err = w.node(nil, newLeft, nextRemaining, 0, 0); err != nil {
+	if err = w.node(nil, nil, newLeft, newLeftTrace, nextRemaining, 0, 0); err != nil {
 		return err
 	}
 	w.setKeyBit(depth+common, 1)
-	return w.node(old, newRight, nextRemaining, skipOld+common+1, 0)
+	return w.node(old, oldTrace, newRight, newRightTrace, nextRemaining, skipOld+common+1, 0)
 }
 
-func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) error {
-	branch := new
-	if oldOnly {
-		branch = old
+// parallelSharedFork recursively partitions the available worker budget. A
+// structured queue key may not fork until hundreds of bits after the minimum
+// frontier; splitting again inside each child keeps all requested workers busy
+// instead of freezing the parallelism at the first two children.
+func (w *augDictDiffWalk) parallelSharedFork(
+	oldChildren [2]*Cell,
+	oldTraces [2]*Trace,
+	newChildren [2]*Cell,
+	newTraces [2]*Trace,
+	remaining uint,
+	keyBit uint,
+) error {
+	leftWorkers := (w.parallelism + 1) / 2
+	rightWorkers := w.parallelism - leftWorkers
+
+	left := w.childWalk(keyBit, 0, leftWorkers)
+	right := w.childWalk(keyBit, 1, rightWorkers)
+
+	var leftErr error
+	var wait sync.WaitGroup
+	wait.Add(1)
+	go func() {
+		defer wait.Done()
+		leftErr = left.node(oldChildren[0], oldTraces[0], newChildren[0], newTraces[0], remaining, 0, 0)
+	}()
+	rightErr := right.node(oldChildren[1], oldTraces[1], newChildren[1], newTraces[1], remaining, 0, 0)
+	wait.Wait()
+
+	// Trie order defines error priority regardless of which worker finished
+	// first. This matches the sequential walk and the previous task collector.
+	if leftErr != nil {
+		return leftErr
 	}
-	node, err := parseAugDictDiffNode(branch, remaining)
+	return rightErr
+}
+
+func (w *augDictDiffWalk) childWalk(keyBit uint, value byte, parallelism int) augDictDiffWalk {
+	child := *w
+	child.key = w.key
+	child.keyCell = Cell{}
+	child.checker = augmentedNodeChecker{warm: w.checker.warm}
+	child.parallelism = parallelism
+	child.setKeyBit(keyBit, value)
+	return child
+}
+
+func (w *augDictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, oldOnly bool) error {
+	node, err := parseAugDictDiffNode(branch, trace, remaining)
 	if err != nil {
 		return err
 	}
@@ -351,9 +497,11 @@ func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) 
 			}
 		}
 		if oldOnly {
-			return w.emit(node.value(), nil)
+			value := node.loader
+			return w.emit(value, true, Slice{}, false)
 		}
-		return w.emit(nil, node.value())
+		value := node.loader
+		return w.emit(Slice{}, false, value, true)
 	}
 
 	if !oldOnly && w.checkNew {
@@ -365,15 +513,11 @@ func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) 
 	nextRemaining := remaining - node.labelLen - 1
 	for child := 0; child < 2; child++ {
 		w.setKeyBit(depth+node.labelLen, byte(child))
-		ref, err := node.ref(child)
+		ref, childTrace, err := node.refAndTrace(child)
 		if err != nil {
 			return fmt.Errorf("failed to load dictionary child: %w", err)
 		}
-		if oldOnly {
-			err = w.oneSide(ref, nil, nextRemaining, true)
-		} else {
-			err = w.oneSide(nil, ref, nextRemaining, false)
-		}
+		err = w.oneSide(ref, childTrace, nextRemaining, oldOnly)
 		if err != nil {
 			return err
 		}
@@ -381,8 +525,8 @@ func (w *augDictDiffWalk) oneSide(old, new *Cell, remaining uint, oldOnly bool) 
 	return nil
 }
 
-func parseAugDictDiffNode(branch *Cell, remaining uint) (fixedDictNode, error) {
-	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
+func parseAugDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDictNode, error) {
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
 	if err != nil {
 		return fixedDictNode{}, err
 	}
@@ -397,6 +541,7 @@ func parseAugDictDiffNode(branch *Cell, remaining uint) (fixedDictNode, error) {
 
 type augmentedNodeChecker struct {
 	computed Builder
+	value    Slice
 	left     Slice
 	right    Slice
 	// warm is the producing mutation's resident cells, empty for a checker
@@ -409,14 +554,14 @@ type augmentedNodeChecker struct {
 
 func (c *augmentedNodeChecker) leaf(node fixedDictNode, aug Augmentation) error {
 	stored := node.loader
-	value := node.loader
-	if err := aug.SkipExtra(&value); err != nil {
+	c.value = node.loader
+	if err := aug.SkipExtra(&c.value); err != nil {
 		return err
 	}
-	stored.bitEnd, stored.refEnd = value.bitStart, value.refStart
+	stored.bitEnd, stored.refEnd = c.value.bitStart, c.value.refStart
 
 	c.computed = Builder{}
-	if err := aug.LeafExtra(&value, &c.computed); err != nil {
+	if err := aug.LeafExtra(&c.value, &c.computed); err != nil {
 		return err
 	}
 	if !c.computed.equalsSlice(&stored, &c.buf) {
@@ -426,20 +571,20 @@ func (c *augmentedNodeChecker) leaf(node fixedDictNode, aug Augmentation) error 
 }
 
 func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augmentation) error {
-	left, err := c.child(node, 0)
+	left, leftTrace, err := c.child(node, 0)
 	if err != nil {
 		return err
 	}
-	right, err := c.child(node, 1)
+	right, rightTrace, err := c.child(node, 1)
 	if err != nil {
 		return err
 	}
 	childRemaining := remaining - 1
-	c.left, err = extractAugmentedNodeExtraViewScratch(left, childRemaining, aug.SkipExtra, &c.scratch)
+	c.left, err = extractAugmentedNodeExtraViewWithTraceScratch(left, leftTrace, childRemaining, aug.SkipExtra, &c.scratch)
 	if err != nil {
 		return err
 	}
-	c.right, err = extractAugmentedNodeExtraViewScratch(right, childRemaining, aug.SkipExtra, &c.scratch)
+	c.right, err = extractAugmentedNodeExtraViewWithTraceScratch(right, rightTrace, childRemaining, aug.SkipExtra, &c.scratch)
 	if err != nil {
 		return err
 	}
@@ -465,25 +610,60 @@ func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augm
 //
 // Substituting the resident cell is the cache-hit half of the lazy load the
 // parse would perform anyway: resolveLoadedLazyRefWithTrace validates and
-// virtualizes the placeholder exactly as the loader result is validated, the
-// same trace rides on the result, and the parse then notifies that trace with
-// the same cell. The recorded read set, and the proof selected from it, are
-// therefore unchanged — only the storage read disappears.
-func (c *augmentedNodeChecker) child(node fixedDictNode, i int) (*Cell, error) {
-	ref, err := node.ref(i)
+// virtualizes the placeholder exactly as the loader result is validated. The
+// trace is returned beside the immutable cell, and the next parse notifies it
+// with the same cell. The recorded read set, and the proof selected from it,
+// are therefore unchanged — only the storage read and traced wrapper disappear.
+func (c *augmentedNodeChecker) child(node fixedDictNode, i int) (*Cell, *Trace, error) {
+	ref, trace, err := node.refAndTrace(i)
 	if err != nil || c.warm == nil || ref == nil || !ref.IsLazy() {
-		return ref, err
+		return ref, trace, err
 	}
 	loaded := c.warm[ref.rawCell().HashKey()]
 	if loaded == nil {
-		return ref, nil
+		return ref, trace, nil
 	}
-	return resolveLoadedLazyRefWithTrace(ref, loaded, ref.Trace())
+	resolved, err := resolveLoadedLazyRefWithTrace(ref, loaded, nil)
+	if err == nil && trace == nil {
+		// With no parent path, the legacy ref-based walk inherited a trace
+		// already attached to the resident warm cell. Preserve it as the
+		// sidecar; a non-nil parent trace still replaces it, as before.
+		trace = resolved.Trace()
+	}
+	return resolved, trace, err
 }
 
-func (w *augDictDiffWalk) emit(oldValueExtra, newValueExtra *Slice) error {
+func (w *augDictDiffWalk) emit(oldValueExtra Slice, hasOld bool, newValueExtra Slice, hasNew bool) error {
 	w.key.bitsSz = w.keySz
-	return w.fn(w.key.EndCell(), oldValueExtra, newValueExtra)
+	if w.rawFn != nil {
+		return w.rawFn(AugDictDiffRawView{
+			Key:           w.key.data[:w.key.usedBytes()],
+			KeyBits:       w.keySz,
+			OldValueExtra: oldValueExtra,
+			NewValueExtra: newValueExtra,
+			HasOld:        hasOld,
+			HasNew:        hasNew,
+		})
+	}
+	w.keyCell = Cell{
+		data:   w.key.data[:w.key.usedBytes()],
+		bitsSz: uint16(w.keySz),
+	}
+	if err := w.keyCell.calculateHashesOrdinary(); err != nil {
+		return err
+	}
+	view := AugDictDiffView{
+		Key: Slice{
+			cell:              &w.keyCell,
+			bitEnd:            uint16(w.keySz),
+			forceCopyOnToCell: true,
+		},
+		OldValueExtra: oldValueExtra,
+		NewValueExtra: newValueExtra,
+		HasOld:        hasOld,
+		HasNew:        hasNew,
+	}
+	return w.viewFn(view)
 }
 
 func (w *augDictDiffWalk) keyMatchesSkippedLabel(label *Slice, depth, skip uint) bool {

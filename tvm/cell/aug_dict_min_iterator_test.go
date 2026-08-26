@@ -42,6 +42,72 @@ func (minLTAugmentation) CombineExtra(leftExtra, rightExtra *Slice, dst *Builder
 	return dst.StoreUInt(min(left, right), 64)
 }
 
+// refMinLTAugmentation exercises the generic augmented-dictionary layout where
+// a fork has child refs 0/1 and the augmentation owns refs after them.
+type refMinLTAugmentation struct{}
+
+func (refMinLTAugmentation) SkipExtra(loader *Slice) error {
+	_, err := loader.LoadRefCell()
+	return err
+}
+
+func (refMinLTAugmentation) EmptyExtra(dst *Builder) error {
+	return storeRefMinLT(dst, ^uint64(0))
+}
+
+func (refMinLTAugmentation) LeafExtra(value *Slice, dst *Builder) error {
+	lt, err := value.Copy().LoadUInt(64)
+	if err != nil {
+		return err
+	}
+	return storeRefMinLT(dst, lt)
+}
+
+func (refMinLTAugmentation) CombineExtra(leftExtra, rightExtra *Slice, dst *Builder) error {
+	left, err := loadRefMinLT(leftExtra)
+	if err != nil {
+		return err
+	}
+	right, err := loadRefMinLT(rightExtra)
+	if err != nil {
+		return err
+	}
+	return storeRefMinLT(dst, min(left, right))
+}
+
+func storeRefMinLT(dst *Builder, lt uint64) error {
+	return dst.StoreRef(BeginCell().MustStoreUInt(lt, 64).EndCell())
+}
+
+func loadRefMinLT(extra *Slice) (uint64, error) {
+	ref, err := extra.LoadRefCell()
+	if err != nil {
+		return 0, err
+	}
+	loader, err := ref.BeginParse()
+	if err != nil {
+		return 0, err
+	}
+	lt, err := loader.LoadUInt(64)
+	if err != nil {
+		return 0, err
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return 0, fmt.Errorf("referenced augmentation has trailing data")
+	}
+	return lt, nil
+}
+
+type countingMinLTAugmentation struct {
+	minLTAugmentation
+	skipCalls int
+}
+
+func (a *countingMinLTAugmentation) SkipExtra(loader *Slice) error {
+	a.skipCalls++
+	return a.minLTAugmentation.SkipExtra(loader)
+}
+
 func minRank(extra *Slice) (uint64, error) {
 	lt, err := extra.LoadUInt(64)
 	if err != nil {
@@ -167,6 +233,124 @@ func TestAugMinIteratorYieldsRankThenSuffixOrder(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAugMinIteratorReadsForkExtraAfterChildRefs(t *testing.T) {
+	d, err := NewAugDict(8, refMinLTAugmentation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []struct {
+		key byte
+		lt  uint64
+	}{
+		{0x80, 40},
+		{0x00, 10},
+		{0xC0, 30},
+		{0x40, 20},
+	}
+	for _, entry := range entries {
+		key := BeginCell().MustStoreUInt(uint64(entry.key), 8).EndCell()
+		value := BeginCell().MustStoreUInt(entry.lt, 64).EndCell()
+		if err = d.Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	it, err := d.MinIterator(AugMinIteratorOptions{Rank: loadRefMinLT})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for wantLT := uint64(10); wantLT <= 40; wantLT += 10 {
+		if !it.Next() {
+			t.Fatalf("iterator ended before rank %d: %v", wantLT, it.Err())
+		}
+		if got := it.Rank(); got != wantLT {
+			t.Fatalf("rank = %d, want %d", got, wantLT)
+		}
+		view := it.View()
+		valueLT, loadErr := view.Value.Copy().LoadUInt(64)
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if valueLT != wantLT {
+			t.Fatalf("value rank = %d, want %d", valueLT, wantLT)
+		}
+	}
+	if it.Next() {
+		t.Fatal("iterator returned an extra entry")
+	}
+	if err = it.Err(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAugMinIteratorDecomposesEachOpenedNodeOnce(t *testing.T) {
+	augmentation := new(countingMinLTAugmentation)
+	d, err := NewAugDict(minIterKeySz, augmentation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := randomMinIterEntries(rand.New(rand.NewSource(29)), 64, 1, 0)
+	for i := range entries {
+		key := BeginCell().MustStoreSlice(entries[i].key[:], minIterKeySz).EndCell()
+		value := BeginCell().MustStoreUInt(entries[i].lt, 64).MustStoreUInt(uint64(i), 16).EndCell()
+		if err = d.Set(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	augmentation.skipCalls = 0
+	rankCalls := 0
+	it, err := d.MinIterator(AugMinIteratorOptions{
+		Rank: func(extra *Slice) (uint64, error) {
+			rankCalls++
+			return minRank(extra)
+		},
+		TieBreakFrom: 96,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(drainMinIterator(t, it)); got != len(entries) {
+		t.Fatalf("streamed %d entries, want %d", got, len(entries))
+	}
+	if augmentation.skipCalls != rankCalls {
+		t.Fatalf("SkipExtra called %d times for %d opened nodes", augmentation.skipCalls, rankCalls)
+	}
+}
+
+func TestAugMinIteratorReparseDoesNotNotifyTraceTwice(t *testing.T) {
+	entries := randomMinIterEntries(rand.New(rand.NewSource(31)), 128, 1, 0)
+	d := buildMinIterDict(t, entries)
+
+	loads := 0
+	var trace *Trace
+	trace = NewTrace(TraceHooks{
+		OnLoad: func(*Cell) {
+			loads++
+		},
+		OnChild: func(int) *Trace {
+			return trace
+		},
+	})
+	rankCalls := 0
+	it, err := d.CopyWithTrace(trace).MinIterator(AugMinIteratorOptions{
+		Rank: func(extra *Slice) (uint64, error) {
+			rankCalls++
+			return minRank(extra)
+		},
+		TieBreakFrom: 96,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(drainMinIterator(t, it)); got != len(entries) {
+		t.Fatalf("streamed %d entries, want %d", got, len(entries))
+	}
+	if loads != rankCalls {
+		t.Fatalf("trace observed %d loads for %d opened nodes", loads, rankCalls)
 	}
 }
 

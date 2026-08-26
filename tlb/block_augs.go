@@ -409,10 +409,11 @@ func loadMsgCreatedLTAndAt(s *cell.Slice) (uint64, error) {
 // messageCreatedLT reads created_lt from int_msg_info$0 or
 // ext_out_msg_info$11. External inbound messages do not contain this field.
 func messageCreatedLT(msg *cell.Cell) (uint64, error) {
-	s, err := msg.BeginParse()
-	if err != nil {
+	var parsed cell.Slice
+	if err := msg.BeginParseInto(&parsed); err != nil {
 		return 0, fmt.Errorf("failed to parse message: %w", err)
 	}
+	s := &parsed
 
 	isExt, err := s.LoadBoolBit()
 	if err != nil {
@@ -469,38 +470,37 @@ type msgEnvelopeView struct {
 	v2              bool
 }
 
-func parseMsgEnvelopePrefix(env *cell.Cell) (msgEnvelopeView, *cell.Slice, error) {
-	s, err := env.BeginParse()
-	if err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to parse message envelope: %w", err)
+func parseMsgEnvelopePrefix(env *cell.Cell, s *cell.Slice) (msgEnvelopeView, error) {
+	if err := env.BeginParseInto(s); err != nil {
+		return msgEnvelopeView{}, fmt.Errorf("failed to parse message envelope: %w", err)
 	}
 
 	tag, err := s.LoadUInt(4)
 	if err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to load message envelope tag: %w", err)
+		return msgEnvelopeView{}, fmt.Errorf("failed to load message envelope tag: %w", err)
 	}
 	if tag != 4 && tag != 5 {
-		return msgEnvelopeView{}, nil, fmt.Errorf("unsupported message envelope tag %d", tag)
+		return msgEnvelopeView{}, fmt.Errorf("unsupported message envelope tag %d", tag)
 	}
 
 	if err = skipIntermediateAddress(s); err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to skip current intermediate address: %w", err)
+		return msgEnvelopeView{}, fmt.Errorf("failed to skip current intermediate address: %w", err)
 	}
 	if err = skipIntermediateAddress(s); err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to skip next intermediate address: %w", err)
+		return msgEnvelopeView{}, fmt.Errorf("failed to skip next intermediate address: %w", err)
 	}
 
 	fwdFeeRemaining, err := loadRawGrams(s)
 	if err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to load remaining forward fee: %w", err)
+		return msgEnvelopeView{}, fmt.Errorf("failed to load remaining forward fee: %w", err)
 	}
 
 	msg, err := s.LoadRefCell()
 	if err != nil {
-		return msgEnvelopeView{}, nil, fmt.Errorf("failed to load message ref: %w", err)
+		return msgEnvelopeView{}, fmt.Errorf("failed to load message ref: %w", err)
 	}
 
-	return msgEnvelopeView{fwdFeeRemaining: fwdFeeRemaining, msg: msg, v2: tag == 5}, s, nil
+	return msgEnvelopeView{fwdFeeRemaining: fwdFeeRemaining, msg: msg, v2: tag == 5}, nil
 }
 
 func loadMsgEnvelopeEmittedLT(view *msgEnvelopeView, s *cell.Slice) error {
@@ -540,7 +540,8 @@ func skipMsgMetadata(s *cell.Slice) error {
 }
 
 func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
-	view, s, err := parseMsgEnvelopePrefix(env)
+	var s cell.Slice
+	view, err := parseMsgEnvelopePrefix(env, &s)
 	if err != nil {
 		return view, err
 	}
@@ -552,7 +553,7 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 		return view, nil
 	}
 
-	if err = loadMsgEnvelopeEmittedLT(&view, s); err != nil {
+	if err = loadMsgEnvelopeEmittedLT(&view, &s); err != nil {
 		return msgEnvelopeView{}, err
 	}
 	hasMetadata, err := s.LoadBoolBit()
@@ -560,7 +561,7 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 		return msgEnvelopeView{}, fmt.Errorf("failed to load metadata flag: %w", err)
 	}
 	if hasMetadata {
-		if err = skipMsgMetadata(s); err != nil {
+		if err = skipMsgMetadata(&s); err != nil {
 			return msgEnvelopeView{}, fmt.Errorf("failed to load metadata: %w", err)
 		}
 	}
@@ -568,11 +569,12 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 }
 
 func parseMsgEnvelopeEmissionView(env *cell.Cell) (msgEnvelopeView, error) {
-	view, s, err := parseMsgEnvelopePrefix(env)
+	var s cell.Slice
+	view, err := parseMsgEnvelopePrefix(env, &s)
 	if err != nil || !view.v2 {
 		return view, err
 	}
-	if err = loadMsgEnvelopeEmittedLT(&view, s); err != nil {
+	if err = loadMsgEnvelopeEmittedLT(&view, &s); err != nil {
 		return msgEnvelopeView{}, err
 	}
 	return view, nil
@@ -841,13 +843,13 @@ func (AugShardAccountBlocks) LeafExtra(value *cell.Slice, dst *cell.Builder) err
 	if err != nil {
 		return fmt.Errorf("failed to load account transactions dict: %w", err)
 	}
-	rootExtra, err := dict.LoadRootExtra()
-	if err != nil {
+	var rootExtra cell.Slice
+	if err := dict.LoadRootExtraInto(&rootExtra); err != nil {
 		return fmt.Errorf("failed to extract account transactions root extra: %w", err)
 	}
 
 	// Re-encode the extracted CurrencyCollection canonically.
-	return storeCanonicalCurrencyCollectionFromSlice(rootExtra, dst)
+	return storeCanonicalCurrencyCollectionFromSlice(&rootExtra, dst)
 }
 
 func (AugShardAccountBlocks) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {

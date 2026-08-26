@@ -62,19 +62,19 @@ func TestCheckCascadeProof(t *testing.T) {
 	}
 
 	hash, _ := hex.DecodeString("6FC7808E1921AC8352CC61B1F66C6E3F08C44F17B26C9619329DC637875AF5FD")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	hash, _ = hex.DecodeString("27FCB2CCEEF7159510BB08F96E037F910A38C1723D08B1FEFBBA43D73E660E3D")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	hash, _ = hex.DecodeString("6AB76D71145811E08F772EC93C4159C29CA7512D3E4688B75B08382D47ABD5F5")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,15 +373,8 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 		t.Fatal("expected non-zero level root")
 	}
 
-	skeletonProof, err := root.CreateProof(CreateProofSkeleton())
-	if err != nil {
-		t.Fatalf("skeleton proof should accept non-zero level root: %v", err)
-	}
-	if err = validateLoadedCell(skeletonProof); err != nil {
-		t.Fatalf("skeleton proof validation failed: %v", err)
-	}
-	if _, err = UnwrapProof(skeletonProof, root.Hash(0)); err != nil {
-		t.Fatalf("unwrap skeleton proof: %v", err)
+	if _, err = root.CreateProof(CreateProofSkeleton()); err == nil {
+		t.Fatal("wrapped proof API accepted a non-zero level root")
 	}
 
 	// CreateUsageProof over an empty record pruned the root itself and started the
@@ -403,9 +396,15 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 	if proof.Level() != root.Level() {
 		t.Fatalf("unexpected proof level: got %d want %d", proof.Level(), root.Level())
 	}
-	body, err := UnwrapProof(proof, root.Hash(0))
+	if _, err = UnwrapProof(proof, root.Hash(0)); err == nil {
+		t.Fatal("wrapped proof API accepted a non-zero level proof")
+	}
+	body, err := proof.PeekRef(0)
 	if err != nil {
-		t.Fatalf("unwrap raw proof: %v", err)
+		t.Fatalf("load raw proof body: %v", err)
+	}
+	if body.HashKeyAt(0) != root.HashKeyAt(0) {
+		t.Fatalf("raw proof body hash = %x, want %x", body.Hash(0), root.Hash(0))
 	}
 	if body.Level() != root.Level()+1 {
 		t.Fatalf("unexpected raw proof body level: got %d want %d", body.Level(), root.Level()+1)

@@ -60,23 +60,33 @@ type AugMinIterator struct {
 
 	view    AugDictItemView
 	keyCell Cell
-	rankOut uint64
-	hasView bool
-	done    bool
-	err     error
+	// rankScratch has stable storage across Rank callback calls. Passing the
+	// address of a node-local Slice through a function value otherwise makes one
+	// Slice escape for every opened dictionary node.
+	rankScratch  Slice
+	valueScratch Slice
+	rankOut      uint64
+	hasView      bool
+	done         bool
+	err          error
 }
 
-// augMinNode is one positioned dictionary node: its parsed label and payload,
-// the rank its augmentation carries, and the key bits accumulated above it.
+// augMinNode is a compact frontier descriptor. Keeping parsed Slice views here
+// would make a large equal-rank batch retain roughly two hundred bytes per
+// leaf. The immutable cell is instead reopened without trace notifications
+// when a node is split or emitted.
 type augMinNode struct {
-	node      fixedDictNode
-	value     Slice // payload after the augmentation; the leaf value
-	extra     Slice // the augmentation itself
-	rank      uint64
-	keyOff    int32
-	keyLen    uint16
-	remaining uint16
-	leaf      bool
+	cell        *Cell
+	trace       *Trace
+	rank        uint64
+	keyOff      int32
+	keyLen      uint16
+	remaining   uint16
+	valueBit    uint16
+	valueBitEnd uint16
+	valueRef    uint8
+	valueRefEnd uint8
+	leaf        bool
 }
 
 // MinIterator opens a lazy stream over d in ascending augmentation order. See
@@ -110,21 +120,26 @@ func (d *AugmentedDictionary) MinIterator(opts AugMinIteratorOptions) (*AugMinIt
 		return it, nil
 	}
 	it.trace = CombineTraces(d.root.Trace(), d.trace)
-	node, err := it.open(d.root, d.keySz, it.trace, nil, 0)
-	if err != nil {
+	const initialFrontier = 16
+	it.heap = make([]augMinNode, 0, initialFrontier)
+	it.keys = make([]byte, 0, it.stride*initialFrontier)
+	it.free = make([]int32, 0, initialFrontier)
+
+	var node augMinNode
+	if err := it.open(d.root, d.keySz, it.trace, nil, 0, &node); err != nil {
 		return nil, err
 	}
 	if opts.Prefix != nil {
-		node, err = it.descendToPrefix(node, opts.Prefix)
+		found, err := it.descendToPrefix(&node, opts.Prefix)
 		if err != nil {
 			return nil, err
 		}
-		if node == nil {
+		if !found {
 			it.done = true
 			return it, nil
 		}
 	}
-	it.push(*node)
+	it.push(node)
 	return it, nil
 }
 
@@ -144,7 +159,10 @@ func (it *AugMinIterator) Next() bool {
 	for len(it.heap) > 0 {
 		top := it.pop()
 		if top.leaf {
-			it.emit(top)
+			if err := it.emit(top); err != nil {
+				it.fail(err)
+				return false
+			}
 			return true
 		}
 		if err := it.split(top); err != nil {
@@ -188,23 +206,34 @@ func (it *AugMinIterator) fail(err error) {
 	it.hasView = false
 }
 
-func (it *AugMinIterator) emit(top augMinNode) {
+func (it *AugMinIterator) emit(top augMinNode) error {
+	node, err := reopenAugMinNode(&top)
+	if err != nil {
+		return err
+	}
+	it.view.Value = node.loader
+	it.view.Value.bitStart = top.valueBit
+	it.view.Value.bitEnd = top.valueBitEnd
+	it.view.Value.refStart = top.valueRef
+	it.view.Value.refEnd = top.valueRefEnd
+	it.view.Extra = node.loader
+	it.view.Extra.bitEnd = top.valueBit
+	it.view.Extra.refEnd = top.valueRef
+
 	it.keyCell = Cell{
 		data:   it.keys[top.keyOff : int(top.keyOff)+it.stride : int(top.keyOff)+it.stride],
 		bitsSz: uint16(it.dict.keySz),
 	}
-	it.view = AugDictItemView{
-		Key: Slice{
-			cell:              &it.keyCell,
-			bitEnd:            it.keyCell.bitsSz,
-			forceCopyOnToCell: true,
-		},
-		Value: top.value,
-		Extra: top.extra,
+	it.view.Key = Slice{
+		cell:              &it.keyCell,
+		bitEnd:            it.keyCell.bitsSz,
+		forceCopyOnToCell: true,
 	}
 	it.rankOut = top.rank
 	it.pending = top.keyOff
 	it.hasView = true
+
+	return nil
 }
 
 // open parses one node, decomposes its augmentation and reads its rank. The
@@ -215,44 +244,58 @@ func (it *AugMinIterator) open(
 	trace *Trace,
 	parent *augMinNode,
 	branchBit int,
-) (*augMinNode, error) {
+	out *augMinNode,
+) error {
 	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if err = node.resolveIfSpecial(remaining, trace, nil); err != nil {
-		return nil, err
+		return err
 	}
 	if err = node.rejectSpecial("aug dict"); err != nil {
-		return nil, err
+		return err
 	}
 	if err = node.validateForkShape(remaining, true); err != nil {
-		return nil, err
+		return err
 	}
-	out := augMinNode{node: node, remaining: uint16(remaining), leaf: node.isLeaf(remaining)}
-	// The payload after the label is the augmentation in both node shapes:
-	// ahmn_fork keeps its children in the ref array, ahmn_leaf stores
-	// extra before value. This is the C++ prefetch_ulong(64)-after-label read.
-	out.value = *node.value()
-	out.extra = out.value
-	if err = it.dict.skipExtra(&out.value); err != nil {
-		return nil, err
+	*out = augMinNode{
+		cell:      node.cell,
+		trace:     node.loader.trace,
+		remaining: uint16(remaining),
+		leaf:      node.isLeaf(remaining),
 	}
-	out.extra.bitEnd = out.value.bitStart
-	out.extra.refEnd = out.value.refStart
-	if !out.leaf && (out.value.BitsLeft() != 0 || out.value.RefsNum() != 2) {
+	// A leaf stores extra before value. A fork stores its two child references
+	// before extra, so the augmentation's borrowed view starts after those refs.
+	// OutMsgQueue augmentation, generalized to extras that themselves use refs.
+	it.rankScratch = node.loader
+	if !out.leaf {
+		if err = it.rankScratch.SkipBitsAndRefs(0, 2); err != nil {
+			return err
+		}
+	}
+	it.valueScratch = it.rankScratch
+	if err = it.dict.skipExtra(&it.valueScratch); err != nil {
+		return err
+	}
+	out.valueBit = it.valueScratch.bitStart
+	out.valueBitEnd = it.valueScratch.bitEnd
+	out.valueRef = it.valueScratch.refStart
+	out.valueRefEnd = it.valueScratch.refEnd
+	it.rankScratch.bitEnd = it.valueScratch.bitStart
+	it.rankScratch.refEnd = it.valueScratch.refStart
+	if !out.leaf && (it.valueScratch.BitsLeft() != 0 || it.valueScratch.RefsNum() != 0) {
 		// C++ invalidates a fork whose remainder after the augmentation is not
-		// exactly two references and no data (size_ext() != 0x20000).
-		return nil, ErrInvalidDictForkNode
+		// empty after its two child references and extra are consumed.
+		return ErrInvalidDictForkNode
 	}
-	rankView := out.extra
-	if out.rank, err = it.rank(&rankView); err != nil {
-		return nil, err
+	if out.rank, err = it.rank(&it.rankScratch); err != nil {
+		return err
 	}
 
 	slot, err := it.allocKey()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	out.keyOff = slot
 	dst := it.keys[slot : int(slot)+it.stride]
@@ -268,64 +311,69 @@ func (it *AugMinIterator) open(
 	}
 	label := node.labelSlice()
 	if err = appendSliceBits(dst, written, &label, node.labelLen); err != nil {
-		return nil, err
+		return err
 	}
 	written += node.labelLen
 	out.keyLen = uint16(written)
 
-	return &out, nil
+	return nil
 }
 
 // descendToPrefix is OutputQueueMerger::MsgKeyValue::replace_by_prefix: follow
 // the requested prefix from the captured root, opening exactly the nodes on it,
 // and report an empty stream when the trie leaves the prefix. Nothing below the
 // prefix is opened and no rank is consulted along the way.
-func (it *AugMinIterator) descendToPrefix(node *augMinNode, prefix *Cell) (*augMinNode, error) {
+func (it *AugMinIterator) descendToPrefix(node *augMinNode, prefix *Cell) (bool, error) {
 	prefixLen := uint(prefix.BitsSize())
 	if prefixLen == 0 {
-		return node, nil
+		return true, nil
 	}
 	if prefixLen > it.dict.keySz {
-		return nil, fmt.Errorf("aug min iterator prefix is longer than the key")
+		return false, fmt.Errorf("aug min iterator prefix is longer than the key")
 	}
-	loader, err := prefix.BeginParse()
-	if err != nil {
-		return nil, err
+	var loader Slice
+	if err := prefix.BeginParseInto(&loader); err != nil {
+		return false, err
 	}
-	prefixBits := make([]byte, it.stride)
-	if err = loader.LoadSliceInto(prefixBits, prefixLen); err != nil {
-		return nil, err
+	var prefixBuf [maxCellDataBytes]byte
+	prefixBits := prefixBuf[:it.stride]
+	if err := loader.LoadSliceInto(prefixBits, prefixLen); err != nil {
+		return false, err
 	}
 	for {
 		common := min(prefixLen, uint(node.keyLen))
 		if !equalBits(it.keys[node.keyOff:int(node.keyOff)+it.stride], prefixBits, common) {
 			it.releaseKey(node.keyOff)
-			return nil, nil
+			return false, nil
 		}
 		if uint(node.keyLen) >= prefixLen {
-			return node, nil
+			return true, nil
 		}
 		if node.leaf {
 			// The key ends before the prefix does, so no key under the prefix
 			// exists. C++ reaches the same conclusion through replace_with_child
 			// failing on a non-fork.
 			it.releaseKey(node.keyOff)
-			return nil, nil
+			return false, nil
 		}
 		branch := 0
 		if bitAt(prefixBits, uint(node.keyLen)) {
 			branch = 1
 		}
-		child, childTrace, refErr := node.node.refAndTrace(branch)
-		if refErr != nil {
-			return nil, refErr
-		}
-		next, openErr := it.open(child, node.node.nextKeyBits(uint(node.remaining)), childTrace, node, branch)
+		opened, openErr := reopenAugMinNode(node)
 		if openErr != nil {
-			return nil, openErr
+			return false, openErr
+		}
+		child, childTrace, refErr := opened.refAndTrace(branch)
+		if refErr != nil {
+			return false, refErr
+		}
+		var next augMinNode
+		if err := it.open(child, opened.nextKeyBits(uint(node.remaining)), childTrace, node, branch, &next); err != nil {
+			return false, err
 		}
 		it.releaseKey(node.keyOff)
-		node = next
+		*node = next
 	}
 }
 
@@ -334,27 +382,43 @@ func (it *AugMinIterator) descendToPrefix(node *augMinNode, prefix *Cell) (*augM
 // only thing that stops a forged augmentation from making the stream skip a
 // subtree it should have opened.
 func (it *AugMinIterator) split(parent augMinNode) error {
-	remaining := parent.node.nextKeyBits(uint(parent.remaining))
-	var children [2]*augMinNode
+	opened, err := reopenAugMinNode(&parent)
+	if err != nil {
+		return err
+	}
+	remaining := opened.nextKeyBits(uint(parent.remaining))
+	var children [2]augMinNode
 	for i := 0; i < 2; i++ {
-		child, childTrace, err := parent.node.refAndTrace(i)
+		child, childTrace, err := opened.refAndTrace(i)
 		if err != nil {
 			return err
 		}
-		opened, err := it.open(child, remaining, childTrace, &parent, i)
-		if err != nil {
+		if err = it.open(child, remaining, childTrace, &parent, i, &children[i]); err != nil {
 			return err
 		}
-		children[i] = opened
 	}
 	it.releaseKey(parent.keyOff)
 	low := min(children[0].rank, children[1].rank)
 	if low != parent.rank {
 		return fmt.Errorf("aug min iterator: fork rank %d is not the minimum %d of its children", parent.rank, low)
 	}
-	it.push(*children[0])
-	it.push(*children[1])
+	it.push(children[0])
+	it.push(children[1])
 	return nil
+}
+
+// reopenAugMinNode reconstructs borrowed node views from an immutable cell.
+// It deliberately parses without trace and then restores the captured trace on
+// the Slice: the node was already charged/opened by open, while child descent
+// and an emitted leaf must keep using the exact same child trace context.
+func reopenAugMinNode(frontier *augMinNode) (fixedDictNode, error) {
+	node, err := parseFixedDictNodeWithTrace(frontier.cell, uint(frontier.remaining), nil)
+	if err != nil {
+		return fixedDictNode{}, err
+	}
+	node.loader.trace = frontier.trace
+
+	return node, nil
 }
 
 // less orders the frontier. Forks sort before leaves at equal rank so that

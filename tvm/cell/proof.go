@@ -290,6 +290,9 @@ func (c *Cell) getHash(level int) []byte {
 	if c.meta != nil && c.meta.viewLevel != 0 {
 		return c.meta.viewOf.getHash(min(level, int(c.meta.viewLevel-1)))
 	}
+	if c.flags&cellFlagLevelMaskMask == 0 {
+		return c.hash0[:]
+	}
 
 	levelMask := c.getLevelMask()
 	hashIndex := levelMask.Apply(level).getHashIndex()
@@ -444,6 +447,9 @@ func (c *Cell) calculateHashesOrdinary() error {
 func (c *Cell) getDepth(level int) uint16 {
 	if c.meta != nil && c.meta.viewLevel != 0 {
 		return c.meta.viewOf.getDepth(min(level, int(c.meta.viewLevel-1)))
+	}
+	if c.flags&cellFlagLevelMaskMask == 0 {
+		return c.depth0
 	}
 
 	levelMask := c.getLevelMask()

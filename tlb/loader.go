@@ -302,24 +302,35 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 		}
 
 		if settings[0] == "^" {
-			ref, err := loader.LoadRefCell()
-			if err != nil {
-				return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
-			}
-
-			if skipProofBranches && ref.GetType() == cell.PrunedCellType {
-				continue
-			}
 			if typeToLoad == cellType {
+				ref, err := loader.LoadRefCell()
+				if err != nil {
+					return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
+				}
+				if skipProofBranches && ref.GetType() == cell.PrunedCellType {
+					continue
+				}
 				setVal(reflect.ValueOf(ref))
 				continue
 			}
 
+			if skipProofBranches {
+				ref, _, err := loader.PeekRefCellAtWithTrace(0)
+				if err != nil {
+					return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
+				}
+				if ref.GetType() == cell.PrunedCellType {
+					loader.SkipFirst(0, 1)
+					continue
+				}
+			}
+
 			settings = settings[1:]
-			loader, err = ref.BeginParse()
-			if err != nil {
+			var refLoader cell.Slice
+			if err := loader.LoadRefInto(&refLoader); err != nil {
 				return fmt.Errorf("failed to load ref for %s, err: %w", structField.Name, err)
 			}
+			loader = &refLoader
 		}
 
 		if structField.Type.Kind() == reflect.Interface {

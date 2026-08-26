@@ -76,9 +76,11 @@ func (c *Slice) refAndTraceAt(i int) (*Cell, *Trace, error) {
 		return nil, nil, err
 	}
 
-	trace := ref.Trace()
+	var trace *Trace
 	if c.trace != nil {
 		trace = c.trace.Child(int(c.refStart) + i)
+	} else {
+		trace = ref.Trace()
 	}
 	return ref, trace, nil
 }
@@ -1110,21 +1112,20 @@ func (c *Slice) ToCell() (*Cell, error) {
 		return c.cell.WithTrace(nil), nil
 	}
 
-	data, err := c.PreloadSlice(left)
-	if err != nil {
+	cl := newCellWithData(int((left + 7) / 8))
+	if err := c.PreloadSliceInto(cl.data, left); err != nil {
 		return nil, err
 	}
+	cl.bitsSz = uint16(left)
 
-	refs := make([]*Cell, c.RefsNum())
-	for i := range refs {
-		refs[i] = c.withChildTrace(c.boundaryRefCellAt(i), int(c.refStart)+i)
+	refCount := c.RefsNum()
+	for i := 0; i < refCount; i++ {
+		cl.refs[i] = c.withChildTrace(c.boundaryRefCellAt(i), int(c.refStart)+i)
 	}
+	cl.setRefsCount(refCount)
+	refs := cl.refs[:refCount:refCount]
 
-	cl := &Cell{
-		bitsSz: uint16(left),
-		data:   data,
-	}
-	cl.setRefs(refs)
+	var err error
 	if c.cell.IsSpecial() && fullCell {
 		cl.setSpecial(true)
 		if err = refreshSpecialCellLevelMask(cl); err != nil {

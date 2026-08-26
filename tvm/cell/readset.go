@@ -24,6 +24,11 @@ const readSetInitialSlots = 16
 // as much on its own.
 const readSetMaxPresizedCells = 1 << 20
 
+// RecordMany flushes callbacks in bounded windows accepted by callers such as
+// the proof estimator, so a cached traversal never allocates a slice
+// proportional to its size or holds first-read cells longer than one window.
+const readSetRecordManyCallbackCells = 64
+
 // referencedFrontierPercent is the frontier's size as a share of the read set.
 // Measured across whole blocks of the fixture family it was 0.525-0.690, and it
 // is far steadier than either count on its own: over that same family the hint
@@ -89,6 +94,11 @@ type ReadSet struct {
 	// onRecord observes the first read of every cell. The collated-size estimators
 	// are fed from here; it may run on several goroutines.
 	onRecord func(*Cell)
+
+	// onRecordMany is the batched form of onRecord. RecordMany uses it after
+	// releasing the read-set shard locks; when it is absent the ordinary callback
+	// is invoked once per first read instead.
+	onRecordMany func([]*Cell)
 
 	// onIgnored observes the cells an IgnoreReads scope drops, so a caller that
 	// deliberately reads without recording can still keep what it parsed and
@@ -337,6 +347,18 @@ func (rs *ReadSet) SetRecordCallback(fn func(*Cell)) {
 	rs.onRecord = fn
 }
 
+// SetRecordManyCallback registers the batched equivalent of the record
+// callback. RecordMany invokes fn with the cells it billed for the first time;
+// when fn is nil it falls back to invoking SetRecordCallback's function once per
+// cell. Both callbacks must describe the same observation and must be installed
+// before reads start. fn may run concurrently and is never called while a read
+// set shard is locked. fn must not retain or mutate the slice; the cells it
+// points to may be retained. Install the ordinary callback as well, because
+// traced reads and Record continue to report through it.
+func (rs *ReadSet) SetRecordManyCallback(fn func([]*Cell)) {
+	rs.onRecordMany = fn
+}
+
 // SetIgnoredObserver registers fn for every cell parsed inside the IgnoreReads
 // scope that is open right now, and only that one. Install it after opening the
 // scope and clear it before closing, on the goroutine that owns the scope.
@@ -445,6 +467,7 @@ func (rs *ReadSet) Seal() {
 	rs.referencedMu.Unlock()
 	rs.source = nil
 	rs.onRecord = nil
+	rs.onRecordMany = nil
 	rs.onIgnored = nil
 }
 
@@ -457,14 +480,23 @@ func (rs *ReadSet) Sealed() bool {
 func (rs *ReadSet) PendingError() error { return nil }
 
 func (rs *ReadSet) record(c *Cell) {
+	if rs.recordCell(c) && rs.onRecord != nil {
+		rs.onRecord(c)
+	}
+}
+
+// recordCell publishes one billed read and reports whether its first-read
+// callback is due. The callback stays in the caller so RecordMany can coalesce
+// several notifications without ever running one under the shard lock.
+func (rs *ReadSet) recordCell(c *Cell) bool {
 	if rs.Inert() {
-		return
+		return false
 	}
 	// A lazy placeholder carries hashes but no body, so recording it would put a
 	// cell in the proof that cannot be serialized. The materialized cell arrives
 	// through the same trace as soon as it is resolved.
 	if c.IsLazy() {
-		return
+		return false
 	}
 	// The repeat path must not copy the hash. Recording is attempted on every
 	// parse and almost always finds the cell already there, so the probe reads the
@@ -473,18 +505,18 @@ func (rs *ReadSet) record(c *Cell) {
 	raw := c.getHash(_DataCellMaxLevel)
 	shard := &rs.shards[raw[0]&(readSetShards-1)]
 	if shard.probe(raw) == readSetBilled {
-		return
+		return false
 	}
 
 	var hash Hash
 	copy(hash[:], raw)
-	bill, added := shard.insert(hash, c, true)
+	shard.mu.Lock()
+	bill, added := shard.insertLocked(hash, c, true)
+	shard.mu.Unlock()
 	if added {
 		rs.recorded.Add(1)
 	}
-	if bill && rs.onRecord != nil {
-		rs.onRecord(c)
-	}
+	return bill
 }
 
 // Record adds a cell explicitly. It is for the reads that cannot ride the trace: a
@@ -495,6 +527,43 @@ func (rs *ReadSet) Record(c *Cell) {
 		return
 	}
 	rs.record(c)
+}
+
+// RecordMany adds cells explicitly in one pass. It has the same billed/unbilled
+// and duplicate semantics as calling Record for every cell, while coalescing the
+// first-read callback that accounts for a cached traversal. The callback runs
+// after every shard insert has been unlocked; batches from concurrent callers
+// may arrive concurrently.
+func (rs *ReadSet) RecordMany(cells []*Cell) {
+	if rs == nil || len(cells) == 0 || rs.Inert() {
+		return
+	}
+	if rs.onRecordMany == nil {
+		onRecord := rs.onRecord
+		for _, c := range cells {
+			if c != nil && rs.recordCell(c) && onRecord != nil {
+				onRecord(c)
+			}
+		}
+		return
+	}
+
+	onRecordMany := rs.onRecordMany
+	var notify [readSetRecordManyCallbackCells]*Cell
+	notifyCount := 0
+	for _, c := range cells {
+		if c != nil && rs.recordCell(c) {
+			notify[notifyCount] = c
+			notifyCount++
+			if notifyCount == len(notify) {
+				onRecordMany(notify[:])
+				notifyCount = 0
+			}
+		}
+	}
+	if notifyCount != 0 {
+		onRecordMany(notify[:notifyCount])
+	}
 }
 
 // RecordUnbilled adds a cell to the record without telling the record callback.
@@ -830,23 +899,27 @@ func readSetFingerprint(hash Hash) uint32 {
 		uint32(hash[4])<<24
 }
 
-// insert records a read cell and reports whether it is the first time. Never a
-// truncated compare: the fingerprint only decides whether the full hash is worth
-// comparing.
 // insert records hash as billed or unbilled. It reports whether the caller's
 // onRecord must fire: true for a first billed read, whether the entry is new or
 // was until now unbilled; false for a repeat, and for every unbilled record.
-// s.used moves only for a new entry, which is what recorded counts.
+// s.used moves only for a new entry, which is what recorded counts. Equality is
+// never truncated: the fingerprint only decides whether the full hash is worth
+// comparing.
 func (s *readSetShard) insert(hash Hash, c *Cell, billed bool) (bill bool, added bool) {
 	if status := s.status(hash); status == readSetBilled || (status == readSetUnbilled && !billed) {
 		return false, false
 	}
 
-	fingerprint := readSetFingerprint(hash)
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.insertLocked(hash, c, billed)
+}
 
+// insertLocked is the authoritative insert after the caller has acquired this
+// shard. Both insert and recordCell probe before locking, so the locked lookup
+// below resolves a concurrent insert and an unbilled-to-billed promotion.
+func (s *readSetShard) insertLocked(hash Hash, c *Cell, billed bool) (bill bool, added bool) {
+	fingerprint := readSetFingerprint(hash)
 	table := s.table.Load()
 	if table == nil {
 		table = newReadSetTable(readSetInitialSlots, readSetInitialSlots/2)
@@ -891,8 +964,6 @@ func (s *readSetShard) insert(hash Hash, c *Cell, billed bool) (bill bool, added
 	return billed, true
 }
 
-// probe is lookup without materializing a Hash key, for the path that runs on
-// every parse.
 // readSetEntryStatus is what a probe reports about a hash.
 type readSetEntryStatus uint8
 

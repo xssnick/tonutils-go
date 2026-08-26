@@ -116,10 +116,10 @@ func totalPreparedLoads(l *preparedLoader) int {
 }
 
 // TestWarmChildKeepsTheTraceOfTheLazyLoad pins the invariant the end-to-end
-// replay cannot see: a substituted child must carry the very trace the lazy
-// load would have carried. The mutation happens to record every kept sibling
-// itself, so a replay that dropped the trace still produces the same proof
-// today — and would silently stop doing so the moment a caller replays a
+// replay cannot see: a substituted child must return beside it the very trace
+// the lazy load would have carried. The mutation happens to record every kept
+// sibling itself, so a replay that dropped the sidecar still produces the same
+// proof today — and would silently stop doing so the moment a caller replays a
 // closure the mutation did not walk.
 func TestWarmChildKeepsTheTraceOfTheLazyLoad(t *testing.T) {
 	const keyBits = 8
@@ -138,14 +138,14 @@ func TestWarmChildKeepsTheTraceOfTheLazyLoad(t *testing.T) {
 	}
 
 	var cold augmentedNodeChecker
-	lazy, err := cold.child(node, 0)
+	lazy, lazyTrace, err := cold.child(node, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !lazy.IsLazy() {
 		t.Fatal("fixture child is resident, so the substitution is never exercised")
 	}
-	if lazy.Trace() == nil {
+	if lazyTrace == nil {
 		t.Fatal("fixture child carries no trace, so losing it would be invisible")
 	}
 
@@ -154,7 +154,7 @@ func TestWarmChildKeepsTheTraceOfTheLazyLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 	warm := augmentedNodeChecker{warm: map[Hash]*Cell{lazy.rawCell().HashKey(): resolved.rawCell()}}
-	got, err := warm.child(node, 0)
+	got, gotTrace, err := warm.child(node, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,8 +164,46 @@ func TestWarmChildKeepsTheTraceOfTheLazyLoad(t *testing.T) {
 	if got.HashKey() != lazy.HashKey() {
 		t.Fatalf("warm child = %x, lazy child = %x", got.Hash()[:4], lazy.Hash()[:4])
 	}
-	if got.Trace() != lazy.Trace() {
+	if gotTrace != lazyTrace {
 		t.Fatal("warm child lost the trace the lazy load would have carried")
+	}
+}
+
+func TestWarmChildInheritsResidentTraceWithoutParentTrace(t *testing.T) {
+	const keyBits = 8
+	base := bulkLoadedDenseDict(t, keyBits, 128)
+	dict, loader, _ := bulkLoadedLazyDict(t, base, nil)
+	dict.root = dict.root.WithTrace(nil)
+	dict.trace = nil
+
+	node, err := parseFixedDictNodeWithTrace(dict.root, keyBits, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lazy, lazyTrace, err := (&augmentedNodeChecker{}).child(node, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lazyTrace != nil {
+		t.Fatal("untraced placeholder unexpectedly has a sidecar")
+	}
+
+	resident, err := loader.LoadCell(lazy.rawCell().HashKey())
+	if err != nil {
+		t.Fatal(err)
+	}
+	residentTrace := NewTrace(TraceHooks{OnLoad: func(*Cell) {}})
+	resident = resident.WithTrace(residentTrace)
+	warm := augmentedNodeChecker{warm: map[Hash]*Cell{lazy.rawCell().HashKey(): resident}}
+	got, gotTrace, err := warm.child(node, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IsLazy() {
+		t.Fatal("warm child was not substituted")
+	}
+	if gotTrace != residentTrace {
+		t.Fatal("warm child lost the trace already attached to the resident cell")
 	}
 }
 

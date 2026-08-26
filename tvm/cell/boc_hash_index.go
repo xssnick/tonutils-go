@@ -14,21 +14,32 @@ type bocHashIndex struct {
 
 func newBOCHashIndex(capacityHint int) *bocHashIndex {
 	m := &bocHashIndex{}
-	if capacityHint <= 0 {
-		return m
-	}
+	m.reset(capacityHint)
+	return m
+}
+
+// reset keeps the open-addressed table's backing store while making it empty.
+// A serialization scratch calls it once per BoC, which turns the table's
+// otherwise dominant allocation into a clear of memory the next walk reuses.
+func (m *bocHashIndex) reset(capacityHint int) {
 	if capacityHint > 1<<30 {
 		capacityHint = 1 << 30
 	}
 
-	capacity := bocHashIndexInitialCapacity
-	for capacityHint*4 > capacity*3 {
-		capacity *= 2
+	capacity := 0
+	if capacityHint > 0 {
+		capacity = bocHashIndexInitialCapacity
+		for capacityHint*4 > capacity*3 {
+			capacity *= 2
+		}
 	}
-
-	m.entries = make([]uint64, capacity)
-	m.growAt = capacity * 3 / 4
-	return m
+	if len(m.entries) < capacity {
+		m.entries = make([]uint64, capacity)
+	} else {
+		clear(m.entries)
+	}
+	m.used = 0
+	m.growAt = len(m.entries) * 3 / 4
 }
 
 func (m *bocHashIndex) get(fp uint32, hash []byte, cell *Cell, items []bocSerializeItem) (uint32, bool) {

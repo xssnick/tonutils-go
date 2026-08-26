@@ -6,6 +6,36 @@ import "fmt"
 // means that the key is absent from that side of the diff.
 type DictDiffFunc func(key *Cell, oldValue, newValue *Slice) error
 
+// DictDiffView is one changed dictionary leaf. Key, OldValue and NewValue are
+// borrowed Slice values backed by the walk's current cells. They are valid only
+// until the callback returns; call ToCell or copy the data to retain it.
+type DictDiffView struct {
+	Key      Slice
+	OldValue Slice
+	NewValue Slice
+	HasOld   bool
+	HasNew   bool
+}
+
+// DictDiffViewFunc receives borrowed changed-leaf views.
+type DictDiffViewFunc func(DictDiffView) error
+
+// DictDiffRawView is one changed dictionary leaf with its key exposed as
+// borrowed packed bits. Key, OldValue and NewValue are read-only, valid only
+// until the callback returns, and must not be retained; the first KeyBits bits
+// of Key are significant.
+type DictDiffRawView struct {
+	Key      []byte
+	KeyBits  uint
+	OldValue Slice
+	NewValue Slice
+	HasOld   bool
+	HasNew   bool
+}
+
+// DictDiffRawViewFunc receives a borrowed raw-key diff view.
+type DictDiffRawViewFunc func(DictDiffRawView) error
+
 // ScanDiff compares two Hashmap tries structurally and visits their changed
 // leaves in key order. Equal subtrees are skipped by hash, so the walk costs
 // O(difference) rather than O(dictionary), and leaves whose values are byte
@@ -23,6 +53,30 @@ func (d *Dictionary) ScanDiff(other *Dictionary, fn DictDiffFunc) error {
 	if fn == nil {
 		return fmt.Errorf("dictionary diff callback is required")
 	}
+	return d.ScanDiffBorrowed(other, func(view DictDiffView) error {
+		key, err := view.Key.ToCell()
+		if err != nil {
+			return err
+		}
+
+		var oldValue, newValue *Slice
+		if view.HasOld {
+			oldValue = &view.OldValue
+		}
+		if view.HasNew {
+			newValue = &view.NewValue
+		}
+		return fn(key, oldValue, newValue)
+	})
+}
+
+// ScanDiffBorrowed is ScanDiff without materializing a key Cell for every
+// changed leaf. Every Slice in the view is borrowed and must not be retained
+// after the callback returns.
+func (d *Dictionary) ScanDiffBorrowed(other *Dictionary, fn DictDiffViewFunc) error {
+	if fn == nil {
+		return fmt.Errorf("dictionary diff callback is required")
+	}
 	keySz := d.GetKeySize()
 	if keySz != other.GetKeySize() {
 		return fmt.Errorf("cannot compare dictionaries with different key sizes")
@@ -32,31 +86,68 @@ func (d *Dictionary) ScanDiff(other *Dictionary, fn DictDiffFunc) error {
 	}
 
 	var oldRoot, newRoot *Cell
+	var oldTrace, newTrace *Trace
 	if d != nil {
-		oldRoot = d.tracedRoot()
+		oldRoot = d.root
+		oldTrace = combinedCellTrace(d.root, d.trace)
 	}
 	if other != nil {
-		newRoot = other.tracedRoot()
+		newRoot = other.root
+		newTrace = combinedCellTrace(other.root, other.trace)
 	}
 
 	walk := dictDiffWalk{keySz: keySz, fn: fn}
-	if err := walk.node(oldRoot, newRoot, keySz, 0, 0); err != nil {
+	if err := walk.node(oldRoot, oldTrace, newRoot, newTrace, keySz, 0, 0); err != nil {
+		return fmt.Errorf("failed to scan dictionary diff: %w", err)
+	}
+	return nil
+}
+
+// ScanDiffRaw is ScanDiffBorrowed without materializing or hashing a key Cell.
+// The callback receives the key as borrowed packed bits.
+func (d *Dictionary) ScanDiffRaw(other *Dictionary, fn DictDiffRawViewFunc) error {
+	if fn == nil {
+		return fmt.Errorf("dictionary diff callback is required")
+	}
+	keySz := d.GetKeySize()
+	if keySz != other.GetKeySize() {
+		return fmt.Errorf("cannot compare dictionaries with different key sizes")
+	}
+	if err := validateDictKeySize(keySz); err != nil {
+		return err
+	}
+
+	var oldRoot, newRoot *Cell
+	var oldTrace, newTrace *Trace
+	if d != nil {
+		oldRoot = d.root
+		oldTrace = combinedCellTrace(d.root, d.trace)
+	}
+	if other != nil {
+		newRoot = other.root
+		newTrace = combinedCellTrace(other.root, other.trace)
+	}
+
+	walk := dictDiffWalk{keySz: keySz, rawFn: fn}
+	if err := walk.node(oldRoot, oldTrace, newRoot, newTrace, keySz, 0, 0); err != nil {
 		return fmt.Errorf("failed to scan dictionary diff: %w", err)
 	}
 	return nil
 }
 
 type dictDiffWalk struct {
-	keySz uint
-	key   Builder
-	fn    DictDiffFunc
+	keySz   uint
+	key     Builder
+	keyCell Cell
+	fn      DictDiffViewFunc
+	rawFn   DictDiffRawViewFunc
 }
 
 // node compares one aligned pair of subtrees. skipOld and skipNew are the label
 // bits already consumed on that side by an ancestor whose label was longer, so
 // the two sides stay aligned on the same key prefix without materializing
 // intermediate nodes — the same device C++ dict_scan_diff uses.
-func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) error {
+func (w *dictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *Trace, remaining, skipOld, skipNew uint) error {
 	if old == nil {
 		if new == nil {
 			return nil
@@ -64,13 +155,13 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		if skipNew != 0 {
 			return fmt.Errorf("invalid new dictionary alignment")
 		}
-		return w.oneSide(new, remaining, false)
+		return w.oneSide(new, newTrace, remaining, false)
 	}
 	if new == nil {
 		if skipOld != 0 {
 			return fmt.Errorf("invalid old dictionary alignment")
 		}
-		return w.oneSide(old, remaining, true)
+		return w.oneSide(old, oldTrace, remaining, true)
 	}
 	// Skip equality matters: two logically identical subtrees reached with
 	// different label skips are different cells, so comparing them by hash
@@ -79,11 +170,11 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		return nil
 	}
 
-	oldNode, err := parseDictDiffNode(old, remaining+skipOld)
+	oldNode, err := parseDictDiffNode(old, oldTrace, remaining+skipOld)
 	if err != nil {
 		return fmt.Errorf("invalid old dictionary node: %w", err)
 	}
-	newNode, err := parseDictDiffNode(new, remaining+skipNew)
+	newNode, err := parseDictDiffNode(new, newTrace, remaining+skipNew)
 	if err != nil {
 		return fmt.Errorf("invalid new dictionary node: %w", err)
 	}
@@ -121,15 +212,15 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		// key order.
 		w.storeLabel(&newLabel, depth-skipNew)
 		if oldEffective.bitAt(common) == 0 {
-			if err = w.node(old, nil, remaining+skipOld, 0, 0); err != nil {
+			if err = w.node(old, oldTrace, nil, nil, remaining+skipOld, 0, 0); err != nil {
 				return err
 			}
-			return w.node(nil, new, remaining+skipNew, 0, 0)
+			return w.node(nil, nil, new, newTrace, remaining+skipNew, 0, 0)
 		}
-		if err = w.node(nil, new, remaining+skipNew, 0, 0); err != nil {
+		if err = w.node(nil, nil, new, newTrace, remaining+skipNew, 0, 0); err != nil {
 			return err
 		}
-		return w.node(old, nil, remaining+skipOld, 0, 0)
+		return w.node(old, oldTrace, nil, nil, remaining+skipOld, 0, 0)
 	}
 
 	if common == oldLen && common == newLen {
@@ -144,15 +235,15 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		nextRemaining := remaining - common - 1
 		for child := 0; child < 2; child++ {
 			w.setKeyBit(depth+common, byte(child))
-			oldChild, err := oldNode.ref(child)
+			oldChild, oldChildTrace, err := oldNode.refAndTrace(child)
 			if err != nil {
 				return fmt.Errorf("failed to load old dictionary child: %w", err)
 			}
-			newChild, err := newNode.ref(child)
+			newChild, newChildTrace, err := newNode.refAndTrace(child)
 			if err != nil {
 				return fmt.Errorf("failed to load new dictionary child: %w", err)
 			}
-			if err = w.node(oldChild, newChild, nextRemaining, 0, 0); err != nil {
+			if err = w.node(oldChild, oldChildTrace, newChild, newChildTrace, nextRemaining, 0, 0); err != nil {
 				return err
 			}
 		}
@@ -164,11 +255,11 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		// the whole new subtree lives under one old child; the sibling is an
 		// old-only subtree.
 		w.storeLabel(&newLabel, depth-skipNew)
-		oldLeft, err := oldNode.ref(0)
+		oldLeft, oldLeftTrace, err := oldNode.refAndTrace(0)
 		if err != nil {
 			return fmt.Errorf("failed to load old dictionary left child: %w", err)
 		}
-		oldRight, err := oldNode.ref(1)
+		oldRight, oldRightTrace, err := oldNode.refAndTrace(1)
 		if err != nil {
 			return fmt.Errorf("failed to load old dictionary right child: %w", err)
 		}
@@ -177,25 +268,25 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 		branch := int(newEffective.bitAt(common))
 		w.setKeyBit(depth+common, byte(branch))
 		if branch == 0 {
-			if err = w.node(oldLeft, new, nextRemaining, 0, skipNew+common+1); err != nil {
+			if err = w.node(oldLeft, oldLeftTrace, new, newTrace, nextRemaining, 0, skipNew+common+1); err != nil {
 				return err
 			}
 			w.setKeyBit(depth+common, 1)
-			return w.node(oldRight, nil, nextRemaining, 0, 0)
+			return w.node(oldRight, oldRightTrace, nil, nil, nextRemaining, 0, 0)
 		}
 		w.setKeyBit(depth+common, 0)
-		if err = w.node(oldLeft, nil, nextRemaining, 0, 0); err != nil {
+		if err = w.node(oldLeft, oldLeftTrace, nil, nil, nextRemaining, 0, 0); err != nil {
 			return err
 		}
 		w.setKeyBit(depth+common, 1)
-		return w.node(oldRight, new, nextRemaining, 0, skipNew+common+1)
+		return w.node(oldRight, oldRightTrace, new, newTrace, nextRemaining, 0, skipNew+common+1)
 	}
 
-	newLeft, err := newNode.ref(0)
+	newLeft, newLeftTrace, err := newNode.refAndTrace(0)
 	if err != nil {
 		return fmt.Errorf("failed to load new dictionary left child: %w", err)
 	}
-	newRight, err := newNode.ref(1)
+	newRight, newRightTrace, err := newNode.refAndTrace(1)
 	if err != nil {
 		return fmt.Errorf("failed to load new dictionary right child: %w", err)
 	}
@@ -204,23 +295,23 @@ func (w *dictDiffWalk) node(old, new *Cell, remaining, skipOld, skipNew uint) er
 	branch := int(oldEffective.bitAt(common))
 	if branch == 0 {
 		w.setKeyBit(depth+common, 0)
-		if err = w.node(old, newLeft, nextRemaining, skipOld+common+1, 0); err != nil {
+		if err = w.node(old, oldTrace, newLeft, newLeftTrace, nextRemaining, skipOld+common+1, 0); err != nil {
 			return err
 		}
 		w.setKeyBit(depth+common, 1)
-		return w.node(nil, newRight, nextRemaining, 0, 0)
+		return w.node(nil, nil, newRight, newRightTrace, nextRemaining, 0, 0)
 	}
 	w.setKeyBit(depth+common, 0)
-	if err = w.node(nil, newLeft, nextRemaining, 0, 0); err != nil {
+	if err = w.node(nil, nil, newLeft, newLeftTrace, nextRemaining, 0, 0); err != nil {
 		return err
 	}
 	w.setKeyBit(depth+common, 1)
-	return w.node(old, newRight, nextRemaining, skipOld+common+1, 0)
+	return w.node(old, oldTrace, newRight, newRightTrace, nextRemaining, skipOld+common+1, 0)
 }
 
 // oneSide reports every leaf of a subtree that exists on only one side.
-func (w *dictDiffWalk) oneSide(branch *Cell, remaining uint, oldOnly bool) error {
-	node, err := parseDictDiffNode(branch, remaining)
+func (w *dictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, oldOnly bool) error {
+	node, err := parseDictDiffNode(branch, trace, remaining)
 	if err != nil {
 		return err
 	}
@@ -238,19 +329,19 @@ func (w *dictDiffWalk) oneSide(branch *Cell, remaining uint, oldOnly bool) error
 	nextRemaining := remaining - node.labelLen - 1
 	for child := 0; child < 2; child++ {
 		w.setKeyBit(depth+node.labelLen, byte(child))
-		ref, err := node.ref(child)
+		ref, childTrace, err := node.refAndTrace(child)
 		if err != nil {
 			return fmt.Errorf("failed to load dictionary child: %w", err)
 		}
-		if err = w.oneSide(ref, nextRemaining, oldOnly); err != nil {
+		if err = w.oneSide(ref, childTrace, nextRemaining, oldOnly); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func parseDictDiffNode(branch *Cell, remaining uint) (fixedDictNode, error) {
-	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
+func parseDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDictNode, error) {
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
 	if err != nil {
 		return fixedDictNode{}, err
 	}
@@ -265,7 +356,44 @@ func parseDictDiffNode(branch *Cell, remaining uint) (fixedDictNode, error) {
 
 func (w *dictDiffWalk) emit(oldValue, newValue *Slice) error {
 	w.key.bitsSz = w.keySz
-	return w.fn(w.key.EndCell(), oldValue, newValue)
+	if w.rawFn != nil {
+		view := DictDiffRawView{
+			Key:     w.key.data[:w.key.usedBytes()],
+			KeyBits: w.keySz,
+			HasOld:  oldValue != nil,
+			HasNew:  newValue != nil,
+		}
+		if oldValue != nil {
+			view.OldValue = *oldValue
+		}
+		if newValue != nil {
+			view.NewValue = *newValue
+		}
+		return w.rawFn(view)
+	}
+	w.keyCell = Cell{
+		data:   w.key.data[:w.key.usedBytes()],
+		bitsSz: uint16(w.keySz),
+	}
+	if err := w.keyCell.calculateHashesOrdinary(); err != nil {
+		return err
+	}
+	view := DictDiffView{
+		Key: Slice{
+			cell:              &w.keyCell,
+			bitEnd:            uint16(w.keySz),
+			forceCopyOnToCell: true,
+		},
+		HasOld: oldValue != nil,
+		HasNew: newValue != nil,
+	}
+	if oldValue != nil {
+		view.OldValue = *oldValue
+	}
+	if newValue != nil {
+		view.NewValue = *newValue
+	}
+	return w.fn(view)
 }
 
 func (w *dictDiffWalk) keyMatchesSkippedLabel(label *Slice, depth, skip uint) bool {

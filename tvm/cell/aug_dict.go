@@ -521,30 +521,44 @@ func (d *AugmentedDictionary) LoadRootExtra() (*Slice, error) {
 		return nil, nil
 	}
 
+	extra := new(Slice)
+	if err := d.LoadRootExtraInto(extra); err != nil {
+		return nil, err
+	}
+	return extra, nil
+}
+
+// LoadRootExtraInto parses the root augmentation into dst without allocating
+// a Slice. Unlike LoadRootExtra, the receiver must name a dictionary.
+func (d *AugmentedDictionary) LoadRootExtraInto(dst *Slice) error {
+	if d == nil {
+		return fmt.Errorf("augmented dictionary is nil")
+	}
+
 	if d.rootExtra != nil {
-		return d.rootExtra.BeginParse()
+		return d.rootExtra.BeginParseInto(dst)
 	}
 
 	if d.root == nil {
 		if d.aug == nil {
-			return nil, fmt.Errorf("augmentation is nil")
+			return fmt.Errorf("augmentation is nil")
 		}
 		var extra Builder
 		if err := d.aug.EmptyExtra(&extra); err != nil {
-			return nil, err
+			return err
 		}
-		return extra.EndCell().BeginParse()
+		return extra.EndCell().BeginParseInto(dst)
 	}
 
 	if d.aug == nil {
-		return nil, fmt.Errorf("augmentation is nil")
+		return fmt.Errorf("augmentation is nil")
 	}
 
 	extra, err := extractAugmentedNodeExtra(d.root, d.keySz, d.aug.SkipExtra)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return extra.BeginParse()
+	return extra.BeginParseInto(dst)
 }
 
 func (d *AugmentedDictionary) SetIntKey(key *big.Int, value *Cell) error {
@@ -634,9 +648,6 @@ func (d *AugmentedDictionary) LoadValueWithExtraInto(key *Cell, valueExtra *Slic
 		root:  d.root,
 		trace: d.trace,
 	}
-	if key == nil || key.BitsSize() != d.keySz {
-		return fmt.Errorf("incorrect key size")
-	}
 
 	var keySlice Slice
 	if err := key.BeginParseInto(&keySlice); err != nil {
@@ -700,6 +711,113 @@ func (d *AugmentedDictionary) LoadValueExtraByIntKeyInto(key *big.Int, value, ex
 	return d.decomposeValueExtraInto(&valueExtra, value, extra)
 }
 
+// LoadValueByBytesKeyInto loads a value using the first key-size bits of a
+// big-endian byte slice without materializing a key cell.
+func (d *AugmentedDictionary) LoadValueByBytesKeyInto(key []byte, value *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraByBytesKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, nil)
+}
+
+// LoadValueExtraByBytesKeyInto loads both the value and leaf augmentation using
+// the first key-size bits of a big-endian byte slice. The destinations must be
+// distinct.
+func (d *AugmentedDictionary) LoadValueExtraByBytesKeyInto(key []byte, value, extra *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraByBytesKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueWithExtraByBytesKeyInto(key []byte, valueExtra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	if d.keySz > maxDictKeyBits {
+		return fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	if uint(len(key))*8 < d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	keyCell := Cell{data: key, bitsSz: uint16(d.keySz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.loadValueWithExtraByKeySliceInto(&keySlice, valueExtra)
+}
+
+// LoadValueBySliceKeyInto loads a value from the first key-size remaining bits
+// of key without consuming it or materializing a key cell.
+func (d *AugmentedDictionary) LoadValueBySliceKeyInto(key, value *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraBySliceKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, nil)
+}
+
+// LoadValueExtraBySliceKeyInto is LoadValueBySliceKeyInto with the leaf
+// augmentation returned separately. The destinations must be distinct.
+func (d *AugmentedDictionary) LoadValueExtraBySliceKeyInto(key, value, extra *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraBySliceKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueWithExtraBySliceKeyInto(key, valueExtra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	keySlice, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return err
+	}
+	return d.loadValueWithExtraByKeySliceInto(&keySlice, valueExtra)
+}
+
+// LoadValueByUintKeyInto loads a zero-extended unsigned key without a big.Int
+// or key-cell allocation.
+func (d *AugmentedDictionary) LoadValueByUintKeyInto(key uint64, value *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraByUintKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, nil)
+}
+
+// LoadValueExtraByUintKeyInto is LoadValueByUintKeyInto with the leaf
+// augmentation returned separately. The destinations must be distinct.
+func (d *AugmentedDictionary) LoadValueExtraByUintKeyInto(key uint64, value, extra *Slice) error {
+	var valueExtra Slice
+	if err := d.loadValueWithExtraByUintKeyInto(key, &valueExtra); err != nil {
+		return err
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueWithExtraByUintKeyInto(key uint64, valueExtra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+
+	var keyBuilder Builder
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
+		return err
+	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.loadValueWithExtraByKeySliceInto(&keySlice, valueExtra)
+}
+
+func (d *AugmentedDictionary) loadValueWithExtraByKeySliceInto(key, valueExtra *Slice) error {
+	plain := Dictionary{keySz: d.keySz, root: d.root, trace: d.trace}
+	return plain.findKeySliceInto(key, valueExtra, dictWalk{lenient: true})
+}
+
 func (d *AugmentedDictionary) GetWithExtra(key *Cell) *Cell {
 	slc, err := d.LoadValueWithExtra(key)
 	if err != nil {
@@ -742,8 +860,8 @@ func (d *AugmentedDictionary) LoadValueAndDelete(key *Cell) (*Slice, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, _, err := d.decomposeValueExtra(valueExtra)
-	if err != nil {
+	value := new(Slice)
+	if err = d.decomposeValueExtraInto(valueExtra, value, nil); err != nil {
 		return nil, err
 	}
 	return value, nil
@@ -757,8 +875,158 @@ func (d *AugmentedDictionary) LoadValueExtraAndDelete(key *Cell) (*Slice, *Slice
 	return d.decomposeValueExtra(valueExtra)
 }
 
+// LoadValueAndDeleteByBytesKeyInto removes a byte-backed key and writes its
+// value into caller-owned storage without materializing the key.
+func (d *AugmentedDictionary) LoadValueAndDeleteByBytesKeyInto(key []byte, value *Slice) error {
+	return d.loadValueExtraAndDeleteByBytesKeyInto(key, value, nil)
+}
+
+// LoadValueExtraAndDeleteByBytesKeyInto is LoadValueAndDeleteByBytesKeyInto
+// with the removed leaf augmentation returned separately.
+func (d *AugmentedDictionary) LoadValueExtraAndDeleteByBytesKeyInto(key []byte, value, extra *Slice) error {
+	return d.loadValueExtraAndDeleteByBytesKeyInto(key, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueExtraAndDeleteByBytesKeyInto(key []byte, value, extra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	if d.keySz > maxDictKeyBits {
+		return fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	if uint(len(key))*8 < d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	keyCell := Cell{data: key, bitsSz: uint16(d.keySz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.loadValueExtraAndDeleteByKeySliceInto(&keySlice, value, extra)
+}
+
+// LoadValueAndDeleteBySliceKeyInto removes a key from the first key-size
+// remaining bits without consuming the source slice.
+func (d *AugmentedDictionary) LoadValueAndDeleteBySliceKeyInto(key, value *Slice) error {
+	return d.loadValueExtraAndDeleteBySliceKeyInto(key, value, nil)
+}
+
+// LoadValueExtraAndDeleteBySliceKeyInto is LoadValueAndDeleteBySliceKeyInto
+// with the removed leaf augmentation returned separately.
+func (d *AugmentedDictionary) LoadValueExtraAndDeleteBySliceKeyInto(key, value, extra *Slice) error {
+	return d.loadValueExtraAndDeleteBySliceKeyInto(key, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueExtraAndDeleteBySliceKeyInto(key, value, extra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	keySlice, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return err
+	}
+	return d.loadValueExtraAndDeleteByKeySliceInto(&keySlice, value, extra)
+}
+
+// LoadValueAndDeleteByUintKeyInto removes a zero-extended unsigned key without
+// a big.Int or key-cell allocation.
+func (d *AugmentedDictionary) LoadValueAndDeleteByUintKeyInto(key uint64, value *Slice) error {
+	return d.loadValueExtraAndDeleteByUintKeyInto(key, value, nil)
+}
+
+// LoadValueExtraAndDeleteByUintKeyInto is LoadValueAndDeleteByUintKeyInto with
+// the removed leaf augmentation returned separately.
+func (d *AugmentedDictionary) LoadValueExtraAndDeleteByUintKeyInto(key uint64, value, extra *Slice) error {
+	return d.loadValueExtraAndDeleteByUintKeyInto(key, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueExtraAndDeleteByUintKeyInto(key uint64, value, extra *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+
+	var keyBuilder Builder
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
+		return err
+	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.loadValueExtraAndDeleteByKeySliceInto(&keySlice, value, extra)
+}
+
+func (d *AugmentedDictionary) loadValueExtraAndDeleteByKeySliceInto(key, value, extra *Slice) error {
+	if value == extra && extra != nil {
+		return fmt.Errorf("value and extra destinations must be distinct")
+	}
+	if err := d.ensureWritable(); err != nil {
+		return err
+	}
+	valueExtra, changed, err := d.lookupDeleteWithExtraSlice(key)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return ErrNoSuchKeyInDict
+	}
+	return d.decomposeValueExtraInto(&valueExtra, value, extra)
+}
+
 func (d *AugmentedDictionary) Delete(key *Cell) error {
 	_, _, err := d.lookupDeleteWithExtra(key)
+	return err
+}
+
+// DeleteByBytesKey removes a key using the first key-size bits of a big-endian
+// byte slice without materializing a key cell. An absent key is a no-op, as it
+// is for Delete.
+func (d *AugmentedDictionary) DeleteByBytesKey(key []byte) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	if d.keySz > maxDictKeyBits {
+		return fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	if uint(len(key))*8 < d.keySz {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	keyCell := Cell{data: key, bitsSz: uint16(d.keySz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.deleteByKeySlice(&keySlice)
+}
+
+// DeleteBySliceKey removes a key using the first key-size remaining bits
+// without consuming the source slice.
+func (d *AugmentedDictionary) DeleteBySliceKey(key *Slice) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	keySlice, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return err
+	}
+	return d.deleteByKeySlice(&keySlice)
+}
+
+// DeleteByUintKey removes a zero-extended unsigned key without a big.Int or
+// key-cell allocation.
+func (d *AugmentedDictionary) DeleteByUintKey(key uint64) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+
+	var keyBuilder Builder
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
+		return err
+	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return d.deleteByKeySlice(&keySlice)
+}
+
+func (d *AugmentedDictionary) deleteByKeySlice(key *Slice) error {
+	if err := d.ensureWritable(); err != nil {
+		return err
+	}
+	_, _, err := d.lookupDeleteWithExtraSlice(key)
 	return err
 }
 
@@ -800,9 +1068,80 @@ func (d *AugmentedDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode
 	return d.setBuilderWithModeSlice(&keySlice, value, mode)
 }
 
+// SetBuilderByBytesKey stores a value using the first key-size bits of a
+// big-endian byte slice without materializing a key cell.
+func (d *AugmentedDictionary) SetBuilderByBytesKey(key []byte, value *Builder) error {
+	_, err := d.SetBuilderByBytesKeyWithMode(key, value, DictSetModeSet)
+	return err
+}
+
+// SetBuilderByBytesKeyWithMode is SetBuilderWithMode for a byte-backed key.
+func (d *AugmentedDictionary) SetBuilderByBytesKeyWithMode(key []byte, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value builder is nil")
+	}
+	if d.keySz > maxDictKeyBits {
+		return false, fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	if uint(len(key))*8 < d.keySz {
+		return false, fmt.Errorf("incorrect key size")
+	}
+
+	keyCell := Cell{data: key, bitsSz: uint16(d.keySz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	if err := d.ensureWritable(); err != nil {
+		return false, err
+	}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
+
+// SetBuilderBySliceKeyWithMode stores a value using the first key-size
+// remaining bits without consuming the source slice.
+func (d *AugmentedDictionary) SetBuilderBySliceKeyWithMode(key *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value builder is nil")
+	}
+	keySlice, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return false, err
+	}
+	if err = d.ensureWritable(); err != nil {
+		return false, err
+	}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
+
+// SetBuilderByUintKeyWithMode stores a value under a zero-extended unsigned
+// key without a big.Int or key-cell allocation.
+func (d *AugmentedDictionary) SetBuilderByUintKeyWithMode(key uint64, value *Builder, mode DictSetMode) (bool, error) {
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if value == nil {
+		return false, fmt.Errorf("value builder is nil")
+	}
+
+	var keyBuilder Builder
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
+		return false, err
+	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	if err := d.ensureWritable(); err != nil {
+		return false, err
+	}
+	return d.setBuilderWithModeSlice(&keySlice, value, mode)
+}
+
 func (d *AugmentedDictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
 	var state augmentedMutationState
-	newRoot, rootExtra, changed, err := d.set(d.root, keySlice, d.keySz, value, mode, &state)
+	newRoot, rootExtra, changed, err := d.set(d.root, d.root.Trace(), keySlice, d.keySz, value, mode, &state)
 	if err != nil {
 		return false, err
 	}
@@ -1011,27 +1350,31 @@ func (d *AugmentedDictionary) lookupDeleteWithExtra(key *Cell) (*Slice, bool, er
 	if err := key.BeginParseInto(&keySlice); err != nil {
 		return nil, false, fmt.Errorf("failed to load key: %w", err)
 	}
-	return d.lookupDeleteWithExtraSlice(&keySlice)
+	removed, changed, err := d.lookupDeleteWithExtraSlice(&keySlice)
+	if err != nil || !changed {
+		return nil, changed, err
+	}
+	return &removed, true, nil
 }
 
-func (d *AugmentedDictionary) lookupDeleteWithExtraSlice(keySlice *Slice) (*Slice, bool, error) {
+func (d *AugmentedDictionary) lookupDeleteWithExtraSlice(keySlice *Slice) (Slice, bool, error) {
 	var state augmentedMutationState
-	newRoot, rootExtra, removed, changed, err := d.delete(d.root, keySlice, d.keySz, &state)
+	newRoot, rootExtra, removed, changed, err := d.delete(d.root, d.root.Trace(), keySlice, d.keySz, &state)
 	if err != nil {
-		return nil, false, err
+		return Slice{}, false, err
 	}
 	if !changed {
-		return nil, false, nil
+		return Slice{}, false, nil
 	}
 	var rootExtraCell *Cell
 	if newRoot != nil {
 		rootExtraCell, err = rootExtra.ToCell()
 		if err != nil {
-			return nil, false, err
+			return Slice{}, false, err
 		}
 	}
 	if err = d.setRootWithExtra(newRoot, rootExtraCell); err != nil {
-		return nil, false, err
+		return Slice{}, false, err
 	}
 	return removed, true, nil
 }
@@ -1071,7 +1414,7 @@ func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {
 	return nil
 }
 
-func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode, state *augmentedMutationState) (*Cell, Slice, bool, error) {
+func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode, state *augmentedMutationState) (*Cell, Slice, bool, error) {
 	if branch == nil {
 		if mode == DictSetModeReplace {
 			return nil, Slice{}, false, nil
@@ -1080,7 +1423,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		return leaf, leafExtra, err == nil, err
 	}
 
-	node, err := parseFixedDictNode(branch, keyOffset)
+	node, err := parseFixedDictNodeWithTrace(branch, keyOffset, trace)
 	if err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to load branch: %w", err)
 	}
@@ -1108,13 +1451,13 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		}
 
 		refIdx := int(pfx.MustLoadUInt(1))
-		ref, err := node.ref(refIdx)
+		ref, refTrace, err := node.refAndTrace(refIdx)
 		if err != nil {
 			return nil, Slice{}, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 		}
 
 		nextKeyOffset := keyOffset - (bitsMatches + 1)
-		ref, refExtra, changed, err := d.set(ref, pfx, nextKeyOffset, value, mode, state)
+		ref, refExtra, changed, err := d.set(ref, refTrace, pfx, nextKeyOffset, value, mode, state)
 		if err != nil {
 			return nil, Slice{}, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 		}
@@ -1126,22 +1469,17 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 			return nil, Slice{}, false, fmt.Errorf("set produced nil child")
 		}
 
-		left, err := node.ref(0)
+		other, otherTrace, err := node.refAndTrace(refIdx ^ 1)
 		if err != nil {
 			return nil, Slice{}, false, err
 		}
-		right, err := node.ref(1)
+		otherExtra, err := extractAugmentedNodeExtraViewWithTraceScratch(
+			other, otherTrace, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 		if err != nil {
 			return nil, Slice{}, false, err
 		}
-		other, err := node.ref(refIdx ^ 1)
-		if err != nil {
-			return nil, Slice{}, false, err
-		}
-		otherExtra, err := extractAugmentedNodeExtraViewScratch(other, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
-		if err != nil {
-			return nil, Slice{}, false, err
-		}
+		other = other.WithTrace(otherTrace)
+		left, right := other, other
 		leftExtra, rightExtra := otherExtra, otherExtra
 		if refIdx == 0 {
 			left = ref
@@ -1166,7 +1504,7 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 	}
 
 	oldChild := BeginCell().SetTrace(d.trace)
-	if err = storeDictLabel(oldChild, labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
+	if err = storeDictLabel(oldChild, &labelRemainder, keyOffset-(bitsMatches+1)); err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to store old child label: %w", err)
 	}
 	node.loader.ToBuilderInto(&state.extra)
@@ -1191,113 +1529,107 @@ func (d *AugmentedDictionary) set(branch *Cell, pfx *Slice, keyOffset uint, valu
 		leftExtra, rightExtra = rightExtra, leftExtra
 	}
 
-	newBranch, branchExtra, err := d.storeForkWithExtraSlices(prefixLabel, left, &leftExtra, right, &rightExtra, keyOffset, state)
+	newBranch, branchExtra, err := d.storeForkWithExtraSlices(&prefixLabel, left, &leftExtra, right, &rightExtra, keyOffset, state)
 	return newBranch, branchExtra, err == nil, err
 }
 
-func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, *Slice, bool, error) {
+func (d *AugmentedDictionary) delete(branch *Cell, trace *Trace, pfx *Slice, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, Slice, bool, error) {
 	if branch == nil {
-		return nil, Slice{}, nil, false, nil
+		return nil, Slice{}, Slice{}, false, nil
 	}
 
-	node, err := parseFixedDictNode(branch, keyOffset)
+	node, err := parseFixedDictNodeWithTrace(branch, keyOffset, trace)
 	if err != nil {
-		return nil, Slice{}, nil, false, fmt.Errorf("failed to load branch: %w", err)
+		return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to load branch: %w", err)
 	}
 	if err = node.rejectSpecial("augmented dict"); err != nil {
-		return nil, Slice{}, nil, false, err
+		return nil, Slice{}, Slice{}, false, err
 	}
 	if err = node.validateForkShape(keyOffset, true); err != nil {
-		return nil, Slice{}, nil, false, err
+		return nil, Slice{}, Slice{}, false, err
 	}
 	sz, kPart := node.labelLen, node.label
 
 	label := kPart
 	bitsMatches, err := commonSlicePrefix(&label, pfx, sz)
 	if err != nil {
-		return nil, Slice{}, nil, false, fmt.Errorf("failed to match key prefix: %w", err)
+		return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to match key prefix: %w", err)
 	}
 	if bitsMatches < sz {
-		return branch, Slice{}, nil, false, nil
+		return branch, Slice{}, Slice{}, false, nil
 	}
 	if err = pfx.SkipBits(sz); err != nil {
-		return nil, Slice{}, nil, false, fmt.Errorf("failed to consume key prefix: %w", err)
+		return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to consume key prefix: %w", err)
 	}
 
 	if pfx.BitsLeft() == 0 {
-		removed := node.loader
-		return nil, Slice{}, &removed, true, nil
+		return nil, Slice{}, node.loader, true, nil
 	}
 
 	refIdx := int(pfx.MustLoadUInt(1))
-	ref, err := node.ref(refIdx)
+	ref, refTrace, err := node.refAndTrace(refIdx)
 	if err != nil {
-		return nil, Slice{}, nil, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
+		return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to peek %d ref: %w", refIdx, err)
 	}
 
 	nextKeyOffset := keyOffset - (bitsMatches + 1)
-	ref, refExtra, removed, changed, err := d.delete(ref, pfx, nextKeyOffset, state)
+	ref, refExtra, removed, changed, err := d.delete(ref, refTrace, pfx, nextKeyOffset, state)
 	if err != nil {
-		return nil, Slice{}, nil, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
+		return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 	}
 	if !changed {
-		return branch, Slice{}, nil, false, nil
+		return branch, Slice{}, Slice{}, false, nil
 	}
 
 	if ref == nil {
 		otherIdx := refIdx ^ 1
-		otherRef, err := node.ref(otherIdx)
+		otherRef, otherTrace, err := node.refAndTrace(otherIdx)
 		if err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to peek neighbour ref %d: %w", otherIdx, err)
 		}
 
-		otherNode, err := parseFixedDictNode(otherRef, nextKeyOffset)
+		otherNode, err := parseFixedDictNodeWithTrace(otherRef, nextKeyOffset, otherTrace)
 		if err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
 		}
 		if err = otherNode.rejectSpecial("augmented dict"); err != nil {
-			return nil, Slice{}, nil, false, err
+			return nil, Slice{}, Slice{}, false, err
 		}
 		otherExtra, err := augmentedNodeExtraViewScratch(otherNode, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 		if err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to extract neighbour extra: %w", err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to extract neighbour extra: %w", err)
 		}
 
 		var mergedLabel Builder
 		if err = mergedLabel.storeSliceFromSlice(&kPart, sz); err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to append base label: %w", err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to append base label: %w", err)
 		}
 		if err = mergedLabel.StoreUInt(uint64(otherIdx), 1); err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to append neighbour edge bit: %w", err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to append neighbour edge bit: %w", err)
 		}
 		otherLabel := otherNode.labelSlice()
 		if err = mergedLabel.storeSliceFromSlice(&otherLabel, otherNode.labelLen); err != nil {
-			return nil, Slice{}, nil, false, fmt.Errorf("failed to append neighbour label: %w", err)
+			return nil, Slice{}, Slice{}, false, fmt.Errorf("failed to append neighbour label: %w", err)
 		}
 		otherNode.loader.ToBuilderInto(&state.extra)
 		merged, err := d.storeNode(builderSliceView(&mergedLabel), &state.extra, keyOffset)
 		if err != nil {
-			return nil, Slice{}, nil, false, err
+			return nil, Slice{}, Slice{}, false, err
 		}
 		return merged, otherExtra, removed, true, nil
 	}
 
-	left, err := node.ref(0)
+	otherRef, otherTrace, err := node.refAndTrace(refIdx ^ 1)
 	if err != nil {
-		return nil, Slice{}, nil, false, err
+		return nil, Slice{}, Slice{}, false, err
 	}
-	right, err := node.ref(1)
+	otherExtra, err := extractAugmentedNodeExtraViewWithTraceScratch(
+		otherRef, otherTrace, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
 	if err != nil {
-		return nil, Slice{}, nil, false, err
+		return nil, Slice{}, Slice{}, false, err
 	}
-	otherRef, err := node.ref(refIdx ^ 1)
-	if err != nil {
-		return nil, Slice{}, nil, false, err
-	}
-	otherExtra, err := extractAugmentedNodeExtraViewScratch(otherRef, nextKeyOffset, d.aug.SkipExtra, &state.skipScratch)
-	if err != nil {
-		return nil, Slice{}, nil, false, err
-	}
+	otherRef = otherRef.WithTrace(otherTrace)
+	left, right := otherRef, otherRef
 	leftExtra, rightExtra := otherExtra, otherExtra
 	if refIdx == 0 {
 		left = ref
@@ -1309,7 +1641,7 @@ func (d *AugmentedDictionary) delete(branch *Cell, pfx *Slice, keyOffset uint, s
 
 	newBranch, branchExtra, err := d.storeForkWithExtraSlices(&kPart, left, &leftExtra, right, &rightExtra, keyOffset, state)
 	if err != nil {
-		return nil, Slice{}, nil, false, err
+		return nil, Slice{}, Slice{}, false, err
 	}
 	return newBranch, branchExtra, removed, true, nil
 }
@@ -1717,8 +2049,8 @@ func captureConsumedPrefix(loader *Slice, consume func(*Slice) error) (*Cell, er
 	beforeBits := loader.BitsLeft()
 	beforeRefs := loader.RefsNum()
 
-	tmp := loader.Copy()
-	if err := consume(tmp); err != nil {
+	tmp := *loader
+	if err := consume(&tmp); err != nil {
 		return nil, err
 	}
 

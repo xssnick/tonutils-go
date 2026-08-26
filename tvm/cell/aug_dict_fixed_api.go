@@ -31,6 +31,7 @@ type AugDictForeachFunc func(value, extra *Slice, key *Cell) (bool, error)
 type AugDictBorrowedForeachFunc func(item AugDictItemView) error
 type AugDictFilterFunc func(value, extra *Slice, key *Cell) (DictFilterAction, error)
 type AugDictTraverseFunc func(keyPrefix *Cell, extra *Slice, value *Slice) (int, error)
+type AugDictBorrowedTraverseFunc func(keyPrefix, extra, value *Slice) (int, error)
 
 func newAugDictIterator(raw *DictIterator, dict *AugmentedDictionary) *AugDictIterator {
 	return &AugDictIterator{raw: raw, dict: dict}
@@ -526,6 +527,161 @@ func (d *AugmentedDictionary) TraverseExtra(fn AugDictTraverseFunc) (*Slice, *Sl
 		return nil, nil, nil
 	}
 	return d.traverseExtraNode(d.root, d.keySz, BeginCell(), fn)
+}
+
+// TraverseExtraBorrowed walks the same depth-first search as TraverseExtra
+// without materializing a key cell, extra cell, or traced child cell at every
+// visited node. keyPrefix, extra, and value are synchronous borrowed views:
+// they may be parsed during fn but must not be retained after it returns. A
+// retained key must be materialized through keyPrefix.ToCell or BaseCell;
+// RawCell exposes traversal scratch and must not be used.
+//
+// Fork callbacks receive a nil value and accept the same directives as
+// TraverseExtra: 0 stops the subtree, 1/2 descend left/right, and 5/6 visit
+// right-first/left-first. At a leaf, a positive result stops the whole walk.
+func (d *AugmentedDictionary) TraverseExtraBorrowed(fn AugDictBorrowedTraverseFunc) error {
+	if d == nil || d.root == nil || fn == nil {
+		return nil
+	}
+
+	state := augmentedDictBorrowedTraverseState{
+		dict: d,
+		fn:   fn,
+	}
+	_, err := traverseAugmentedDictBorrowedNode(
+		d.root,
+		CombineTraces(d.root.Trace(), d.trace),
+		d.keySz,
+		&state,
+	)
+	return err
+}
+
+type augmentedDictBorrowedTraverseState struct {
+	dict *AugmentedDictionary
+	fn   AugDictBorrowedTraverseFunc
+
+	prefix  Builder
+	key     Slice
+	keyCell Cell
+	extra   Slice
+	value   Slice
+
+	// skipScratch is the sole destination whose address reaches the opaque
+	// augmentation skipper. Keeping it in traversal state prevents one escape
+	// for every fork visited by the walk.
+	skipScratch Slice
+}
+
+func traverseAugmentedDictBorrowedNode(branch *Cell, trace *Trace, remaining uint, state *augmentedDictBorrowedTraverseState) (bool, error) {
+	if branch == nil {
+		return false, nil
+	}
+
+	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
+	if err != nil {
+		return false, err
+	}
+	if activeTrace := node.loader.Trace(); activeTrace != nil {
+		if err = activeTrace.PendingError(); err != nil {
+			return false, err
+		}
+	}
+	if err = node.rejectSpecial("augmented dict"); err != nil {
+		return false, err
+	}
+
+	savedPrefix := state.prefix.BitsUsed()
+	label := node.labelSlice()
+	if err = state.prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
+		return false, err
+	}
+	defer state.prefix.truncateBits(savedPrefix)
+
+	if node.isLeaf(remaining) {
+		state.value = node.loader
+		state.extra = node.loader
+		if err = state.dict.skipExtra(&state.value); err != nil {
+			return false, err
+		}
+		state.extra.bitEnd = state.value.bitStart
+		state.extra.refEnd = state.value.refStart
+
+		directive, err := state.fn(state.keyView(), &state.extra, &state.value)
+		if err != nil {
+			return false, err
+		}
+		return directive > 0, nil
+	}
+
+	left, leftTrace, err := node.refAndTrace(0)
+	if err != nil {
+		return false, err
+	}
+	right, rightTrace, err := node.refAndTrace(1)
+	if err != nil {
+		return false, err
+	}
+	state.extra, err = augmentedNodeExtraViewScratch(node, remaining, state.dict.aug.SkipExtra, &state.skipScratch)
+	if err != nil {
+		return false, err
+	}
+
+	directive, err := state.fn(state.keyView(), &state.extra, nil)
+	if err != nil {
+		return false, err
+	}
+	if directive < 0 || directive&3 == 3 {
+		return false, fmt.Errorf("invalid traverse directive")
+	}
+	if directive&3 == 0 {
+		return false, nil
+	}
+
+	afterLabel := state.prefix.BitsUsed()
+	childRemaining := node.nextKeyBits(remaining)
+
+	switch directive {
+	case 1:
+		return traverseAugmentedDictBorrowedChild(left, leftTrace, childRemaining, afterLabel, 0, state)
+	case 2:
+		return traverseAugmentedDictBorrowedChild(right, rightTrace, childRemaining, afterLabel, 1, state)
+	case 5:
+		found, err := traverseAugmentedDictBorrowedChild(right, rightTrace, childRemaining, afterLabel, 1, state)
+		if err != nil || found {
+			return found, err
+		}
+		return traverseAugmentedDictBorrowedChild(left, leftTrace, childRemaining, afterLabel, 0, state)
+	case 6:
+		found, err := traverseAugmentedDictBorrowedChild(left, leftTrace, childRemaining, afterLabel, 0, state)
+		if err != nil || found {
+			return found, err
+		}
+		return traverseAugmentedDictBorrowedChild(right, rightTrace, childRemaining, afterLabel, 1, state)
+	default:
+		return false, fmt.Errorf("invalid traverse directive")
+	}
+}
+
+func traverseAugmentedDictBorrowedChild(child *Cell, trace *Trace, remaining, prefixBits uint, bit uint64, state *augmentedDictBorrowedTraverseState) (bool, error) {
+	state.prefix.truncateBits(prefixBits)
+	if err := state.prefix.StoreUInt(bit, 1); err != nil {
+		return false, err
+	}
+	return traverseAugmentedDictBorrowedNode(child, trace, remaining, state)
+}
+
+func (s *augmentedDictBorrowedTraverseState) keyView() *Slice {
+	s.keyCell = Cell{
+		data:   s.prefix.data[:s.prefix.usedBytes()],
+		bitsSz: uint16(s.prefix.bitsSz),
+	}
+	s.key = Slice{
+		cell:              &s.keyCell,
+		bitEnd:            s.keyCell.bitsSz,
+		forceCopyOnToCell: true,
+	}
+	return &s.key
 }
 
 func (d *AugmentedDictionary) traverseExtraNode(branch *Cell, remaining uint, prefix *Builder, fn AugDictTraverseFunc) (*Slice, *Slice, error) {

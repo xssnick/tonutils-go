@@ -18,6 +18,22 @@ type AugmentedEntry struct {
 	Mode  DictSetMode
 }
 
+// AugmentedBytesEntry is one raw big-endian key update for SetManyByBytes.
+// The first dictionary-key-size bits of Key are significant.
+type AugmentedBytesEntry struct {
+	Key   []byte
+	Value *Cell
+	Mode  DictSetMode
+}
+
+// AugmentedUintEntry is one zero-extended unsigned-key update for
+// SetManyByUint.
+type AugmentedUintEntry struct {
+	Key   uint64
+	Value *Cell
+	Mode  DictSetMode
+}
+
 // SetMany applies a batch of add-or-replace updates in a single descent.
 //
 // Repeated Set walks a full root-to-leaf path per key and recombines the
@@ -44,6 +60,82 @@ func (d *AugmentedDictionary) SetMany(entries []AugmentedEntry, parallelism ...i
 		return err
 	}
 	_, err = d.setManyEntries(entries, nil, workers, false)
+	return err
+}
+
+// SetManyByBytes applies a batch without allocating, finalizing, and hashing a
+// key cell for every entry. It otherwise has the same mode and bounded
+// parallelism semantics as SetMany.
+func (d *AugmentedDictionary) SetManyByBytes(entries []AugmentedBytesEntry, parallelism ...int) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if err = d.ensureWritable(); err != nil {
+		return err
+	}
+
+	items := make([]augBulkItem, len(entries))
+	keyCells := make([]Cell, len(entries))
+	values := make([]Builder, len(entries))
+	for i := range entries {
+		entry := &entries[i]
+		if err = initFixedDictBytesKeySlice(entry.Key, d.keySz, &keyCells[i], &items[i].key); err != nil {
+			return fmt.Errorf("invalid key at entry %d: %w", i, err)
+		}
+		if entry.Value == nil {
+			return fmt.Errorf("value is nil at entry %d", i)
+		}
+		entry.Value.ToBuilderInto(&values[i])
+		items[i].value = &values[i]
+		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
+	}
+	_, err = d.setManyItems(items, nil, workers, false)
+	return err
+}
+
+// SetManyByUint is SetManyByBytes for zero-extended uint64 keys. It avoids the
+// big.Int path even when the dictionary key size exceeds 64 bits.
+func (d *AugmentedDictionary) SetManyByUint(entries []AugmentedUintEntry, parallelism ...int) error {
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	workers, err := augmentedBulkParallelism(parallelism)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	if err = d.ensureWritable(); err != nil {
+		return err
+	}
+
+	items := make([]augBulkItem, len(entries))
+	keyBuilders := make([]Builder, len(entries))
+	keyCells := make([]Cell, len(entries))
+	values := make([]Builder, len(entries))
+	for i := range entries {
+		entry := &entries[i]
+		if err = initFixedDictUintKeySlice(
+			entry.Key, d.keySz, &keyBuilders[i], &keyCells[i], &items[i].key,
+		); err != nil {
+			return fmt.Errorf("invalid key at entry %d: %w", i, err)
+		}
+		if entry.Value == nil {
+			return fmt.Errorf("value is nil at entry %d", i)
+		}
+		entry.Value.ToBuilderInto(&values[i])
+		items[i].value = &values[i]
+		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
+	}
+	_, err = d.setManyItems(items, nil, workers, false)
 	return err
 }
 
@@ -144,8 +236,8 @@ func (d *AugmentedDictionary) setManyEntries(
 	if err := d.ensureWritable(); err != nil {
 		return nil, err
 	}
-
 	items := make([]augBulkItem, len(entries))
+	values := make([]Builder, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		if entry.Key == nil || entry.Key.BitsSize() != d.keySz {
@@ -157,12 +249,26 @@ func (d *AugmentedDictionary) setManyEntries(
 		if err := entry.Key.BeginParseInto(&items[i].key); err != nil {
 			return nil, fmt.Errorf("failed to load key at entry %d: %w", i, err)
 		}
-		items[i].value = entry.Value.ToBuilder()
-		items[i].mode = entry.Mode
-		if items[i].mode == 0 {
-			items[i].mode = DictSetModeSet
-		}
+		entry.Value.ToBuilderInto(&values[i])
+		items[i].value = &values[i]
+		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
 	}
+	return d.setManyItems(items, resolver, parallelism, captureDiff)
+}
+
+func normalizedAugmentedEntryMode(mode DictSetMode) DictSetMode {
+	if mode == 0 {
+		return DictSetModeSet
+	}
+	return mode
+}
+
+func (d *AugmentedDictionary) setManyItems(
+	items []augBulkItem,
+	resolver *augBulkPathResolver,
+	parallelism int,
+	captureDiff bool,
+) (*AugmentedDictionaryDiff, error) {
 	sort.Slice(items, func(i, j int) bool {
 		return compareKeySlices(&items[i].key, &items[j].key) < 0
 	})
@@ -516,19 +622,18 @@ func (d *AugmentedDictionary) setMany(
 	// The batch follows the label only as far as its least-matching member:
 	// past that bit the node has to fork, and the rest of the label moves down
 	// into the old child.
-	matched := sz
-	for i := range items {
-		labelView, keyView := label, items[i].key
-		shared, err := commonSlicePrefix(&labelView, &keyView, sz)
+	labelView, firstKey := label, items[0].key
+	matched, err := commonSlicePrefix(&labelView, &firstKey, sz)
+	if err != nil {
+		return nil, Slice{}, nil, fmt.Errorf("failed to match key prefix: %w", err)
+	}
+	if matched != 0 && len(items) > 1 {
+		labelView, lastKey := label, items[len(items)-1].key
+		lastMatched, err := commonSlicePrefix(&labelView, &lastKey, matched)
 		if err != nil {
 			return nil, Slice{}, nil, fmt.Errorf("failed to match key prefix: %w", err)
 		}
-		if shared < matched {
-			matched = shared
-			if matched == 0 {
-				break
-			}
-		}
+		matched = lastMatched
 	}
 
 	if matched == sz {
@@ -571,17 +676,8 @@ func (d *AugmentedDictionary) setMany(
 		// so guarding the right one closes the pair. Same shape as deleteMany
 		// (aug_dict_bulk_delete.go:129).
 		if len(right) != 0 && state.shouldFork(len(left), len(items)) {
-			leftResult, rightResult := runAugmentedBranches(
-				state,
-				len(left),
-				len(items),
-				func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-					return d.setManyChild(&node, 0, left, childOffset, branchState, leftReplay)
-				},
-				func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-					return d.setManyChild(&node, 1, right, childOffset, branchState, rightReplay)
-				},
-			)
+			leftResult, rightResult := d.setManyChildrenParallel(
+				node, left, right, childOffset, state, leftReplay, rightReplay)
 			if leftResult.err != nil {
 				return nil, Slice{}, nil, leftResult.err
 			}
@@ -630,7 +726,7 @@ func (d *AugmentedDictionary) setMany(
 	childOffset := keyOffset - matched - 1
 
 	oldChild := BeginCell().SetTrace(d.trace)
-	if err = storeDictLabel(oldChild, labelRemainder, childOffset); err != nil {
+	if err = storeDictLabel(oldChild, &labelRemainder, childOffset); err != nil {
 		return nil, Slice{}, nil, fmt.Errorf("failed to store old child label: %w", err)
 	}
 	node.loader.ToBuilderInto(&state.extra)
@@ -656,20 +752,10 @@ func (d *AugmentedDictionary) setMany(
 	if err != nil {
 		return nil, Slice{}, nil, err
 	}
-	sides := [2][]augBulkItem{left, right}
 
 	var children [2]*Cell
 	var extras [2]Slice
 	var replays [2]*augDiffReplayNode
-	buildSide := func(bit int, batch []augBulkItem, branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-		if uint8(bit) == labelBit {
-			if len(batch) == 0 {
-				return oldChildCell, oldExtra, oldReplay, nil
-			}
-			return d.setMany(oldChildCell, oldChildCell.Trace(), batch, childOffset, branchState, oldReplay)
-		}
-		return d.buildMany(batch, childOffset, branchState)
-	}
 	// An empty right half is not worth a goroutine: setManyChild returns the
 	// old child untouched for it, so forking would hand one of the workers the
 	// left side needs to a branch with nothing to do. shouldFork already rules
@@ -677,17 +763,8 @@ func (d *AugmentedDictionary) setMany(
 	// so guarding the right one closes the pair. Same shape as deleteMany
 	// (aug_dict_bulk_delete.go:129).
 	if len(right) != 0 && state.shouldFork(len(left), len(items)) {
-		leftResult, rightResult := runAugmentedBranches(
-			state,
-			len(left),
-			len(items),
-			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-				return buildSide(0, left, branchState)
-			},
-			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-				return buildSide(1, right, branchState)
-			},
-		)
+		leftResult, rightResult := d.setManyDivergentSidesParallel(
+			labelBit, left, right, childOffset, state, oldChildCell, oldExtra, oldReplay)
 		if leftResult.err != nil {
 			return nil, Slice{}, nil, leftResult.err
 		}
@@ -698,16 +775,20 @@ func (d *AugmentedDictionary) setMany(
 		children[1], extras[1] = rightResult.cell, rightResult.extra
 		replays[0], replays[1] = leftResult.replay, rightResult.replay
 	} else {
-		for bit, batch := range sides {
-			children[bit], extras[bit], replays[bit], err = buildSide(bit, batch, state)
-			if err != nil {
-				return nil, Slice{}, nil, err
-			}
+		children[0], extras[0], replays[0], err = d.setManyDivergentSide(
+			0, labelBit, left, childOffset, state, oldChildCell, oldExtra, oldReplay)
+		if err != nil {
+			return nil, Slice{}, nil, err
+		}
+		children[1], extras[1], replays[1], err = d.setManyDivergentSide(
+			1, labelBit, right, childOffset, state, oldChildCell, oldExtra, oldReplay)
+		if err != nil {
+			return nil, Slice{}, nil, err
 		}
 	}
 
 	fork, forkExtra, err := d.storeForkWithExtraSlices(
-		prefixLabel, children[0], &extras[0], children[1], &extras[1], keyOffset, state)
+		&prefixLabel, children[0], &extras[0], children[1], &extras[1], keyOffset, state)
 	if err != nil {
 		return nil, Slice{}, nil, err
 	}
@@ -715,6 +796,67 @@ func (d *AugmentedDictionary) setMany(
 		return fork, forkExtra, computedAugDiffReplay(fork, keyOffset, replays[0], replays[1]), nil
 	}
 	return fork, forkExtra, nil, nil
+}
+
+func (d *AugmentedDictionary) setManyChildrenParallel(
+	node fixedDictNode,
+	left, right []augBulkItem,
+	keyOffset uint,
+	state *augmentedMutationState,
+	leftReplay, rightReplay *augDiffReplayNode,
+) (augmentedBranchResult, augmentedBranchResult) {
+	return runAugmentedBranches(
+		state,
+		len(left),
+		len(left)+len(right),
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.setManyChild(&node, 0, left, keyOffset, branchState, leftReplay)
+		},
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.setManyChild(&node, 1, right, keyOffset, branchState, rightReplay)
+		},
+	)
+}
+
+func (d *AugmentedDictionary) setManyDivergentSidesParallel(
+	labelBit uint8,
+	left, right []augBulkItem,
+	keyOffset uint,
+	state *augmentedMutationState,
+	oldChild *Cell,
+	oldExtra Slice,
+	oldReplay *augDiffReplayNode,
+) (augmentedBranchResult, augmentedBranchResult) {
+	return runAugmentedBranches(
+		state,
+		len(left),
+		len(left)+len(right),
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.setManyDivergentSide(0, labelBit, left, keyOffset, branchState, oldChild, oldExtra, oldReplay)
+		},
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.setManyDivergentSide(1, labelBit, right, keyOffset, branchState, oldChild, oldExtra, oldReplay)
+		},
+	)
+}
+
+func (d *AugmentedDictionary) setManyDivergentSide(
+	bit uint8,
+	labelBit uint8,
+	items []augBulkItem,
+	keyOffset uint,
+	state *augmentedMutationState,
+	oldChild *Cell,
+	oldExtra Slice,
+	oldReplay *augDiffReplayNode,
+) (*Cell, Slice, *augDiffReplayNode, error) {
+	if bit != labelBit {
+		return d.buildMany(items, keyOffset, state)
+	}
+	if len(items) == 0 {
+		return oldChild, oldExtra, oldReplay, nil
+	}
+	return d.setMany(oldChild, oldChild.Trace(), items, keyOffset, state, oldReplay)
 }
 
 // setManyChild descends into one side of an existing fork, leaving it untouched
@@ -771,19 +913,10 @@ func (d *AugmentedDictionary) buildMany(
 
 	// Distinct keys share less than the whole remaining space, so the common
 	// prefix always leaves a bit to fork on and both sides come out non-empty.
-	shared := keyOffset
-	for i := 1; i < len(items); i++ {
-		first, other := items[0].key, items[i].key
-		common, err := commonSlicePrefix(&first, &other, keyOffset)
-		if err != nil {
-			return nil, Slice{}, nil, fmt.Errorf("failed to match batch prefix: %w", err)
-		}
-		if common < shared {
-			shared = common
-			if shared == 0 {
-				break
-			}
-		}
+	first, last := items[0].key, items[len(items)-1].key
+	shared, err := commonSlicePrefix(&first, &last, keyOffset)
+	if err != nil {
+		return nil, Slice{}, nil, fmt.Errorf("failed to match batch prefix: %w", err)
 	}
 
 	label := items[0].key
@@ -803,17 +936,7 @@ func (d *AugmentedDictionary) buildMany(
 	var leftExtra, rightExtra Slice
 	var leftReplay, rightReplay *augDiffReplayNode
 	if state.shouldFork(len(left), len(items)) {
-		leftResult, rightResult := runAugmentedBranches(
-			state,
-			len(left),
-			len(items),
-			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-				return d.buildMany(left, childOffset, branchState)
-			},
-			func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
-				return d.buildMany(right, childOffset, branchState)
-			},
-		)
+		leftResult, rightResult := d.buildManyParallel(left, right, childOffset, state)
 		if leftResult.err != nil {
 			return nil, Slice{}, nil, leftResult.err
 		}
@@ -842,6 +965,24 @@ func (d *AugmentedDictionary) buildMany(
 		return fork, forkExtra, computedAugDiffReplay(fork, keyOffset, leftReplay, rightReplay), nil
 	}
 	return fork, forkExtra, nil, nil
+}
+
+func (d *AugmentedDictionary) buildManyParallel(
+	left, right []augBulkItem,
+	keyOffset uint,
+	state *augmentedMutationState,
+) (augmentedBranchResult, augmentedBranchResult) {
+	return runAugmentedBranches(
+		state,
+		len(left),
+		len(left)+len(right),
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.buildMany(left, keyOffset, branchState)
+		},
+		func(branchState *augmentedMutationState) (*Cell, Slice, *augDiffReplayNode, error) {
+			return d.buildMany(right, keyOffset, branchState)
+		},
+	)
 }
 
 func (d *AugmentedDictionary) storeManyLeaf(

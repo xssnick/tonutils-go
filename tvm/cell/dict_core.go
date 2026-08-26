@@ -5,6 +5,13 @@ import (
 	"math/big"
 )
 
+func combinedCellTrace(cell *Cell, trace *Trace) *Trace {
+	if cell == nil {
+		return nil
+	}
+	return CombineTraces(cell.Trace(), trace)
+}
+
 func initIntKeyBuilder(key *big.Int, bits uint, builder *Builder) {
 	if key == nil {
 		panic(ErrNilBigInt)
@@ -53,6 +60,46 @@ func initIntKeyBuilder(key *big.Int, bits uint, builder *Builder) {
 			carry = nextCarry
 		}
 	}
+}
+
+func initUintKeyBuilder(key uint64, bits uint, builder *Builder) error {
+	if bits > 1023 {
+		return ErrTooBigSize
+	}
+
+	*builder = Builder{}
+	if bits <= 64 {
+		return builder.StoreUInt(key, bits)
+	}
+
+	// StoreUInt accepts widths above 64 through big.Int. A uint key in a wider
+	// dictionary is just zero-extended, so reserve those leading zero bits in
+	// the already-zeroed inline buffer and write the only significant 64 bits.
+	builder.bitsSz = bits - 64
+	return builder.StoreUInt(key, 64)
+}
+
+func initFixedDictBytesKeySlice(key []byte, bits uint, cell *Cell, keySlice *Slice) error {
+	if bits > maxDictKeyBits {
+		return fmt.Errorf("dict key size exceeds %d bits", maxDictKeyBits)
+	}
+	if uint(len(key))*8 < bits {
+		return fmt.Errorf("incorrect key size")
+	}
+
+	*cell = Cell{data: key, bitsSz: uint16(bits)}
+	*keySlice = Slice{cell: cell, bitEnd: cell.bitsSz}
+	return nil
+}
+
+func initFixedDictUintKeySlice(key uint64, bits uint, builder *Builder, cell *Cell, keySlice *Slice) error {
+	if err := initUintKeyBuilder(key, bits, builder); err != nil {
+		return err
+	}
+
+	*cell = Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	*keySlice = Slice{cell: cell, bitEnd: cell.bitsSz}
+	return nil
 }
 
 func (c *Slice) loadMaybeRefCell() (*Cell, bool, error) {
@@ -441,15 +488,15 @@ func (n *fixedDictNode) rebuildNonCanonicalFixedForkWithRef(i int, ref *Cell, re
 	return rebuilt, err == nil, err
 }
 
-func (n fixedDictNode) splitLabel(matched uint) (*Slice, *Slice, error) {
+func (n fixedDictNode) splitLabel(matched uint) (Slice, Slice, error) {
 	remainder := n.label
 	if err := remainder.SkipBits(matched + 1); err != nil {
-		return nil, nil, fmt.Errorf("failed to skip label edge bit: %w", err)
+		return Slice{}, Slice{}, fmt.Errorf("failed to skip label edge bit: %w", err)
 	}
 
 	prefix := n.label
 	prefix.bitEnd = prefix.bitStart + uint16(matched)
-	return &prefix, &remainder, nil
+	return prefix, remainder, nil
 }
 
 // mergedEdgeLabel builds label + edge bit + neighbour label for delete-merge.

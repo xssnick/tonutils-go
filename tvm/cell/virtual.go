@@ -55,20 +55,21 @@ func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
 		return raw
 	}
 
-	vc := &Cell{
-		data:   raw.data,
-		bitsSz: raw.bitsSz,
-		flags:  raw.flags,
-	}
+	x := new(cellWithMeta)
+	vc := &x.c
+	vc.data = raw.data
+	vc.bitsSz = raw.bitsSz
+	vc.flags = raw.flags
 	copy(vc.refs[:], raw.rawRefs())
 	vc.setLevelMask(rawLevelMask.Apply(int(effectiveLevel)))
-	vc.meta = &cellMeta{
+	x.m = cellMeta{
 		viewOf:                raw,
 		lazyLoader:            raw.cellLazyLoader(),
 		trace:                 trace,
 		viewLevel:             effectiveLevel + 1,
 		skipLazyRefValidation: raw.meta != nil && raw.meta.skipLazyRefValidation,
 	}
+	vc.meta = &x.m
 	return vc
 }
 

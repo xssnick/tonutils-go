@@ -8,9 +8,9 @@ import (
 // A fused validated Merkle update.
 //
 // ValidateMerkleUpdate walks the update's source subtree and its destination
-// subtree, building its own Hash-keyed maps; ApplyMerkleUpdate then walks the
+// subtree, building its own exact Hash-keyed indexes; ApplyMerkleUpdate then walks the
 // source again in lockstep with the real parent and the destination again,
-// building two more. Four subtree walks and five 32-byte-keyed maps, where the
+// building two more. Four subtree walks and five 32-byte-keyed indexes, where the
 // second and third walks are re-deriving something the first two already knew:
 // which hashes are boundaries, at which Merkle depth, in which DFS order, and
 // which destination boundary resolves to which source occurrence.
@@ -35,7 +35,7 @@ import (
 //     update does not apply to this parent").
 //   - ApplyTo performs every per-node comparison walkProof performs, against
 //     the same parent cells in the same order, and rebuilds through the same
-//     buildMerkleUpdateCell decisions. What it drops is map lookups, not checks.
+//     buildMerkleUpdateCell decisions. What it drops is index lookups, not checks.
 //
 // See TestPreparedMerkleUpdateDifferential / FuzzPreparedMerkleUpdate, which
 // compare the two paths on accept/reject, error class, output root hash and
@@ -44,10 +44,11 @@ import (
 // more with the update tree itself lazy — the one shape where the capsule's
 // cached update cells could diverge from a re-walk.
 type PreparedMerkleUpdate struct {
-	update     *Cell // the MerkleUpdate special cell, as supplied
-	updateFrom *Cell // ref 0, loaded once
-	updateTo   *Cell // ref 1, loaded once
-	fromHash   Hash  // updateFrom.HashKeyAt(0) — the applicability key
+	update      *Cell // the MerkleUpdate special cell, as supplied
+	updateFrom  *Cell // ref 0, loaded once
+	updateTo    *Cell // ref 1, loaded once
+	fromHash    Hash  // updateFrom.HashKeyAt(0) — the applicability key
+	sourceHints merkleUpdateSourceIndexHints
 
 	src      []preparedSourceStep
 	dst      []preparedDestStep
@@ -81,12 +82,12 @@ type preparedSourceStep struct {
 //   - boundarySlot >= 0: substitute the parent cell in that slot.
 //   - memo >= 0: a rebuildable node; all steps with an equal {hash@max,
 //     merkleDepth} share the slot, which is what buildMerkleUpdateCell's ready
-//     map does and what keeps shared destination subtrees shared.
+//     table does and what keeps shared destination subtrees shared.
 //   - neither: hand the update's own cell back (pruned non-boundary, or
 //     childless).
 //
 // next is the index just past this step's subtree, so a memo hit can skip the
-// subtree the pointer-keyed traversal recorded under it.
+// subtree the pointer-and-Merkle-depth traversal recorded under it.
 type preparedDestStep struct {
 	cell         *Cell
 	merkleDepth  int32
@@ -100,8 +101,8 @@ type preparedDestStep struct {
 	// wrong tree with a correct-looking root, which is the one failure mode
 	// this file may not have.
 	boundary bool
-	// deferred marks a step whose children were not recorded because the
-	// pointer had already been visited. Its memo slot is filled by an earlier
+	// deferred marks a step whose children were not recorded because the same
+	// pointer and Merkle depth had already been visited. Its memo slot is filled by an earlier
 	// step by construction; if it is not, the plan is corrupt and says so
 	// instead of reading a neighbour's steps as its children.
 	deferred bool
@@ -136,10 +137,10 @@ func prepareMerkleUpdate(update *Cell, planned bool) (*PreparedMerkleUpdate, err
 	// later apply is supposed to record.
 	if planned && update.Trace() == nil {
 		srcPlan = &merkleUpdateSourcePlan{}
-		dstPlan = &merkleUpdateDestPlan{memos: map[merkleUpdateVisitKey]int32{}}
+		dstPlan = &merkleUpdateDestPlan{memos: newMerkleUpdateVisitTable[int32](32)}
 	}
 
-	updateFrom, updateTo, err := merkleUpdateVerdict(update, srcPlan, dstPlan)
+	updateFrom, updateTo, sourceHints, err := merkleUpdateVerdict(update, srcPlan, dstPlan)
 	if err != nil {
 		return nil, err
 	}
@@ -149,13 +150,14 @@ func prepareMerkleUpdate(update *Cell, planned bool) (*PreparedMerkleUpdate, err
 		updateFrom:   updateFrom,
 		updateTo:     updateTo,
 		fromHash:     updateFrom.HashKeyAt(0),
+		sourceHints:  sourceHints,
 		updateTraced: update.Trace() != nil,
 	}
 	if srcPlan != nil {
 		p.src = srcPlan.steps
 		p.srcSlots = srcPlan.slots
 		p.dst = dstPlan.steps
-		p.memos = len(dstPlan.memos)
+		p.memos = len(dstPlan.memos.entries)
 	}
 	return p, nil
 }
@@ -195,7 +197,9 @@ func (p *PreparedMerkleUpdate) ApplyTo(from *Cell) (*Cell, error) {
 		return nil, fmt.Errorf("roots have non-zero level")
 	}
 	if p.updateTraced {
-		return ApplyMerkleUpdate(from, p.update)
+		// Re-enter through the update root so its trace still observes every
+		// classic-path read. Only the exact-table capacities are reused.
+		return applyMerkleUpdateWithHints(from, p.update, p.sourceHints)
 	}
 
 	fromHash := from.HashKeyAt(0)
@@ -203,7 +207,7 @@ func (p *PreparedMerkleUpdate) ApplyTo(from *Cell) (*Cell, error) {
 		return nil, fmt.Errorf("invalid Merkle update: expected old value hash = %x, applied to value with hash = %x", p.fromHash, fromHash)
 	}
 	if p.src == nil {
-		return applyMerkleUpdateWithSourceIndex(from, p.updateFrom, p.updateTo)
+		return applyMerkleUpdateWithSourceIndex(from, p.updateFrom, p.updateTo, p.sourceHints)
 	}
 
 	slots := make([]*Cell, p.srcSlots)
@@ -214,7 +218,8 @@ func (p *PreparedMerkleUpdate) ApplyTo(from *Cell) (*Cell, error) {
 	if consumed != len(p.src) {
 		return nil, errPreparedPlanCorrupt
 	}
-	root, consumed, err := p.replayDest(0, slots, make([]*Cell, p.memos))
+	arena := merkleUpdateApplyArena{}
+	root, consumed, err := p.replayDest(0, slots, make([]*Cell, p.memos), &arena)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +288,7 @@ func (p *PreparedMerkleUpdate) replaySource(original *Cell, i int, slots []*Cell
 // Boundary substitution reads a slot instead of a Hash-keyed map, and the
 // rebuild memo is a slice indexed by the slot the plan assigned per
 // {hash@max, merkleDepth} — the same identity the ready map used.
-func (p *PreparedMerkleUpdate) replayDest(i int, slots, memo []*Cell) (*Cell, int, error) {
+func (p *PreparedMerkleUpdate) replayDest(i int, slots, memo []*Cell, arena *merkleUpdateApplyArena) (*Cell, int, error) {
 	step := &p.dst[i]
 
 	if step.boundary {
@@ -321,7 +326,7 @@ func (p *PreparedMerkleUpdate) replayDest(i int, slots, memo []*Cell) (*Cell, in
 	changed := false
 	for k := range refs {
 		recorded := p.dst[child].cell
-		rebuilt, next, err := p.replayDest(child, slots, memo)
+		rebuilt, next, err := p.replayDest(child, slots, memo, arena)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -338,7 +343,7 @@ func (p *PreparedMerkleUpdate) replayDest(i int, slots, memo []*Cell) (*Cell, in
 	}
 
 	refView := newCellRefView(step.cell)
-	rebuilt, _, err := refView.cloneWithRefs(refs, nil)
+	rebuilt, _, err := cloneMerkleUpdateCellWithRefs(&refView, refs, arena)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -379,7 +384,7 @@ func (p *merkleUpdateSourcePlan) add(source *Cell, hash Hash, merkleDepth int, s
 	return len(p.steps) - 1
 }
 
-func (p *merkleUpdateSourcePlan) repeat(source *Cell, merkleDepth int, known map[Hash]merkleUpdateKnownCell) {
+func (p *merkleUpdateSourcePlan) repeat(source *Cell, merkleDepth int, known *merkleUpdateHashTable[merkleUpdateKnownCell]) {
 	if p == nil {
 		return
 	}
@@ -388,7 +393,7 @@ func (p *merkleUpdateSourcePlan) repeat(source *Cell, merkleDepth int, known map
 	// replaySource refuses the plan rather than writing to a wrong slot.
 	hash := source.HashKeyAt(merkleDepth)
 	slot := int32(-1)
-	if existing, ok := known[hash]; ok {
+	if existing, ok := known.lookup(hash); ok {
 		slot = existing.slot
 	}
 	p.add(source, hash, merkleDepth, slot, 0, false)
@@ -403,7 +408,7 @@ func (p *merkleUpdateSourcePlan) markPrunedChild(step, i int, pruned bool) {
 
 type merkleUpdateDestPlan struct {
 	steps []preparedDestStep
-	memos map[merkleUpdateVisitKey]int32
+	memos merkleUpdateVisitTable[int32]
 }
 
 func (p *merkleUpdateDestPlan) addBoundary(c *Cell, merkleDepth int, slot int32) {
@@ -436,10 +441,10 @@ func (p *merkleUpdateDestPlan) addRebuild(c *Cell, merkleDepth, refs int, deferr
 		return -1
 	}
 	key := merkleUpdateSeenKey(c, merkleDepth)
-	memo, ok := p.memos[key]
+	memo, ok := p.memos.lookup(key)
 	if !ok {
-		memo = int32(len(p.memos))
-		p.memos[key] = memo
+		memo = int32(len(p.memos.entries))
+		p.memos.store(key, memo)
 	}
 	p.steps = append(p.steps, preparedDestStep{
 		cell:         c,

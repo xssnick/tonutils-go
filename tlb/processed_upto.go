@@ -66,34 +66,60 @@ func LoadProcessedUptoRecords(dict *cell.Dictionary, ownerShard uint64) ([]Proce
 	if ownerShard == 0 {
 		return nil, fmt.Errorf("processed info owner has a zero shard")
 	}
-	items, err := dict.LoadAll()
+	// LoadAll historically accepted payload after a fork label because it also
+	// served raw HashmapAug callers. Use the raw augmented iterator to retain that
+	// lenient fork-shape behavior; raw iteration never consults augmentation.
+	it, err := dict.AsCell().AsAugDict(processedUptoKeyBits, nil).Iterator(false, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load processed info: %w", err)
 	}
-	if len(items) == 0 {
-		return nil, nil
-	}
 
-	records := make([]ProcessedUptoRecord, len(items))
-	for i := range items {
-		rec := &records[i]
-		// LoadAll yields keys of exactly 96 bits, so the key reads cannot fail.
-		rec.ShardPrefix = items[i].Key.MustLoadUInt(64)
+	var records []ProcessedUptoRecord
+	var validationErr error
+	for i := 0; it.Next(); i++ {
+		// LoadAll used to finish the dictionary walk before validating its
+		// records. Keep walking after the first record error so a later malformed
+		// or unavailable node retains that higher-priority traversal error.
+		if validationErr != nil {
+			continue
+		}
+
+		item := it.View()
+		key := item.Key
+		var rec ProcessedUptoRecord
+		// The iterator yields keys of exactly 96 bits, so the key reads cannot fail.
+		rec.ShardPrefix = key.MustLoadUInt(64)
 		if rec.ShardPrefix == 0 {
-			return nil, fmt.Errorf("processed info record %d has a zero shard", i)
+			validationErr = fmt.Errorf("processed info record %d has a zero shard", i)
+			continue
 		}
 		if !shardContainsPrefix(ownerShard, rec.ShardPrefix) {
-			return nil, fmt.Errorf("processed info record %d shard %016x is outside the owner shard %016x",
+			validationErr = fmt.Errorf("processed info record %d shard %016x is outside the owner shard %016x",
 				i, rec.ShardPrefix, ownerShard)
+			continue
 		}
-		rec.MCSeqno = uint32(items[i].Key.MustLoadUInt(32))
+		rec.MCSeqno = uint32(key.MustLoadUInt(32))
 
-		value := items[i].Value
+		value := item.Value
 		if value.BitsLeft() != processedUptoValueBits || value.RefsNum() != 0 {
-			return nil, fmt.Errorf("malformed processed info value %d", i)
+			validationErr = fmt.Errorf("malformed processed info value %d", i)
+			continue
 		}
 		rec.LastMsgLT = value.MustLoadUInt(64)
-		copy(rec.LastMsgHash[:], value.MustLoadSlice(256))
+		if err = value.LoadSliceInto(rec.LastMsgHash[:], 256); err != nil {
+			validationErr = fmt.Errorf("malformed processed info value %d", i)
+			continue
+		}
+		if records == nil {
+			records = make([]ProcessedUptoRecord, 0, 4)
+		}
+		records = append(records, rec)
+	}
+	if err = it.Err(); err != nil {
+		return nil, fmt.Errorf("failed to load processed info: %w", err)
+	}
+	if validationErr != nil {
+		return nil, validationErr
 	}
 	return records, nil
 }

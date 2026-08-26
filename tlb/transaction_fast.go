@@ -184,12 +184,13 @@ func (h *HashUpdate) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("invalid hash update magic %x", magic)
 	}
 
-	oldHash, err := loader.LoadSlice(256)
-	if err != nil {
+	hashes := make([]byte, 64)
+	oldHash := hashes[:32:32]
+	if err := loader.LoadSliceInto(oldHash, 256); err != nil {
 		return fmt.Errorf("failed to load old hash: %w", err)
 	}
-	newHash, err := loader.LoadSlice(256)
-	if err != nil {
+	newHash := hashes[32:64:64]
+	if err := loader.LoadSliceInto(newHash, 256); err != nil {
 		return fmt.Errorf("failed to load new hash: %w", err)
 	}
 
@@ -360,12 +361,13 @@ func (d *ComputePhaseVMDetails) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return fmt.Errorf("failed to load vm steps: %w", err)
 	}
-	initHash, err := loader.LoadSlice(256)
-	if err != nil {
+	hashes := make([]byte, 64)
+	initHash := hashes[:32:32]
+	if err := loader.LoadSliceInto(initHash, 256); err != nil {
 		return fmt.Errorf("failed to load vm init state hash: %w", err)
 	}
-	finalHash, err := loader.LoadSlice(256)
-	if err != nil {
+	finalHash := hashes[32:64:64]
+	if err := loader.LoadSliceInto(finalHash, 256); err != nil {
 		return fmt.Errorf("failed to load vm final state hash: %w", err)
 	}
 
@@ -1175,12 +1177,13 @@ func (s *SplitMergeInfo) LoadFromCell(loader *cell.Slice) error {
 	if err != nil {
 		return fmt.Errorf("failed to load account split depth: %w", err)
 	}
-	thisAddr, err := loader.LoadSlice(256)
-	if err != nil {
+	addresses := make([]byte, 64)
+	thisAddr := addresses[:32:32]
+	if err := loader.LoadSliceInto(thisAddr, 256); err != nil {
 		return fmt.Errorf("failed to load this address: %w", err)
 	}
-	siblingAddr, err := loader.LoadSlice(256)
-	if err != nil {
+	siblingAddr := addresses[32:64:64]
+	if err := loader.LoadSliceInto(siblingAddr, 256); err != nil {
 		return fmt.Errorf("failed to load sibling address: %w", err)
 	}
 
@@ -1573,16 +1576,17 @@ func (t *Transaction) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("invalid transaction magic %b", magic)
 	}
 
-	accountAddr, err := loader.LoadSlice(256)
-	if err != nil {
+	addresses := make([]byte, 64)
+	accountAddr := addresses[:32:32]
+	if err := loader.LoadSliceInto(accountAddr, 256); err != nil {
 		return fmt.Errorf("failed to load account address: %w", err)
 	}
 	lt, err := loader.LoadUInt(64)
 	if err != nil {
 		return fmt.Errorf("failed to load lt: %w", err)
 	}
-	prevTxHash, err := loader.LoadSlice(256)
-	if err != nil {
+	prevTxHash := addresses[32:64:64]
+	if err := loader.LoadSliceInto(prevTxHash, 256); err != nil {
 		return fmt.Errorf("failed to load previous tx hash: %w", err)
 	}
 	prevTxLT, err := loader.LoadUInt(64)

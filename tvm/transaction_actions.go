@@ -454,12 +454,13 @@ func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transaction
 	for cur := root; cur != nil; {
 		// The reference checks special on the materialized cell returned by
 		// Cell::load_cell(), not on a lazy pruned boundary wrapper.
-		sl, err := cur.BeginParse()
-		if err != nil {
+		var parsed cell.Slice
+		if err := cur.BeginParseInto(&parsed); err != nil {
 			out.resultCode = 32
 			out.resultArg = transactionActionResultArg(nodesNum)
 			return out, nil
 		}
+		sl := &parsed
 		if sl.RawCell().IsSpecial() {
 			out.resultCode = 32
 			out.resultArg = transactionActionResultArg(nodesNum)
@@ -550,10 +551,11 @@ func transactionParseCellExact(v any, root *cell.Cell) error {
 // the reserve currency: canonical Grams plus positive canonical VarUInteger 32
 // extra currency values.
 func transactionReserveCurrencyCanonical(node *cell.Cell) bool {
-	sl, err := node.BeginParse()
-	if err != nil {
+	var parsed cell.Slice
+	if err := node.BeginParseInto(&parsed); err != nil {
 		return false
 	}
+	sl := &parsed
 	if _, err := sl.LoadRefCell(); err != nil {
 		return false
 	}
@@ -624,10 +626,11 @@ func transactionMalformedSendMode(node *cell.Cell) (uint8, bool) {
 	if node == nil || node.IsSpecial() {
 		return 0, false
 	}
-	sl, err := node.BeginParse()
-	if err != nil {
+	var parsed cell.Slice
+	if err := node.BeginParseInto(&parsed); err != nil {
 		return 0, false
 	}
+	sl := &parsed
 	if sl.RefsNum() == 0 {
 		return 0, false
 	}
@@ -877,10 +880,11 @@ func transactionValidateRelaxedActionMessageCurrencies(root *cell.Cell) (transac
 		return out, fmt.Errorf("%w: outbound message cell is nil", errTransactionInvalidRelaxedActionMessage)
 	}
 
-	sl, err := root.BeginParse()
-	if err != nil {
+	var parsed cell.Slice
+	if err := root.BeginParseInto(&parsed); err != nil {
 		return out, fmt.Errorf("%w: %v", errTransactionInvalidRelaxedActionMessage, err)
 	}
+	sl := &parsed
 
 	isExternal, err := sl.LoadBoolBit()
 	if err != nil {

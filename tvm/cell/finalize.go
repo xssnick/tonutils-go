@@ -33,6 +33,28 @@ type cellWithMeta struct {
 	m cellMeta
 }
 
+// newCellWithData allocates a Cell and its immutable payload in one object.
+// The returned data slice has no spare capacity, so callers cannot append into
+// the fused allocation after the cell has been finalized.
+func newCellWithData(usedBytes int) *Cell {
+	switch {
+	case usedBytes == 0:
+		return &Cell{}
+	case usedBytes <= 24:
+		x := new(cellWithBuf24)
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		return &x.c
+	case usedBytes <= 56:
+		x := new(cellWithBuf56)
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		return &x.c
+	default:
+		x := new(cellWithBuf128)
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		return &x.c
+	}
+}
+
 func finalizeCellFromBuilder(builder *Builder, special bool) (*Cell, error) {
 	c, err := buildCellShellFromBuilder(builder, special)
 	if err != nil {
