@@ -238,7 +238,10 @@ func parseFlags(data byte) flags {
 func ParseAddr(addr string) (*Address, error) {
 	data, err := base64.RawURLEncoding.DecodeString(addr)
 	if err != nil {
-		return nil, err
+		data, err = base64.RawStdEncoding.DecodeString(addr)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(data) != 36 {
