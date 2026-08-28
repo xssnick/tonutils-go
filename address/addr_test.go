@@ -443,6 +443,7 @@ func TestParseAddr(t *testing.T) {
 	}{
 		{"1", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq-oSCoxekQRKElf4nC1I", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
 		{"2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{147, 13, 85, 51, 152, 10, 186, 17, 252, 216, 24, 69, 169, 84, 235, 245, 235, 42, 62, 31, 149, 112, 220, 29, 43, 146, 215, 34, 119, 63, 212, 44}}, false},
+		{"standard base64", "EQC6KV4zs8TJtSZapOrRFmqSkxzpq+oSCoxekQRKElf4nC1I", &Address{addrType: StdAddress, bitsLen: 256, flags: flags{bounceable: true, testnet: false}, workchain: 0, data: []byte{186, 41, 94, 51, 179, 196, 201, 181, 38, 90, 164, 234, 209, 22, 106, 146, 147, 28, 233, 171, 234, 18, 10, 140, 94, 145, 4, 74, 18, 87, 248, 156}}, false},
 		{"err 1", "AQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUj", nil, true},
 		{"err 2", "EQCTDVUzmAq6EfzYGEWpVOv16yo-H5Vw3B0rktcidz_ULOUB", nil, true},
 	}
