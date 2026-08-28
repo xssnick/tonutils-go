@@ -154,6 +154,102 @@ func TestExtractBalanceFromDepthBalanceCellAcceptsEmptyExtraDict(t *testing.T) {
 	}
 }
 
+func mustDepthBalanceCell(tb testing.TB, grams int64, refs ...*Cell) *Cell {
+	tb.Helper()
+
+	b := BeginCell().
+		MustStoreUInt(0, 7).
+		MustStoreBigCoins(big.NewInt(grams)).
+		MustStoreDict(nil)
+	for _, ref := range refs {
+		b.MustStoreRef(ref)
+	}
+	return b.EndCell()
+}
+
+func TestCompressBOC_ImprovedStructureLZ4WithState_DepthBalanceRoundTrip(t *testing.T) {
+	oldLeft := mustDepthBalanceCell(t, 10)
+	oldRight := mustDepthBalanceCell(t, 20)
+	oldState := mustDepthBalanceCell(t, 30, oldLeft, oldRight)
+
+	newLeft := mustDepthBalanceCell(t, 14)
+	newRight := mustDepthBalanceCell(t, 26)
+	newState := mustDepthBalanceCell(t, 40, newLeft, newRight)
+
+	mu := mustMerkleUpdateCell(t, oldState, newState)
+	root := BeginCell().
+		MustStoreRef(BeginCell().MustStoreUInt(1, 1).EndCell()).
+		MustStoreRef(BeginCell().MustStoreUInt(0, 1).EndCell()).
+		MustStoreRef(mu).
+		EndCell()
+	wantBOC := root.ToBOCWithOptions(mode31Options())
+
+	compressed, err := CompressBOC([]*Cell{root}, CompressionImprovedStructureLZ4WithState, oldState)
+	if err != nil {
+		t.Fatalf("failed to compress depth-balance fixture: %v", err)
+	}
+
+	// Inspect the metadata header to prove that the fixture reaches the compact
+	// depth-balance representation instead of merely round-tripping ordinary
+	// cells through the same codec.
+	serialized, err := decompressWithSizeHeader(compressed[1:], len(wantBOC)+4096)
+	if err != nil {
+		t.Fatalf("failed to inspect compressed fixture: %v", err)
+	}
+	reader := newBitReader(serialized)
+	rootCount, err := reader.ReadUint(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range rootCount {
+		if _, err = reader.ReadUint(32); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nodeCount, err := reader.ReadUint(32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	depthBalanceNodes := 0
+	for range nodeCount {
+		cellType, err := reader.ReadUint(4)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = reader.ReadUint(4); err != nil {
+			t.Fatal(err)
+		}
+
+		if cellType == 9 {
+			depthBalanceNodes++
+			continue
+		}
+		if cellType > 1 {
+			continue
+		}
+		if _, err = reader.ReadUint(8); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if depthBalanceNodes == 0 {
+		t.Fatal("fixture produced no compact depth-balance node")
+	}
+
+	roots, err := DecompressBOC(compressed, len(wantBOC)+4096, oldState)
+	if err != nil {
+		t.Fatalf("failed to decompress depth-balance fixture: %v", err)
+	}
+	if len(roots) != 1 {
+		t.Fatalf("unexpected roots count: %d", len(roots))
+	}
+	if roots[0].HashKey() != root.HashKey() {
+		t.Fatal("depth-balance reconstruction changed the root hash")
+	}
+	if got := roots[0].ToBOCWithOptions(mode31Options()); !bytes.Equal(got, wantBOC) {
+		t.Fatal("depth-balance reconstruction changed the boc")
+	}
+}
+
 func TestCompressBOC_BaselineLZ4_RoundTripReferenceFixture(t *testing.T) {
 	root, rawBOC := loadReferenceFixtureRoot(t)
 

@@ -66,11 +66,7 @@ func CombineMerkleProofRaw(left, right *Cell) (*Cell, error) {
 		return nil, fmt.Errorf("cannot combine Merkle proofs with different roots")
 	}
 
-	combiner := merkleProofCombiner{
-		cells:   map[Hash]merkleProofCombineInfo{},
-		visited: map[proofBodyKey]struct{}{},
-		ready:   map[proofBodyKey]*Cell{},
-	}
+	combiner := merkleProofCombiner{}
 	if err := combiner.load(left, 0); err != nil {
 		return nil, err
 	}
@@ -142,9 +138,8 @@ func (i *merkleProofCombineInfo) anyCell() *Cell {
 }
 
 type merkleProofCombiner struct {
-	cells   map[Hash]merkleProofCombineInfo
-	visited map[proofBodyKey]struct{}
-	ready   map[proofBodyKey]*Cell
+	cells  merkleProofCombineCellTable
+	states merkleProofCombineStateTable
 }
 
 func (c *merkleProofCombiner) load(boundary *Cell, merkleDepth int) error {
@@ -152,11 +147,11 @@ func (c *merkleProofCombiner) load(boundary *Cell, merkleDepth int) error {
 		return fmt.Errorf("Merkle proof contains nil reference")
 	}
 
-	visitKey := proofBodyKey{hash: boundary.HashKey(), merkleDepth: merkleDepth}
-	if _, ok := c.visited[visitKey]; ok {
+	boundaryHash := boundary.HashKey()
+	if c.states.wasVisited(boundaryHash, merkleDepth) {
 		return nil
 	}
-	c.visited[visitKey] = struct{}{}
+	c.states.markVisited(boundaryHash, merkleDepth)
 
 	loaded, err := boundary.load()
 	if err != nil {
@@ -164,15 +159,13 @@ func (c *merkleProofCombiner) load(boundary *Cell, merkleDepth int) error {
 	}
 	loaded = loadedForBoundary(boundary, loaded)
 	hash := loaded.HashKeyAt(merkleDepth)
-	info := c.cells[hash]
+	info := c.cells.getOrInsert(hash)
 	if loaded.GetType() == PrunedCellType && loaded.Level() > merkleDepth {
 		info.putPruned(loaded)
-		c.cells[hash] = info
 		return nil
 	}
 
 	info.cell = loaded
-	c.cells[hash] = info
 	view := newCellRefView(loaded)
 	childDepth := merkleChildDepth(loaded, merkleDepth)
 	for i := 0; i < loaded.refsCount(); i++ {
@@ -190,29 +183,28 @@ func (c *merkleProofCombiner) load(boundary *Cell, merkleDepth int) error {
 func (c *merkleProofCombiner) create(boundary *Cell, merkleDepth, proofDepth int) (*Cell, error) {
 	merkleDepth = normalizeMerkleDepth(boundary, merkleDepth)
 	hash := boundary.HashKeyAt(merkleDepth)
-	key := proofBodyKey{hash: hash, merkleDepth: proofDepth}
-	if ready := c.ready[key]; ready != nil {
+	if ready := c.states.readyCell(hash, proofDepth); ready != nil {
 		return ready, nil
 	}
 
-	info, ok := c.cells[hash]
+	info, ok := c.cells.lookup(hash)
 	if !ok {
 		return nil, fmt.Errorf("missing cached Merkle proof subtree %x", hash)
 	}
 	if info.cell == nil {
 		if pruned := info.getPruned(proofDepth); pruned != nil {
-			c.ready[key] = pruned
+			c.states.storeReady(hash, proofDepth, pruned)
 			return pruned, nil
 		}
 		pruned, err := createPrunedBranchForCombine(info.anyCell(), proofDepth+1, merkleDepth)
 		if err != nil {
 			return nil, err
 		}
-		c.ready[key] = pruned
+		c.states.storeReady(hash, proofDepth, pruned)
 		return pruned, nil
 	}
 	if info.cell.refsCount() == 0 {
-		c.ready[key] = info.cell
+		c.states.storeReady(hash, proofDepth, info.cell)
 		return info.cell, nil
 	}
 
@@ -236,7 +228,7 @@ func (c *merkleProofCombiner) create(boundary *Cell, merkleDepth, proofDepth int
 	if err != nil {
 		return nil, err
 	}
-	c.ready[key] = rebuilt
+	c.states.storeReady(hash, proofDepth, rebuilt)
 	return rebuilt, nil
 }
 

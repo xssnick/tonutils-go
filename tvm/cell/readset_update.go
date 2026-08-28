@@ -95,11 +95,18 @@ func (rs *ReadSet) createMerkleUpdateRaw(
 		return nil, nil, nil, 0, fmt.Errorf("roots have non-zero level")
 	}
 
-	// Building an update must not widen the record. The destination walk parses
-	// whatever it does not prune, and a cell recorded there would grow the proof
-	// taken afterwards past the size the block was already admitted against.
-	rs.IgnoreReads(true)
-	defer rs.IgnoreReads(false)
+	// Building an update must not widen the record: a cell recorded during this
+	// call would grow the proof taken afterwards past the size the block was
+	// already admitted against. That used to be enforced by muting the recorder
+	// (IgnoreReads) around the whole call, which was sound while nothing else
+	// could be reading — but the mute is a property of the set, not of this
+	// goroutine, and a recorder running concurrently under a deferred-recording
+	// window had its reads silently swallowed by it. Today the guarantee is
+	// structural instead: both walks below descend through raw cell fields and
+	// resolved table entries (recordedCell), never through a traced parse, so
+	// there is no read here to mute. TestCreateMerkleUpdateDoesNotWidenTheRecord
+	// pins that — if a traced parse ever gets back into these walks, that test
+	// fails before a golden does.
 
 	// Being recorded is not evidence that a subtree may be pruned onto. A cell the
 	// transition rebuilt inherits the trace of the cell it was derived from and is

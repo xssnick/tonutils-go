@@ -318,3 +318,38 @@ func BenchmarkCombineMerkleProofSharedDiamond(b *testing.B) {
 		})
 	}
 }
+
+func TestMerkleProofCombineTablesCollisionsAndGrowth(t *testing.T) {
+	const entries = 96
+
+	var cells [entries]Cell
+	var cellTable merkleProofCombineCellTable
+	var stateTable merkleProofCombineStateTable
+	for i := range entries {
+		var hash Hash
+		hash[4] = byte(i + 1)
+		info := cellTable.getOrInsert(hash)
+		info.cell = &cells[i]
+
+		stateTable.markVisited(hash, i&3)
+		stateTable.storeReady(hash, i&3, &cells[entries-1-i])
+	}
+
+	for i := range entries {
+		var hash Hash
+		hash[4] = byte(i + 1)
+		info, ok := cellTable.lookup(hash)
+		if !ok || info.cell != &cells[i] {
+			t.Fatalf("cell table lost colliding entry %d", i)
+		}
+		if !stateTable.wasVisited(hash, i&3) {
+			t.Fatalf("state table lost visited entry %d", i)
+		}
+		if ready := stateTable.readyCell(hash, i&3); ready != &cells[entries-1-i] {
+			t.Fatalf("state table lost ready entry %d", i)
+		}
+		if stateTable.wasVisited(hash, (i+1)&3) {
+			t.Fatalf("state table matched wrong depth for entry %d", i)
+		}
+	}
+}

@@ -60,6 +60,27 @@ type lazySlab4 struct {
 	body   [lazySlabBodyCap]byte
 }
 
+// The BOC variants carry no body buffer: a cell materialized out of a lazy
+// BOC keeps its data as a slice into the deserializer's shared payload, so the
+// slab only holds the Cell, the placeholder Cells, their metas and their
+// pruned payloads. Splitting the types rather than reusing lazySlab2/4 keeps
+// the storage path's 128-byte body out of every BOC materialization — the
+// bytes axis is what decides GC cycle frequency, and the BOC path pays zero
+// body bytes today.
+type bocLazySlab2 struct {
+	root   Cell
+	refs   [2]Cell
+	metas  [2]cellMeta
+	pruned [2][lazySlabPrunedCap]byte
+}
+
+type bocLazySlab4 struct {
+	root   Cell
+	refs   [4]Cell
+	metas  [4]cellMeta
+	pruned [4][lazySlabPrunedCap]byte
+}
+
 // buildLazySlab lays one cell and its placeholders into slab-provided memory.
 func buildLazySlab(root *Cell, body []byte, refCells []Cell, metas []cellMeta, pruned [][lazySlabPrunedCap]byte,
 	descriptors uint16, data, hashes []byte, depths []uint16, refs []LazyRef, loader LazyCellLoader) (*Cell, error) {

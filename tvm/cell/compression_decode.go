@@ -19,6 +19,95 @@ type decompressDeferredHasher struct {
 	presetLevel []bool
 }
 
+// Higher-level decompressed cells need immutable payload, metadata and extra
+// hashes for the same lifetime. Keeping those in one object removes two tiny
+// allocations per cell without bloating the overwhelmingly common level-0
+// layout used by normal builders and BoC parsing.
+type decompressedCellWithMeta struct {
+	c      Cell
+	meta   cellMeta
+	hashes [3]Hash
+}
+
+type decompressedCellWithMetaBuf24 struct {
+	c      Cell
+	meta   cellMeta
+	hashes [3]Hash
+	buf    [24]byte
+}
+
+type decompressedCellWithMetaBuf56 struct {
+	c      Cell
+	meta   cellMeta
+	hashes [3]Hash
+	buf    [56]byte
+}
+
+type decompressedCellWithMetaBuf128 struct {
+	c      Cell
+	meta   cellMeta
+	hashes [3]Hash
+	buf    [maxCellDataBytes]byte
+}
+
+func decompressedCellNeedsExtraHashes(builder *Builder, special bool) bool {
+	refs := builder.rawRefs()
+	if !special {
+		return ordinaryLevelMask(refs).Mask != 0
+	}
+	if builder.bitsSz < 8 {
+		return false
+	}
+
+	switch Type(builder.data[0]) {
+	case MerkleProofCellType:
+		return len(refs) == 1 && refs[0] != nil && refs[0].getLevelMask().Mask>>1 != 0
+	case MerkleUpdateCellType:
+		return len(refs) == 2 && refs[0] != nil && refs[1] != nil &&
+			(refs[0].getLevelMask().Mask|refs[1].getLevelMask().Mask)>>1 != 0
+	default:
+		return false
+	}
+}
+
+func buildDecompressedCellShell(builder *Builder, special bool) (*Cell, error) {
+	if !decompressedCellNeedsExtraHashes(builder, special) {
+		return buildCellShellFromBuilder(builder, special)
+	}
+
+	usedBytes := builder.usedBytes()
+	var c *Cell
+	var meta *cellMeta
+	var hashes *[3]Hash
+	switch {
+	case usedBytes == 0:
+		x := new(decompressedCellWithMeta)
+		c, meta, hashes = &x.c, &x.meta, &x.hashes
+	case usedBytes <= 24:
+		x := new(decompressedCellWithMetaBuf24)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c, meta, hashes = &x.c, &x.meta, &x.hashes
+	case usedBytes <= 56:
+		x := new(decompressedCellWithMetaBuf56)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c, meta, hashes = &x.c, &x.meta, &x.hashes
+	default:
+		x := new(decompressedCellWithMetaBuf128)
+		copy(x.buf[:], builder.data[:usedBytes])
+		x.c.data = x.buf[:usedBytes:usedBytes]
+		c, meta, hashes = &x.c, &x.meta, &x.hashes
+	}
+
+	meta.extraHashes = hashes
+	c.meta = meta
+	if err := fillCellShell(c, builder.rawRefs(), builder, special); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 const decompressParallelHashMinWave = 128
 
 func (d *decompressDeferredHasher) append(c *Cell, presetLevel0 bool) {
@@ -39,7 +128,7 @@ func (d *decompressDeferredHasher) finalizeFromBuilder(builder *Builder, special
 		}
 	}
 
-	c, err := buildCellShellFromBuilder(builder, special)
+	c, err := buildDecompressedCellShell(builder, special)
 	if err != nil {
 		return nil, err
 	}

@@ -275,8 +275,23 @@ func (d *Dictionary) SetIntKey(key *big.Int, value *Cell) error {
 	if value == nil {
 		return d.DeleteIntKey(key)
 	}
-	_, err := d.SetBuilderByIntKeyWithMode(key, value.ToBuilder(), DictSetModeSet)
+	if d == nil {
+		return fmt.Errorf("dict is nil")
+	}
+	var keyBuilder Builder
+	initIntKeyBuilder(key, d.keySz, &keyBuilder)
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	_, err := d.setValueWithModeSlice(&keySlice, dictSetValue{cell: value}, DictSetModeSet)
 	return err
+}
+
+// dictSetValue keeps Cell-based setters from allocating a 192-byte Builder at
+// the API boundary. The cell is converted into a stack-local builder only at
+// the leaf that stores it; builder-based APIs retain their existing path.
+type dictSetValue struct {
+	builder *Builder
+	cell    *Cell
 }
 
 func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*Cell, error) {
@@ -284,6 +299,16 @@ func (d *Dictionary) storeLeaf(keyPfx *Slice, value *Builder, keyOffset uint) (*
 		return nil, nil
 	}
 	return storeDictNodeTraced(keyPfx, value, keyOffset, d.trace)
+}
+
+func (d *Dictionary) storeSetLeaf(keyPfx *Slice, value dictSetValue, keyOffset uint) (*Cell, error) {
+	if value.cell == nil {
+		return d.storeLeaf(keyPfx, value.builder, keyOffset)
+	}
+
+	var builder Builder
+	value.cell.ToBuilderInto(&builder)
+	return d.storeLeaf(keyPfx, &builder, keyOffset)
 }
 
 func (d *Dictionary) storeFork(label *Slice, left, right *Cell, keyOffset uint) (*Cell, error) {
@@ -316,8 +341,18 @@ func (d *Dictionary) SetWithMode(key, value *Cell, mode DictSetMode) (bool, erro
 	if value == nil {
 		return false, fmt.Errorf("value is nil")
 	}
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return false, fmt.Errorf("invalid key size")
+	}
 
-	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return false, fmt.Errorf("failed to load key: %w", err)
+	}
+	return d.setValueWithModeSlice(&keySlice, dictSetValue{cell: value}, mode)
 }
 
 func (d *Dictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetMode) (bool, error) {
@@ -371,7 +406,10 @@ func (d *Dictionary) SetBuilderByIntKeyWithMode(key *big.Int, value *Builder, mo
 }
 
 func (d *Dictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	return d.setValueWithModeSlice(keySlice, dictSetValue{builder: value}, mode)
+}
 
+func (d *Dictionary) setValueWithModeSlice(keySlice *Slice, value dictSetValue, mode DictSetMode) (bool, error) {
 	newRoot, _, changed, err := d.set(d.tracedRoot(), keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, fmt.Errorf("failed to set value in dict, err: %w", err)
@@ -382,12 +420,12 @@ func (d *Dictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mo
 	return changed, nil
 }
 
-func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode) (*Cell, *Slice, bool, error) {
+func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value dictSetValue, mode DictSetMode) (*Cell, *Slice, bool, error) {
 	if branch == nil {
 		if mode == DictSetModeReplace {
 			return nil, nil, false, nil
 		}
-		leaf, err := d.storeLeaf(pfx, value, keyOffset)
+		leaf, err := d.storeSetLeaf(pfx, value, keyOffset)
 		return leaf, nil, err == nil, err
 	}
 
@@ -416,7 +454,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 				return node.cell, node.value(), false, nil
 			}
 			nodeLabel := node.labelSlice()
-			leaf, err := d.storeLeaf(&nodeLabel, value, keyOffset)
+			leaf, err := d.storeSetLeaf(&nodeLabel, value, keyOffset)
 			return leaf, node.value(), err == nil, err
 		}
 
@@ -468,7 +506,7 @@ func (d *Dictionary) set(branch *Cell, pfx *Slice, keyOffset uint, value *Builde
 		return nil, nil, false, fmt.Errorf("failed to store old child payload: %w", err)
 	}
 
-	newChild, err := d.storeLeaf(pfx, value, keyOffset-(bitsMatches+1))
+	newChild, err := d.storeSetLeaf(pfx, value, keyOffset-(bitsMatches+1))
 	if err != nil {
 		return nil, nil, false, fmt.Errorf("failed to store new child leaf: %w", err)
 	}
@@ -682,7 +720,7 @@ func (d *Dictionary) LoadValueByUintKey(key uint64) (*Slice, error) {
 // LoadValueByUintKeyInto is LoadValueByUintKey with caller-owned result storage.
 func (d *Dictionary) LoadValueByUintKeyInto(key uint64, value *Slice) error {
 	var builder Builder
-	if err := builder.StoreUInt(key, d.keySz); err != nil {
+	if err := initUintKeyBuilder(key, d.keySz, &builder); err != nil {
 		panic(err)
 	}
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
@@ -778,11 +816,11 @@ func (d *Dictionary) SetBuilderByUintKeyWithMode(key uint64, value *Builder, mod
 	}
 
 	var keyBuilder Builder
-	var keyCell Cell
-	var keySlice Slice
-	if err := initFixedDictUintKeySlice(key, d.keySz, &keyBuilder, &keyCell, &keySlice); err != nil {
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
 		return false, err
 	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
 	return d.setBuilderWithModeSlice(&keySlice, value, mode)
 }
 
@@ -966,7 +1004,18 @@ func (d *Dictionary) LoadValueAndSetWithMode(key, value *Cell, mode DictSetMode)
 	if value == nil {
 		return nil, false, fmt.Errorf("value is nil")
 	}
-	return d.LoadValueAndSetBuilderWithMode(key, value.ToBuilder(), mode)
+	if d == nil {
+		return nil, false, fmt.Errorf("dict is nil")
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return nil, false, fmt.Errorf("incorrect key size")
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return nil, false, fmt.Errorf("failed to load key: %w", err)
+	}
+	return d.loadValueAndSetBySliceKey(&keySlice, dictSetValue{cell: value}, mode)
 }
 
 func (d *Dictionary) LoadValueAndSetBuilder(key *Cell, value *Builder) (*Slice, bool, error) {
@@ -1024,7 +1073,10 @@ func (d *Dictionary) LoadValueAndSetBuilderByIntKeyWithMode(key *big.Int, value 
 }
 
 func (d *Dictionary) loadValueAndSetBuilderBySliceKey(keySlice *Slice, value *Builder, mode DictSetMode) (*Slice, bool, error) {
+	return d.loadValueAndSetBySliceKey(keySlice, dictSetValue{builder: value}, mode)
+}
 
+func (d *Dictionary) loadValueAndSetBySliceKey(keySlice *Slice, value dictSetValue, mode DictSetMode) (*Slice, bool, error) {
 	newRoot, oldValue, changed, err := d.set(d.tracedRoot(), keySlice, d.keySz, value, mode)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to set value in dict, err: %w", err)
@@ -1097,11 +1149,11 @@ func (d *Dictionary) LoadValueAndDeleteByUintKeyInto(key uint64, value *Slice) e
 		return ErrNoSuchKeyInDict
 	}
 	var keyBuilder Builder
-	var keyCell Cell
-	var keySlice Slice
-	if err := initFixedDictUintKeySlice(key, d.keySz, &keyBuilder, &keyCell, &keySlice); err != nil {
+	if err := initUintKeyBuilder(key, d.keySz, &keyBuilder); err != nil {
 		return err
 	}
+	keyCell := Cell{data: keyBuilder.data[:keyBuilder.usedBytes()], bitsSz: uint16(keyBuilder.bitsSz)}
+	keySlice := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
 	return d.loadValueAndDeleteBySliceKeyInto(&keySlice, value)
 }
 

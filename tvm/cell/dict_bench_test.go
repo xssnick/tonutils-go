@@ -83,6 +83,36 @@ func BenchmarkDictionaryLoadValue(b *testing.B) {
 	}
 }
 
+func BenchmarkDictionarySetReplaceCellVsBuilder(b *testing.B) {
+	base, key := mustBuildBenchDict(b)
+	values := [2]*Cell{
+		BeginCell().MustStoreUInt(0x1234, 16).EndCell(),
+		BeginCell().MustStoreUInt(0x5678, 16).EndCell(),
+	}
+
+	b.Run("cell", func(b *testing.B) {
+		dict := base.Copy()
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
+			changed, err := dict.SetWithMode(key, values[i&1], DictSetModeReplace)
+			if err != nil || !changed {
+				b.Fatalf("changed=%v err=%v", changed, err)
+			}
+		}
+	})
+
+	b.Run("builder", func(b *testing.B) {
+		dict := base.Copy()
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
+			changed, err := dict.SetBuilderWithMode(key, values[i&1].ToBuilder(), DictSetModeReplace)
+			if err != nil || !changed {
+				b.Fatalf("changed=%v err=%v", changed, err)
+			}
+		}
+	})
+}
+
 func BenchmarkAugmentedDictionaryLoadValue(b *testing.B) {
 	dict, key, _, _ := mustBuildBenchAugDict(b)
 
@@ -144,4 +174,35 @@ func BenchmarkPrefixDictionaryLookupPrefix(b *testing.B) {
 			b.Fatal("expected prefix match")
 		}
 	}
+}
+
+func BenchmarkPrefixDictionarySetReplaceCellVsBuilder(b *testing.B) {
+	base, _ := mustBuildBenchPrefixDict(b)
+	key := benchKey(0b11110, 5)
+	values := [2]*Cell{
+		BeginCell().MustStoreUInt(0x34, 8).EndCell(),
+		BeginCell().MustStoreUInt(0x78, 8).EndCell(),
+	}
+
+	b.Run("cell", func(b *testing.B) {
+		dict := base.Copy()
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
+			changed, err := dict.SetWithMode(key, values[i&1], DictSetModeReplace)
+			if err != nil || !changed {
+				b.Fatalf("changed=%v err=%v", changed, err)
+			}
+		}
+	})
+
+	b.Run("builder", func(b *testing.B) {
+		dict := base.Copy()
+		b.ReportAllocs()
+		for i := 0; b.Loop(); i++ {
+			changed, err := dict.SetBuilderWithMode(key, values[i&1].ToBuilder(), DictSetModeReplace)
+			if err != nil || !changed {
+				b.Fatalf("changed=%v err=%v", changed, err)
+			}
+		}
+	})
 }

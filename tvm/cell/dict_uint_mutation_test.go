@@ -1,9 +1,55 @@
 package cell
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 )
+
+func TestInitUintKeyBuilderWidths(t *testing.T) {
+	tests := []struct {
+		name string
+		bits uint
+		key  uint64
+	}{
+		{name: "zero", bits: 0, key: 0},
+		{name: "one", bits: 1, key: 1},
+		{name: "word", bits: 64, key: 0xfedcba9876543210},
+		{name: "word plus one", bits: 65, key: 0xfedcba9876543210},
+		{name: "wide", bits: 256, key: 0xfedcba9876543210},
+		{name: "maximum", bits: 1023, key: 0xfedcba9876543210},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var builder Builder
+			if err := initUintKeyBuilder(tt.key, tt.bits, &builder); err != nil {
+				t.Fatal(err)
+			}
+			if builder.BitsUsed() != tt.bits {
+				t.Fatalf("bits = %d, want %d", builder.BitsUsed(), tt.bits)
+			}
+
+			loader := builder.EndCell().MustBeginParse()
+			wordBits := min(tt.bits, uint(64))
+			leading := loader.MustLoadSlice(tt.bits - wordBits)
+			if !bytes.Equal(leading, make([]byte, len(leading))) {
+				t.Fatalf("non-zero leading bits: %x", leading)
+			}
+			if wordBits > 0 && loader.MustLoadUInt(wordBits) != tt.key {
+				t.Fatal("uint key tail differs from the input")
+			}
+		})
+	}
+
+	var builder Builder
+	if err := initUintKeyBuilder(2, 1, &builder); !errors.Is(err, ErrTooBigValue) {
+		t.Fatalf("overflow error = %v", err)
+	}
+	if err := initUintKeyBuilder(0, 1024, &builder); !errors.Is(err, ErrTooBigSize) {
+		t.Fatalf("oversize error = %v", err)
+	}
+}
 
 func TestDictionaryUintMutationAPIsMatchCellKeys(t *testing.T) {
 	const key = uint64(0x1234567890ABCDEF)

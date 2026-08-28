@@ -24,7 +24,8 @@ func (d *AugmentedDictionary) KeyPrefixes(bits uint, limit int) ([]*Cell, error)
 		bits = d.keySz
 	}
 	var out []*Cell
-	err := d.keyPrefixesFrom(d.root.withTraceCombined(d.trace), d.keySz, BeginCell(), bits, limit, &out)
+	var prefix Builder
+	err := d.keyPrefixesFrom(d.root.withTraceCombined(d.trace), d.keySz, &prefix, bits, limit, &out)
 	if err != nil {
 		return nil, err
 	}
@@ -35,6 +36,9 @@ func (d *AugmentedDictionary) keyPrefixesFrom(branch *Cell, remaining uint, pref
 	if branch == nil {
 		return nil
 	}
+	prefixBits := prefix.BitsUsed()
+	defer prefix.truncateBits(prefixBits)
+
 	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
 	if err != nil {
 		return err
@@ -53,14 +57,13 @@ func (d *AugmentedDictionary) keyPrefixesFrom(branch *Cell, remaining uint, pref
 	// The label completes the prefix: emit the first bits of prefix+label and
 	// stop, whatever hangs below.
 	if consumed+node.labelLen >= bits {
-		full := prefix.Copy()
-		if err = full.storeSliceFromSlice(&label, bits-consumed); err != nil {
+		if err = prefix.storeSliceFromSlice(&label, bits-consumed); err != nil {
 			return err
 		}
 		if len(*out) >= limit {
 			return fmt.Errorf("dictionary has more than %d key prefixes of %d bits", limit, bits)
 		}
-		*out = append(*out, full.EndCell())
+		*out = append(*out, prefix.EndCell())
 		return nil
 	}
 	if node.isLeaf(remaining) {
@@ -68,23 +71,23 @@ func (d *AugmentedDictionary) keyPrefixesFrom(branch *Cell, remaining uint, pref
 		// dictionary: remaining == labelLen here, and remaining+consumed == keySz >= bits.
 		return fmt.Errorf("dictionary leaf shorter than its key")
 	}
-	extended := prefix.Copy()
-	if err = extended.storeSliceFromSlice(&label, node.labelLen); err != nil {
+	if err = prefix.storeSliceFromSlice(&label, node.labelLen); err != nil {
 		return err
 	}
+	branchBits := prefix.BitsUsed()
 	childRemaining := remaining - node.labelLen - 1
 	for bit := 0; bit < 2; bit++ {
 		child, err := node.ref(bit)
 		if err != nil {
 			return err
 		}
-		next := extended.Copy()
-		if err = next.StoreUInt(uint64(bit), 1); err != nil {
+		if err = prefix.StoreUInt(uint64(bit), 1); err != nil {
 			return err
 		}
-		if err = d.keyPrefixesFrom(child, childRemaining, next, bits, limit, out); err != nil {
+		if err = d.keyPrefixesFrom(child, childRemaining, prefix, bits, limit, out); err != nil {
 			return err
 		}
+		prefix.truncateBits(branchBits)
 	}
 	return nil
 }

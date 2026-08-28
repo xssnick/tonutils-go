@@ -2,6 +2,7 @@ package cell
 
 import (
 	"math/rand"
+	"sort"
 	"testing"
 )
 
@@ -79,6 +80,95 @@ func TestKeyPrefixesPartitionTheDictionary(t *testing.T) {
 					t.Fatalf("key %x appears in %d subtrees", k, c)
 				}
 			}
+		}
+	}
+}
+
+func TestKeyPrefixesMatchesKeySet(t *testing.T) {
+	const keyBits = uint(48)
+	rnd := rand.New(rand.NewSource(0x7a6b5c4d))
+
+	for round := 0; round < 20; round++ {
+		dict, err := NewAugDict(keyBits, testMetricAugmentation{})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		keys := make(map[uint64]struct{})
+		for len(keys) < 32+rnd.Intn(256) {
+			key := uint64(rnd.Int63()) & ((uint64(1) << keyBits) - 1)
+			if _, ok := keys[key]; ok {
+				continue
+			}
+			keys[key] = struct{}{}
+			if err = dict.Set(
+				BeginCell().MustStoreUInt(key, keyBits).EndCell(),
+				mustTestAugValue(t, uint64(rnd.Intn(256)), 8),
+			); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		for _, requestedBits := range []uint{1, 7, 8, 13, 16, 31, keyBits, keyBits + 10} {
+			bits := min(requestedBits, keyBits)
+			wantSet := make(map[uint64]struct{}, len(keys))
+			for key := range keys {
+				wantSet[key>>(keyBits-bits)] = struct{}{}
+			}
+			want := make([]uint64, 0, len(wantSet))
+			for prefix := range wantSet {
+				want = append(want, prefix)
+			}
+			sort.Slice(want, func(i, j int) bool { return want[i] < want[j] })
+
+			got, err := dict.KeyPrefixes(requestedBits, len(want))
+			if err != nil {
+				t.Fatalf("round %d bits %d: %v", round, requestedBits, err)
+			}
+			if len(got) != len(want) {
+				t.Fatalf("round %d bits %d: got %d prefixes, want %d", round, requestedBits, len(got), len(want))
+			}
+			for i, prefix := range got {
+				if prefix.BitsSize() != bits {
+					t.Fatalf("round %d bits %d prefix %d has %d bits", round, requestedBits, i, prefix.BitsSize())
+				}
+				if value := prefix.MustBeginParse().MustLoadUInt(bits); value != want[i] {
+					t.Fatalf("round %d bits %d prefix %d = %x, want %x", round, requestedBits, i, value, want[i])
+				}
+			}
+
+			if len(want) > 0 {
+				if limited, err := dict.KeyPrefixes(requestedBits, len(want)-1); err == nil || limited != nil {
+					t.Fatalf("round %d bits %d: limit did not reject the last prefix", round, requestedBits)
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkAugmentedDictionaryKeyPrefixes16(b *testing.B) {
+	const entries = 1024
+	dict, err := NewAugDict(16, testMetricAugmentation{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	for i := range entries {
+		// Multiplication by an odd number permutes the 16-bit key space and
+		// keeps the benchmark from measuring one unusually dense branch.
+		key := uint64(uint16(i * 40503))
+		if _, err = dict.SetBuilderByUintKeyWithMode(key, BeginCell().MustStoreUInt(key, 16), DictSetModeSet); err != nil {
+			b.Fatal(err)
+		}
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		prefixes, err := dict.KeyPrefixes(16, entries)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(prefixes) != entries {
+			b.Fatalf("got %d prefixes, want %d", len(prefixes), entries)
 		}
 	}
 }

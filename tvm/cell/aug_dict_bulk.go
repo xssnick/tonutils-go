@@ -3,7 +3,6 @@ package cell
 import (
 	"bytes"
 	"fmt"
-	"sort"
 	"sync"
 )
 
@@ -269,9 +268,7 @@ func (d *AugmentedDictionary) setManyItems(
 	parallelism int,
 	captureDiff bool,
 ) (*AugmentedDictionaryDiff, error) {
-	sort.Slice(items, func(i, j int) bool {
-		return compareKeySlices(&items[i].key, &items[j].key) < 0
-	})
+	sortAugBulkItems(items, d.keySz)
 	for i := 1; i < len(items); i++ {
 		if compareKeySlices(&items[i-1].key, &items[i].key) == 0 {
 			return nil, fmt.Errorf("duplicate key in bulk update")

@@ -353,7 +353,7 @@ func (d *PrefixDictionary) SetIntKey(key *big.Int, value *Cell) error {
 	initIntKeyBuilder(key, d.keySz, &builder)
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	_, err := d.setBuilderWithModeSlice(&keySlice, value.ToBuilder(), DictSetModeSet)
+	_, err := d.setValueWithModeSlice(&keySlice, dictSetValue{cell: value}, DictSetModeSet)
 	return err
 }
 
@@ -366,7 +366,18 @@ func (d *PrefixDictionary) SetWithMode(key, value *Cell, mode DictSetMode) (bool
 	if value == nil {
 		return false, fmt.Errorf("value is nil")
 	}
-	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
+	if d == nil {
+		return false, fmt.Errorf("prefix dict is nil")
+	}
+	if key == nil || key.BitsSize() > d.keySz {
+		return false, fmt.Errorf("invalid key size")
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return false, fmt.Errorf("failed to load key: %w", err)
+	}
+	return d.setValueWithModeSlice(&keySlice, dictSetValue{cell: value}, mode)
 }
 
 func (d *PrefixDictionary) SetBuilderWithMode(key *Cell, value *Builder, mode DictSetMode) (bool, error) {
@@ -405,7 +416,10 @@ func (d *PrefixDictionary) SetBuilderBySliceKeyWithMode(key *Slice, value *Build
 }
 
 func (d *PrefixDictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	return d.setValueWithModeSlice(keySlice, dictSetValue{builder: value}, mode)
+}
 
+func (d *PrefixDictionary) setValueWithModeSlice(keySlice *Slice, value dictSetValue, mode DictSetMode) (bool, error) {
 	newRoot, changed, err := d.set(d.tracedRoot(), keySlice, d.keySz, value, mode)
 	if err != nil {
 		return false, err
@@ -491,7 +505,7 @@ func (d *PrefixDictionary) ToCell() (*Cell, error) {
 	return d.tracedRoot(), nil
 }
 
-func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *Builder, mode DictSetMode) (*Cell, bool, error) {
+func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value dictSetValue, mode DictSetMode) (*Cell, bool, error) {
 	if key.BitsLeft() > remaining {
 		return nil, false, fmt.Errorf("invalid key size")
 	}
@@ -500,7 +514,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 		if mode == DictSetModeReplace {
 			return nil, false, nil
 		}
-		leaf, err := d.storePrefixLeaf(key, value, remaining)
+		leaf, err := d.storeSetPrefixLeaf(key, value, remaining)
 		return leaf, err == nil, err
 	}
 
@@ -530,7 +544,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 			return nil, false, fmt.Errorf("failed to split old child label: %w", err)
 		}
 
-		newLeaf, err := d.storePrefixLeaf(key, value, remaining-(bitsMatches+1))
+		newLeaf, err := d.storeSetPrefixLeaf(key, value, remaining-(bitsMatches+1))
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to build new leaf: %w", err)
 		}
@@ -566,7 +580,7 @@ func (d *PrefixDictionary) set(branch *Cell, key *Slice, remaining uint, value *
 			return node.cell, false, nil
 		}
 		nodeLabel := node.labelSlice()
-		leaf, err := d.storePrefixLeaf(&nodeLabel, value, remaining)
+		leaf, err := d.storeSetPrefixLeaf(&nodeLabel, value, remaining)
 		if err != nil {
 			return nil, false, fmt.Errorf("failed to replace leaf: %w", err)
 		}
@@ -788,6 +802,16 @@ func (d *PrefixDictionary) storePrefixLeaf(label *Slice, value *Builder, remaini
 		return nil, fmt.Errorf("failed to store value: %w", err)
 	}
 	return b.EndCellSpecial(false)
+}
+
+func (d *PrefixDictionary) storeSetPrefixLeaf(label *Slice, value dictSetValue, remaining uint) (*Cell, error) {
+	if value.cell == nil {
+		return d.storePrefixLeaf(label, value.builder, remaining)
+	}
+
+	var builder Builder
+	value.cell.ToBuilderInto(&builder)
+	return d.storePrefixLeaf(label, &builder, remaining)
 }
 
 func (d *PrefixDictionary) storePrefixFork(label *Slice, left, right *Cell, remaining uint) (*Cell, error) {

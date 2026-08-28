@@ -147,6 +147,62 @@ func (c *Cell) CreateHashUsageProofResolvedSized(
 	return CreateMerkleProof(body)
 }
 
+// CreateHashUsageProofResolvedSizedParallel is CreateHashUsageProofResolvedSized
+// with the subtree walk split across parallelism branch workers, the same
+// machinery createMerkleUpdateRaw arms for the state update's two proofs. The
+// prize is the same too: the walk is hashing and cloning over an already
+// resident selection, so branches split real work.
+//
+// Two differences from the serial entry, both deliberate:
+//   - The root exemption is keyed by the root's hash instead of a captured
+//     boolean. Branch workers call the prune callback concurrently, and a
+//     mutated capture would be a data race; the hash comparison is pure. The
+//     two are equivalent because a DAG cell cannot be its own descendant, so
+//     the root's hash occurs exactly once on the walk.
+//   - parallelism below two, or a selection smaller than the parallel
+//     threshold, falls back to the serial walk — same rule as the update.
+func (c *Cell) CreateHashUsageProofResolvedSizedParallel(
+	isLoaded func(Hash) bool,
+	resolveLoaded func(Hash) *Cell,
+	expectedCells int,
+	parallelism int,
+) (*Cell, error) {
+	if c == nil {
+		return nil, fmt.Errorf("failed to generate Merkle proof: cell is nil")
+	}
+	if c.Level() != 0 {
+		return nil, fmt.Errorf("failed to generate Merkle proof: level is not 0")
+	}
+	if isLoaded == nil {
+		return nil, fmt.Errorf("failed to build hash usage proof: loaded-cell selector is nil")
+	}
+	if parallelism < 2 || expectedCells < proofParallelMinCells {
+		return c.CreateHashUsageProofResolvedSized(isLoaded, resolveLoaded, expectedCells)
+	}
+
+	rootHash := c.HashKey()
+	state := merkleProofPruneBuildState{
+		shouldPrune: func(_ *Cell, _ int, hash Hash) (*Cell, bool, error) {
+			// MerkleProof::generate always materializes the proof body root;
+			// see CreateHashUsageProofResolvedSized.
+			if hash == rootHash {
+				return nil, false, nil
+			}
+			return nil, !isLoaded(hash), nil
+		},
+		resolveLoaded: resolveLoaded,
+		arena:         &proofCellArena{},
+		memoHint:      expectedCells,
+		parallelism:   parallelism,
+		parallel:      newProofParallelCache(expectedCells),
+	}
+	body, _, err := state.build(c, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build hash usage proof: %w", err)
+	}
+	return CreateMerkleProof(body)
+}
+
 // merkleProofPruneFunc decides whether a destination cell may be replaced by
 // a pruned boundary. It receives the merkle depth so a caller can key the cell
 // by the same hash the boundary will carry, plus that hash itself, which the

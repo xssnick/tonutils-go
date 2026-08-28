@@ -5,9 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"sync"
 )
 
 var ErrAugmentationSemanticsUnavailable = errors.New("augmented dict was loaded without augmentation semantics; provide an augmentation in LoadAugDict to enable mutation and extra validation")
+
+// EmptyExtra must be called for every mutation because implementations may
+// change availability at runtime. Pool only its empty destination: this keeps
+// that behavior while removing the 192-byte interface escape from the hot path.
+var augmentedWritabilityBuilderPool = sync.Pool{New: func() any { return new(Builder) }}
 
 type AugmentedExtraSkipper func(*Slice) error
 
@@ -575,7 +581,7 @@ func (d *AugmentedDictionary) SetIntKey(key *big.Int, value *Cell) error {
 	initIntKeyBuilder(key, d.keySz, &builder)
 	cell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
 	keySlice := Slice{cell: &cell, bitEnd: cell.bitsSz}
-	_, err := d.setBuilderWithModeSlice(&keySlice, value.ToBuilder(), DictSetModeSet)
+	_, err := d.setCellWithModeSlice(&keySlice, value, DictSetModeSet)
 	return err
 }
 
@@ -1039,7 +1045,21 @@ func (d *AugmentedDictionary) SetWithMode(key, value *Cell, mode DictSetMode) (b
 	if value == nil {
 		return false, fmt.Errorf("value is nil")
 	}
-	return d.SetBuilderWithMode(key, value.ToBuilder(), mode)
+	if d == nil {
+		return false, fmt.Errorf("dict is nil")
+	}
+	if key == nil || key.BitsSize() != d.keySz {
+		return false, fmt.Errorf("invalid key size")
+	}
+	if err := d.ensureWritable(); err != nil {
+		return false, err
+	}
+
+	var keySlice Slice
+	if err := key.BeginParseInto(&keySlice); err != nil {
+		return false, fmt.Errorf("failed to load key: %w", err)
+	}
+	return d.setCellWithModeSlice(&keySlice, value, mode)
 }
 
 func (d *AugmentedDictionary) SetBuilder(key *Cell, value *Builder) error {
@@ -1140,8 +1160,16 @@ func (d *AugmentedDictionary) SetBuilderByUintKeyWithMode(key uint64, value *Bui
 }
 
 func (d *AugmentedDictionary) setBuilderWithModeSlice(keySlice *Slice, value *Builder, mode DictSetMode) (bool, error) {
+	return d.setValueWithModeSlice(keySlice, value, nil, mode)
+}
+
+func (d *AugmentedDictionary) setCellWithModeSlice(keySlice *Slice, value *Cell, mode DictSetMode) (bool, error) {
+	return d.setValueWithModeSlice(keySlice, nil, value, mode)
+}
+
+func (d *AugmentedDictionary) setValueWithModeSlice(keySlice *Slice, value *Builder, valueCell *Cell, mode DictSetMode) (bool, error) {
 	var state augmentedMutationState
-	newRoot, rootExtra, changed, err := d.set(d.root, d.root.Trace(), keySlice, d.keySz, value, mode, &state)
+	newRoot, rootExtra, changed, err := d.set(d.root, d.root.Trace(), keySlice, d.keySz, value, valueCell, mode, &state)
 	if err != nil {
 		return false, err
 	}
@@ -1176,11 +1204,13 @@ func (d *AugmentedDictionary) ToCell() (*Cell, error) {
 	}
 
 	b := BeginCell()
+	var rootExtraBuilder Builder
+	rootExtra.ToBuilderInto(&rootExtraBuilder)
 	if d.root == nil {
 		if err := b.StoreUInt(0, 1); err != nil {
 			return nil, err
 		}
-		if err := b.StoreBuilder(rootExtra.ToBuilder()); err != nil {
+		if err := b.StoreBuilder(&rootExtraBuilder); err != nil {
 			return nil, err
 		}
 		return b.EndCell(), nil
@@ -1192,7 +1222,7 @@ func (d *AugmentedDictionary) ToCell() (*Cell, error) {
 	if err := b.StoreRef(d.root); err != nil {
 		return nil, err
 	}
-	if err := b.StoreBuilder(rootExtra.ToBuilder()); err != nil {
+	if err := b.StoreBuilder(&rootExtraBuilder); err != nil {
 		return nil, err
 	}
 	return b.EndCell(), nil
@@ -1221,8 +1251,15 @@ func (d *AugmentedDictionary) ensureWritable() error {
 	if d == nil || d.aug == nil {
 		return fmt.Errorf("augmentation is nil")
 	}
-	var extra Builder
-	return d.aug.EmptyExtra(&extra)
+	scratch := augmentedWritabilityBuilderPool.Get().(*Builder)
+	err := d.aug.EmptyExtra(scratch)
+	clear(scratch.data[:scratch.usedBytes()])
+	clear(scratch.refs[:scratch.refsNum])
+	scratch.trace = nil
+	scratch.bitsSz = 0
+	scratch.refsNum = 0
+	augmentedWritabilityBuilderPool.Put(scratch)
+	return err
 }
 
 func (d *AugmentedDictionary) ensureRootExtra() (*Cell, error) {
@@ -1414,12 +1451,12 @@ func (d *AugmentedDictionary) setRootWithExtra(root, rootExtra *Cell) error {
 	return nil
 }
 
-func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOffset uint, value *Builder, mode DictSetMode, state *augmentedMutationState) (*Cell, Slice, bool, error) {
+func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOffset uint, value *Builder, valueCell *Cell, mode DictSetMode, state *augmentedMutationState) (*Cell, Slice, bool, error) {
 	if branch == nil {
 		if mode == DictSetModeReplace {
 			return nil, Slice{}, false, nil
 		}
-		leaf, leafExtra, err := d.storeLeafWithExtra(pfx, value, keyOffset, state)
+		leaf, leafExtra, err := d.storeSetLeafWithExtra(pfx, value, valueCell, keyOffset, state)
 		return leaf, leafExtra, err == nil, err
 	}
 
@@ -1446,7 +1483,7 @@ func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOff
 				return branch, Slice{}, false, nil
 			}
 			kPartView := kPart
-			leaf, leafExtra, err := d.storeLeafWithExtra(&kPartView, value, keyOffset, state)
+			leaf, leafExtra, err := d.storeSetLeafWithExtra(&kPartView, value, valueCell, keyOffset, state)
 			return leaf, leafExtra, err == nil, err
 		}
 
@@ -1457,7 +1494,7 @@ func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOff
 		}
 
 		nextKeyOffset := keyOffset - (bitsMatches + 1)
-		ref, refExtra, changed, err := d.set(ref, refTrace, pfx, nextKeyOffset, value, mode, state)
+		ref, refExtra, changed, err := d.set(ref, refTrace, pfx, nextKeyOffset, value, valueCell, mode, state)
 		if err != nil {
 			return nil, Slice{}, false, fmt.Errorf("failed to dive into %d ref of branch: %w", refIdx, err)
 		}
@@ -1517,7 +1554,7 @@ func (d *AugmentedDictionary) set(branch *Cell, trace *Trace, pfx *Slice, keyOff
 	}
 	oldChildCell := oldChild.EndCell()
 
-	newChild, newExtra, err := d.storeLeafWithExtra(pfx, value, keyOffset-(bitsMatches+1), state)
+	newChild, newExtra, err := d.storeSetLeafWithExtra(pfx, value, valueCell, keyOffset-(bitsMatches+1), state)
 	if err != nil {
 		return nil, Slice{}, false, fmt.Errorf("failed to store new child leaf: %w", err)
 	}
@@ -1664,6 +1701,32 @@ func (d *AugmentedDictionary) storeLeafWithExtra(keyPfx *Slice, value *Builder, 
 		refEnd:            value.refsNum,
 		forceCopyOnToCell: true,
 	}
+	return d.storePreparedLeafWithExtra(keyPfx, keyOffset, state)
+}
+
+func (d *AugmentedDictionary) storeSetLeafWithExtra(keyPfx *Slice, value *Builder, valueCell *Cell, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, error) {
+	if valueCell == nil {
+		return d.storeLeafWithExtra(keyPfx, value, keyOffset, state)
+	}
+
+	// Borrow the immutable cell payload directly. Routing Cell setters through
+	// ToBuilder here would force that 192-byte builder to survive the recursive
+	// mutation walk and escape to the heap.
+	refs := valueCell.refs[:valueCell.refsCount()]
+	state.valueCell = Cell{data: valueCell.data, bitsSz: valueCell.bitsSz}
+	state.valueCell.setRefs(refs)
+	state.valueCell.setLevelMask(ordinaryLevelMask(refs))
+	state.value = Slice{
+		cell:              &state.valueCell,
+		bitEnd:            state.valueCell.bitsSz,
+		refEnd:            uint8(len(refs)),
+		forceCopyOnToCell: true,
+	}
+	return d.storePreparedLeafWithExtra(keyPfx, keyOffset, state)
+}
+
+func (d *AugmentedDictionary) storePreparedLeafWithExtra(keyPfx *Slice, keyOffset uint, state *augmentedMutationState) (*Cell, Slice, error) {
+	payload := state.value
 	state.extra = Builder{}
 	if err := d.aug.LeafExtra(&state.value, &state.extra); err != nil {
 		return nil, Slice{}, fmt.Errorf("failed to compute leaf extra: %w", err)
@@ -1679,7 +1742,7 @@ func (d *AugmentedDictionary) storeLeafWithExtra(keyPfx *Slice, value *Builder, 
 		return nil, Slice{}, fmt.Errorf("failed to store leaf extra: %w", err)
 	}
 	extraBitEnd, extraRefEnd := b.bitsSz, b.refsNum
-	if err := b.StoreBuilder(value); err != nil {
+	if err := b.StoreSliceFrom(&payload); err != nil {
 		return nil, Slice{}, fmt.Errorf("failed to store value: %w", err)
 	}
 	leaf := b.EndCell()

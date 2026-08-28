@@ -309,13 +309,6 @@ func parseBOCPayloadCellInfo(payload []byte, begin, end, refSzBytes int, indexed
 	return info, offset, nil
 }
 
-func (l *lazyBOCLoader) loadAnyCell(idx int) (*Cell, error) {
-	if idx < 0 || idx >= len(l.cells) {
-		return nil, errors.New("invalid index, out of scope")
-	}
-	return l.createLazyCell(idx)
-}
-
 func (l *lazyBOCLoader) loadDataCell(idx int) (*Cell, error) {
 	if idx < 0 || idx >= len(l.cells) {
 		return nil, errors.New("invalid index, out of scope")
@@ -351,21 +344,38 @@ func (l *lazyBOCLoader) loadDataCell(idx int) (*Cell, error) {
 
 func (l *lazyBOCLoader) deserializeDataCell(meta *lazyBOCComputedMeta, idx int) (*Cell, error) {
 	info := l.cells[idx]
-	body := info.body(l.payload)
+	refCnt := info.refsCount()
 
-	c := &Cell{
-		data:   body,
-		bitsSz: info.bitsSz,
+	// The cell, its placeholder children, their metas and their pruned
+	// payloads live exactly as long as each other — a placeholder is
+	// reachable only through its parent, and resolution never installs the
+	// loaded child back into the tree — so they share one allocation, the
+	// same layout the storage decoders use (lazy_slab.go). The body needs no
+	// slab space: it is a slice into the deserializer's shared payload.
+	var c *Cell
+	var refCells []Cell
+	var refMetas []cellMeta
+	var refPruned [][lazySlabPrunedCap]byte
+	switch {
+	case refCnt == 0:
+		c = &Cell{}
+	case refCnt <= 2:
+		slab := &bocLazySlab2{}
+		c, refCells, refMetas, refPruned = &slab.root, slab.refs[:], slab.metas[:], slab.pruned[:]
+	default:
+		slab := &bocLazySlab4{}
+		c, refCells, refMetas, refPruned = &slab.root, slab.refs[:], slab.metas[:], slab.pruned[:]
 	}
+	c.data = info.body(l.payload)
+	c.bitsSz = info.bitsSz
 	c.setSpecial(info.isSpecial())
 	levelMask := info.levelMask()
-	refCnt := info.refsCount()
 	c.setLevelMask(levelMask)
 	c.setRefsCount(refCnt)
 
 	for ref := 0; ref < refCnt; ref++ {
 		refIdx := info.refIndex(l.payload, ref, l.refSzBytes)
-		loaded, err := l.loadAnyCell(refIdx)
+		loaded, err := l.loadRefCellInto(meta, refIdx, &refCells[ref], &refMetas[ref], refPruned[ref][:])
 		if err != nil {
 			return nil, fmt.Errorf("failed to load ref %d: %w", ref, err)
 		}
@@ -384,6 +394,57 @@ func (l *lazyBOCLoader) deserializeDataCell(meta *lazyBOCComputedMeta, idx int) 
 	}
 
 	return c, nil
+}
+
+// loadRefCellInto builds the lazy placeholder for one reference into
+// slab-provided memory: the two branches mirror createLazyCellWithMeta, with
+// initSlabRef standing in for createLazyPrunedRef. A child the cache already
+// materialized is returned as-is and its slot stays unused.
+func (l *lazyBOCLoader) loadRefCellInto(meta *lazyBOCComputedMeta, idx int, dst *Cell, dstMeta *cellMeta, buf []byte) (*Cell, error) {
+	if idx < 0 || idx >= len(l.cells) {
+		return nil, errors.New("invalid index, out of scope")
+	}
+	if l.cache != nil {
+		if cached := l.cache[idx].Load(); cached != nil {
+			return cached, nil
+		}
+	}
+
+	info := l.cells[idx]
+	levelMask := info.levelMask()
+	hashesCount := levelMask.getHashesCount()
+	loader := func(Hash) (*Cell, error) {
+		return l.loadDataCell(idx)
+	}
+
+	if l.trustStoredMeta(info) {
+		var depths [4]uint16
+		info.fillStoredDepths(l.payload, depths[:])
+
+		if err := initSlabRef(dst, dstMeta, buf, LazyRef{
+			LevelMask: levelMask,
+			Hashes:    info.hashes(l.payload),
+			Depths:    depths[:hashesCount],
+		}, loader); err != nil {
+			return nil, err
+		}
+		dstMeta.skipLazyRefValidation = true
+		return dst, nil
+	}
+
+	metaOffset := int(meta.offsets[idx])
+	hashesOffset := metaOffset * hashSize
+	if err := initSlabRef(dst, dstMeta, buf, LazyRef{
+		LevelMask: levelMask,
+		Hashes:    meta.hashes[hashesOffset : hashesOffset+hashesCount*hashSize],
+		Depths:    meta.depths[metaOffset : metaOffset+hashesCount],
+	}, loader); err != nil {
+		return nil, err
+	}
+	if l.trustedHashes {
+		dstMeta.skipLazyRefValidation = true
+	}
+	return dst, nil
 }
 
 func (l *lazyBOCLoader) createLazyCell(idx int) (*Cell, error) {

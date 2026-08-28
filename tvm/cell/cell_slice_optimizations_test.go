@@ -464,6 +464,55 @@ func TestBuilderStoreSliceFromPreservesSourceCursor(t *testing.T) {
 	}
 }
 
+func TestBuilderStoreSliceFromBitOffsets(t *testing.T) {
+	lengths := []uint{0, 1, 2, 7, 8, 9, 31, 32, 63, 64, 65, 127, 128, 255, 256, 511, 768, 1015}
+
+	for sourceOffset := uint(0); sourceOffset < 8; sourceOffset++ {
+		for destinationOffset := uint(0); destinationOffset < 8; destinationOffset++ {
+			for _, bits := range lengths {
+				if sourceOffset+bits >= 1024 || destinationOffset+bits >= 1024 {
+					continue
+				}
+
+				payload := make([]byte, (bits+7)/8)
+				for i := range payload {
+					payload[i] = byte(i*73 + int(sourceOffset)*29 + int(destinationOffset)*11 + int(bits))
+				}
+
+				sourceCell := BeginCell().MustStoreUInt(0, sourceOffset).MustStoreSlice(payload, bits).EndCell()
+				source := sourceCell.MustBeginParse()
+				if err := source.SkipBits(sourceOffset); err != nil {
+					t.Fatal(err)
+				}
+
+				var got Builder
+				got.MustStoreUInt(0, destinationOffset)
+				gotSource := *source
+				if err := got.storeSliceFromSlice(&gotSource, bits); err != nil {
+					t.Fatalf("direct copy failed at offsets=%d/%d bits=%d: %v", sourceOffset, destinationOffset, bits, err)
+				}
+				if gotSource.BitsLeft() != source.BitsLeft()-bits {
+					t.Fatalf("source cursor mismatch at offsets=%d/%d bits=%d", sourceOffset, destinationOffset, bits)
+				}
+
+				var want Builder
+				want.MustStoreUInt(0, destinationOffset)
+				var copied [maxCellDataBytes]byte
+				if err := source.PreloadSliceInto(copied[:], bits); err != nil {
+					t.Fatal(err)
+				}
+				if err := want.StoreSlice(copied[:], bits); err != nil {
+					t.Fatal(err)
+				}
+
+				if got.bitsSz != want.bitsSz || !bytes.Equal(got.dataSlice(), want.dataSlice()) {
+					t.Fatalf("copy mismatch at offsets=%d/%d bits=%d: got=%x want=%x", sourceOffset, destinationOffset, bits, got.dataSlice(), want.dataSlice())
+				}
+			}
+		}
+	}
+}
+
 func TestSliceRefParsingCombinedAndReadSetTraces(t *testing.T) {
 	loadsA, loadsB := 0, 0
 	childA := NewTrace(TraceHooks{OnLoad: func(*Cell) { loadsA++ }})

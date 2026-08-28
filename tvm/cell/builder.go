@@ -1024,12 +1024,95 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	return nil
 }
 
-func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
-	var data [maxCellDataBytes]byte
-	if err := slice.loadSliceInto(data[:], sz, false); err != nil {
-		return err
+// appendBitRange appends a bit window without first realigning it into a
+// temporary buffer. Both offsets stay constant modulo eight while complete
+// bytes are consumed, which lets the common long path move 64 bits at a time.
+func appendBitRange(dst []byte, dstBitOffset uint, data []byte, bitOffset, sz uint) {
+	srcByte := int(bitOffset / 8)
+	srcShift := bitOffset % 8
+	dstByte := int(dstBitOffset / 8)
+	dstShift := dstBitOffset % 8
+	left := sz
+
+	if srcShift == 0 && dstShift == 0 {
+		bytesNeeded := int((sz + 7) / 8)
+		copy(dst[dstByte:dstByte+bytesNeeded], data[srcByte:srcByte+bytesNeeded])
+		left = 0
 	}
-	return b.StoreSlice(data[:], sz)
+
+	for left >= 64 {
+		var value uint64
+		if srcShift == 0 {
+			value = binary.BigEndian.Uint64(data[srcByte:])
+		} else {
+			value = binary.BigEndian.Uint64(data[srcByte:])<<srcShift |
+				uint64(data[srcByte+8])>>(8-srcShift)
+		}
+
+		if dstShift == 0 {
+			binary.BigEndian.PutUint64(dst[dstByte:], value)
+		} else {
+			dst[dstByte] |= byte(value >> (56 + dstShift))
+			binary.BigEndian.PutUint64(dst[dstByte+1:], value<<(8-dstShift))
+		}
+
+		srcByte += 8
+		dstByte += 8
+		left -= 64
+	}
+
+	for left > 0 {
+		value := data[srcByte] << srcShift
+		if srcShift != 0 && srcByte+1 < len(data) {
+			value |= data[srcByte+1] >> (8 - srcShift)
+		}
+
+		if dstShift == 0 {
+			dst[dstByte] = value
+		} else {
+			dst[dstByte] |= value >> dstShift
+			if left > 8-dstShift {
+				dst[dstByte+1] = value << (8 - dstShift)
+			}
+		}
+
+		if left <= 8 {
+			break
+		}
+		srcByte++
+		dstByte++
+		left -= 8
+	}
+
+	if end := dstBitOffset + sz; end%8 != 0 {
+		dst[end/8] &= byte(0xFF << (8 - end%8))
+	}
+}
+
+func (b *Builder) storeBitRange(data []byte, bitOffset, sz uint) error {
+	if sz == 0 {
+		return nil
+	}
+	if b.bitsSz+sz >= 1024 {
+		return ErrNotFit1023
+	}
+	if bitOffset+sz > uint(len(data))*8 {
+		return ErrSmallSlice
+	}
+
+	appendBitRange(b.data[:], b.bitsSz, data, bitOffset, sz)
+	b.bitsSz += sz
+	return nil
+}
+
+func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
+	if left := slice.BitsLeft(); left < sz {
+		return ErrNotEnoughData(int(left), int(sz))
+	}
+
+	start := uint(slice.bitStart)
+	slice.bitStart += uint16(sz)
+	return b.storeBitRange(slice.cell.data, start, sz)
 }
 
 // StoreSliceFrom stores all remaining bits and references of slice directly,

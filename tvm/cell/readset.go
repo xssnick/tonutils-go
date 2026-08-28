@@ -78,6 +78,10 @@ type ReadSet struct {
 	// retained cell is a plain descent again, sharing rather than copying.
 	sealed atomic.Bool
 
+	// deferred, when armed, freezes the table: writes buffer here and fold in
+	// at FlushDeferredRecording. See BeginDeferredRecording.
+	deferred atomic.Pointer[readSetDeferred]
+
 	// detached stops the recorder without dropping what it recorded. It is the
 	// half of Seal that a producer needs at the instant its reading is over but
 	// its record is still being consulted: the collated proof is selected from
@@ -485,6 +489,91 @@ func (rs *ReadSet) record(c *Cell) {
 	}
 }
 
+// readSetDeferred is the deferred-recording window's buffer. While it is
+// armed, every write that would have entered the table lands here instead, so
+// the table itself is frozen — which is what lets a reader that assumes a
+// stable table (the merkle update's source graph above all) run concurrently
+// with recorders that are still discovering reads. First-read semantics are
+// preserved by the buffer's own dedup: onRecord fires exactly once per cell,
+// at the moment the read happens, so the estimators the callback feeds see
+// the same sequence they would have seen without the window.
+type readSetDeferred struct {
+	mu       sync.Mutex
+	billed   map[Hash]*Cell
+	unbilled map[Hash]*Cell
+}
+
+// BeginDeferredRecording freezes the table: until FlushDeferredRecording,
+// recorded cells accumulate in a buffer and the table is not written. Reads
+// of the table (probes, RecordedCell, the source-graph walk) keep seeing the
+// pre-window record. Panics if a window is already open — the window is a
+// bracket, not a counter.
+func (rs *ReadSet) BeginDeferredRecording() {
+	if rs == nil {
+		return
+	}
+	if !rs.deferred.CompareAndSwap(nil, &readSetDeferred{
+		billed:   make(map[Hash]*Cell, 512),
+		unbilled: make(map[Hash]*Cell, 64),
+	}) {
+		panic("cell: deferred recording window is already open")
+	}
+}
+
+// FlushDeferredRecording closes the window and folds the buffer into the
+// table. The callback is NOT replayed: it already fired once per cell when
+// the read happened inside the window.
+func (rs *ReadSet) FlushDeferredRecording() {
+	if rs == nil {
+		return
+	}
+	deferred := rs.deferred.Swap(nil)
+	if deferred == nil {
+		return
+	}
+	deferred.mu.Lock()
+	defer deferred.mu.Unlock()
+	for hash, c := range deferred.billed {
+		shard := &rs.shards[hash[0]&(readSetShards-1)]
+		shard.mu.Lock()
+		_, added := shard.insertLocked(hash, c, true)
+		shard.mu.Unlock()
+		if added {
+			rs.recorded.Add(1)
+		}
+	}
+	for hash, c := range deferred.unbilled {
+		shard := &rs.shards[hash[0]&(readSetShards-1)]
+		shard.mu.Lock()
+		_, added := shard.insertLocked(hash, c, false)
+		shard.mu.Unlock()
+		if added {
+			rs.recorded.Add(1)
+		}
+	}
+}
+
+// deferRecord routes one would-be table write into the open window's buffer.
+// It reports whether the cell is a first read (bill the callback) — false for
+// a cell the table already holds or the buffer has already seen.
+func (d *readSetDeferred) deferRecord(hash Hash, c *Cell, billed bool) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.billed[hash]; ok {
+		return false
+	}
+	if billed {
+		delete(d.unbilled, hash)
+		d.billed[hash] = c
+		return true
+	}
+	if _, ok := d.unbilled[hash]; ok {
+		return false
+	}
+	d.unbilled[hash] = c
+	return false
+}
+
 // recordCell publishes one billed read and reports whether its first-read
 // callback is due. The callback stays in the caller so RecordMany can coalesce
 // several notifications without ever running one under the shard lock.
@@ -510,6 +599,9 @@ func (rs *ReadSet) recordCell(c *Cell) bool {
 
 	var hash Hash
 	copy(hash[:], raw)
+	if deferred := rs.deferred.Load(); deferred != nil {
+		return deferred.deferRecord(hash, c, true)
+	}
 	shard.mu.Lock()
 	bill, added := shard.insertLocked(hash, c, true)
 	shard.mu.Unlock()
@@ -586,6 +678,10 @@ func (rs *ReadSet) RecordUnbilled(c *Cell) {
 	}
 	var hash Hash
 	copy(hash[:], raw)
+	if deferred := rs.deferred.Load(); deferred != nil {
+		deferred.deferRecord(hash, c, false)
+		return
+	}
 	if _, added := shard.insert(hash, c, false); added {
 		rs.recorded.Add(1)
 	}

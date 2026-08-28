@@ -1,9 +1,6 @@
 package cell
 
-import (
-	"fmt"
-	"sort"
-)
+import "fmt"
 
 // DeleteMany removes a batch of keys in a single descent.
 //
@@ -73,9 +70,7 @@ func (d *AugmentedDictionary) DeleteManyByBytes(keys [][]byte, parallelism ...in
 }
 
 func (d *AugmentedDictionary) deleteManySlices(items []Slice, workers int) error {
-	sort.Slice(items, func(i, j int) bool {
-		return compareKeySlices(&items[i], &items[j]) < 0
-	})
+	sortAugBulkDeleteKeys(items, d.keySz)
 	for i := 1; i < len(items); i++ {
 		if compareKeySlices(&items[i-1], &items[i]) == 0 {
 			return fmt.Errorf("duplicate key in bulk delete")

@@ -365,6 +365,17 @@ func (c *Slice) LoadBigCoins() (*big.Int, error) {
 	return c.LoadVarUInt(16)
 }
 
+func (c *Slice) loadBigCoinsInto(dst *big.Int) error {
+	ln, err := c.LoadUInt(4)
+	if err != nil {
+		return err
+	}
+	if ln >= 16 {
+		return ErrTooBigValue
+	}
+	return c.LoadBigUIntInto(dst, uint(ln*8))
+}
+
 func (c *Slice) MustLoadUInt(sz uint) uint64 {
 	res, err := c.LoadUInt(sz)
 	if err != nil {
