@@ -168,6 +168,10 @@ func (a *Address) UnmarshalJSON(data []byte) error {
 			return err
 		}
 
+		if len(b) < 5 {
+			return fmt.Errorf("invalid ext address")
+		}
+
 		addr = NewAddressExt(
 			b[0],
 			uint(binary.BigEndian.Uint32(b[1:5])),
@@ -180,6 +184,10 @@ func (a *Address) UnmarshalJSON(data []byte) error {
 		b, err := hex.DecodeString(strData)
 		if err != nil {
 			return err
+		}
+
+		if len(b) < 9 {
+			return fmt.Errorf("invalid var address")
 		}
 
 		addr = NewAddressVar(
