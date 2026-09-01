@@ -732,3 +732,41 @@ func TestAddress_Eq(t *testing.T) {
 		t.Fatal("not eq")
 	}
 }
+
+func TestAddress_UnmarshalJSON_MalformedDoesNotPanic(t *testing.T) {
+	// Regression: EXT:/VAR: branches decoded hex then indexed b[1:5]/b[5:9]
+	// without checking the decoded length, panicking on short-but-valid hex.
+	cases := []string{
+		`"EXT:aabbcc"`,           // 3 bytes, needs >=5
+		`"EXT:"`,                 // 0 bytes
+		`"VAR:aabbccddeeff"`,     // 6 bytes, needs >=9
+		`"VAR:aabb"`,             // 2 bytes
+	}
+	for _, c := range cases {
+		var a Address
+		// Must return an error, must not panic.
+		if err := a.UnmarshalJSON([]byte(c)); err == nil {
+			t.Errorf("expected error for malformed input %s, got nil", c)
+		}
+	}
+}
+
+func TestAddress_UnmarshalJSON_ValidStillWorks(t *testing.T) {
+	// A well-formed std address must still round-trip through JSON.
+	data := make([]byte, 32)
+	for i := range data {
+		data[i] = byte(i)
+	}
+	orig := NewAddress(0, 0, data)
+	js, err := orig.MarshalJSON()
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got Address
+	if err := got.UnmarshalJSON(js); err != nil {
+		t.Fatalf("unmarshal of valid address failed: %v", err)
+	}
+	if !got.Equals(orig) {
+		t.Errorf("round-trip mismatch: got %s want %s", got.String(), orig.String())
+	}
+}
