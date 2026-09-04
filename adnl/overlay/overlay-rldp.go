@@ -2,7 +2,6 @@ package overlay
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"sync/atomic"
 
@@ -24,7 +23,7 @@ func (r *RLDPWrapper) CreateOverlay(id []byte) *RLDPOverlayWrapper {
 	r.mx.Lock()
 	defer r.mx.Unlock()
 
-	strId := hex.EncodeToString(id)
+	strId := string(id)
 
 	w := r.overlays[strId]
 	if w != nil && !w.closed.Load() {
@@ -43,7 +42,7 @@ func (r *RLDPWrapper) detachOverlay(overlay *RLDPOverlayWrapper) {
 	r.mx.Lock()
 	defer r.mx.Unlock()
 
-	id := hex.EncodeToString(overlay.overlayId)
+	id := string(overlay.overlayId)
 	if r.overlays[id] == overlay {
 		delete(r.overlays, id)
 	}

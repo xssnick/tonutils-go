@@ -102,17 +102,22 @@ type transactionActionLoadResult struct {
 func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
+	// balance, actionFees, actionFine and msgBalanceRemaining are filled in by
+	// whichever return builds the result — every failAction call, the state
+	// limit branch and the success epilogue all assign them — so the common
+	// path does not allocate placeholders it immediately replaces. The two
+	// early returns below build their own.
 	out := &transactionActionApplyResult{
-		nextCode:            acc.code,
-		nextLibraries:       acc.libraries,
-		extraCurrencies:     extraCurrencies,
-		endLT:               endLT,
-		balance:             transactionBigOrZero(balanceAfterGas),
-		actionFees:          bigint.FromInt64(0),
-		actionFine:          bigint.FromInt64(0),
-		msgBalanceRemaining: msgBalance.copy(),
+		nextCode:        acc.code,
+		nextLibraries:   acc.libraries,
+		extraCurrencies: extraCurrencies,
+		endLT:           endLT,
 	}
 	if !computeSuccess {
+		out.balance = transactionBigOrZero(balanceAfterGas)
+		out.actionFees = bigint.FromInt64(0)
+		out.actionFine = bigint.FromInt64(0)
+		out.msgBalanceRemaining = msgBalance.copy()
 		return out, nil
 	}
 
@@ -126,6 +131,9 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	if err != nil {
 		return nil, err
 	}
+	// TotalMsgSize is assigned by every return that keeps this phase: the
+	// invalid-list return right below, every failAction call, the state limit
+	// branch and the success epilogue.
 	actionPhase := &tlb.ActionPhase{
 		Success:        false,
 		Valid:          loadedActions.resultCode == 0,
@@ -135,15 +143,19 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		ActionListHash: actionsRoot.Hash(),
 		TotalActions:   loadedActions.totalActions,
 		SkippedActions: loadedActions.skippedActions,
-		TotalMsgSize: tlb.StorageUsedShort{
-			Cells: bigint.FromInt64(0),
-			Bits:  bigint.FromInt64(0),
-		},
 	}
 	out.phase = actionPhase
 	if loadedActions.resultCode != 0 {
 		actionPhase.ResultCode = loadedActions.resultCode
 		actionPhase.ResultArg = loadedActions.resultArg
+		actionPhase.TotalMsgSize = tlb.StorageUsedShort{
+			Cells: bigint.FromInt64(0),
+			Bits:  bigint.FromInt64(0),
+		}
+		out.balance = transactionBigOrZero(balanceAfterGas)
+		out.actionFees = bigint.FromInt64(0)
+		out.actionFine = bigint.FromInt64(0)
+		out.msgBalanceRemaining = msgBalance.copy()
 		out.bounce = loadedActions.bounce
 		return out, nil
 	}
@@ -824,7 +836,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		}
 		extraFlags := suggestedExtraFlags
 
-		req, err := transactionCurrencyFromOwnedParts(intMsg.Amount.Nano(), intMsg.ExtraCurrencies)
+		req, err := transactionCurrencyFromOwnedParts(bigint.Set(intMsg.Amount.NanoRef()), intMsg.ExtraCurrencies)
 		if err != nil {
 			return transactionSendResultCode(out, mode, 37, globalVersion), nil
 		}

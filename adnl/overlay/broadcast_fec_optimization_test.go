@@ -197,8 +197,8 @@ func TestBroadcastFECRelaySharesPreparedPartAcrossPeers(t *testing.T) {
 
 	stream := fecBroadcastStream{
 		parts:          map[uint32]broadcastFECRelayPart{},
-		receivedPeers:  map[string]struct{}{},
-		completedPeers: map[string]struct{}{},
+		receivedPeers:  map[broadcastExternalPeerIDKey]struct{}{},
+		completedPeers: map[broadcastExternalPeerIDKey]struct{}{},
 	}
 	broadcastHash, err := part.Full.CalcID()
 	if err != nil {
@@ -300,7 +300,7 @@ func BenchmarkBroadcastFECToSignEncoding(b *testing.B) {
 		var wire [4 + 32 + 4]byte
 		b.ReportAllocs()
 		for b.Loop() {
-			if err := fillBroadcastFECToSign(&wire, partHash, 123456); err != nil {
+			if err := fillBroadcastToSign(&wire, partHash, 123456); err != nil {
 				b.Fatal(err)
 			}
 		}
@@ -374,7 +374,7 @@ func BenchmarkBroadcastFECRelayFanoutSerialization(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				if prepared {
-					wire, err := prepareBroadcastMessage(full)
+					wire, err := PrepareBroadcastMessage(full)
 					if err != nil {
 						b.Fatal(err)
 					}

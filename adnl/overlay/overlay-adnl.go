@@ -28,6 +28,17 @@ const CertCheckResultNeedCheck CertCheckResult = 2
 
 const DefaultFECBroadcastMaxActiveStreams = 128
 const DefaultFECBroadcastMaxActiveBytes = 1 << 30
+
+// FECBroadcastSmallStreamMaxBytes is the payload size up to which a FEC
+// broadcast counts as small — an external message or a shard block
+// description rather than a block. Small streams are admitted from the whole
+// receiver budget; large ones from all but one part in
+// fecBroadcastSmallStreamReserveDivisor of it. On a validator under a shard
+// split, block broadcasts that never completed over a saturated link filled
+// the whole budget, and every external message arriving after that was
+// refused for minutes while the blocks around it stayed full.
+const FECBroadcastSmallStreamMaxBytes = 64 << 10
+const fecBroadcastSmallStreamReserveDivisor = 8
 const DefaultFECDeliveredCacheSize = 4096
 const DefaultBroadcastMaxConcurrentAdmissions = 128
 
@@ -50,8 +61,8 @@ type fecBroadcastStream struct {
 	encoder        *raptorq.Encoder
 	partHashes     map[uint32][32]byte
 	parts          map[uint32]broadcastFECRelayPart
-	receivedPeers  map[string]struct{}
-	completedPeers map[string]struct{}
+	receivedPeers  map[broadcastExternalPeerIDKey]struct{}
+	completedPeers map[broadcastExternalPeerIDKey]struct{}
 	budgetBytes    int64
 	finishedAt     *time.Time
 	completedAt    *time.Time
@@ -252,6 +263,22 @@ func (a *ADNLOverlayWrapper) SendPreparedCustomMessage(ctx context.Context, body
 	})
 }
 
+// SendPreparedBroadcastMessage sends the message's cached ADNL frame for this
+// overlay straight to the transport, so a part fanned out to several peers of
+// the overlay is framed once. A transport without the prepared path (a custom
+// ADNL implementation) gets the body through SendPreparedCustomMessage.
+func (a *ADNLOverlayWrapper) SendPreparedBroadcastMessage(ctx context.Context, msg *PreparedBroadcastMessage) error {
+	sender, ok := a.ADNLWrapper.ADNL.(adnl.PreparedCustomMessageSender)
+	if !ok {
+		return a.SendPreparedCustomMessage(ctx, msg.Body())
+	}
+	framed, err := msg.ADNLMessage(a.overlayId)
+	if err != nil {
+		return err
+	}
+	return sender.SendPreparedCustomMessage(ctx, framed)
+}
+
 func (a *ADNLOverlayWrapper) Query(ctx context.Context, req, result tl.Serializable) error {
 	return a.ADNLWrapper.Query(ctx, []tl.Serializable{Query{Overlay: a.overlayId}, req}, result)
 }
@@ -446,7 +473,7 @@ func estimateRetainedFECBroadcastBudgetBytes(fec rldp.FECRaptorQ) int64 {
 // stream.removed instead, which removeStreamLocked sets under state.mx before
 // the stream leaves the registry -- so a stream evicted while we waited for its
 // mutex is detected and the lookup restarts.
-func (s *BroadcastFECRelayState) lockOrCreateFECStream(id string, now time.Time, init fecBroadcastStreamInit) (*fecBroadcastStream, error) {
+func (s *BroadcastFECRelayState) lockOrCreateFECStream(id broadcastFECIDKey, now time.Time, init fecBroadcastStreamInit) (*fecBroadcastStream, error) {
 	budgetBytes := estimateFECBroadcastBudgetBytes(init.fec, init.partSize)
 
 	for attempt := 0; ; attempt++ {
@@ -462,7 +489,7 @@ func (s *BroadcastFECRelayState) lockOrCreateFECStream(id string, now time.Time,
 
 // tryLockOrCreateFECStream returns (nil, nil) when the stream it found was
 // evicted while it waited for stream.mx, asking the caller to look again.
-func (s *BroadcastFECRelayState) tryLockOrCreateFECStream(id string, now time.Time, init fecBroadcastStreamInit, budgetBytes int64) (*fecBroadcastStream, error) {
+func (s *BroadcastFECRelayState) tryLockOrCreateFECStream(id broadcastFECIDKey, now time.Time, init fecBroadcastStreamInit, budgetBytes int64) (*fecBroadcastStream, error) {
 	s.mx.Lock()
 	s.cleanupLocked(now, false)
 	if s.isDeliveredLocked(id, now) {
@@ -477,7 +504,7 @@ func (s *BroadcastFECRelayState) tryLockOrCreateFECStream(id string, now time.Ti
 		}
 		return nil, nil
 	}
-	if !s.reserveLocked(now, budgetBytes) {
+	if !s.reserveLocked(now, budgetBytes, init.fec.DataSize <= FECBroadcastSmallStreamMaxBytes) {
 		s.mx.Unlock()
 		return nil, fmt.Errorf("fec broadcast receiver budget exceeded")
 	}
@@ -492,22 +519,20 @@ func (s *BroadcastFECRelayState) tryLockOrCreateFECStream(id string, now time.Ti
 	}
 
 	candidate := &fecBroadcastStream{
-		decoder:        decoder,
-		partHashes:     map[uint32][32]byte{},
-		parts:          map[uint32]broadcastFECRelayPart{},
-		receivedPeers:  map[string]struct{}{},
-		completedPeers: map[string]struct{}{},
-		budgetBytes:    budgetBytes,
-		lastMessageAt:  now,
-		sourceObj:      init.sourceObj,
-		certificate:    init.certificate,
-		source:         init.source,
-		sourceID:       append([]byte(nil), init.sourceID...),
-		dataHash:       append([]byte(nil), init.dataHash...),
-		fec:            init.fec,
-		date:           init.date,
-		flags:          init.flags,
-		trusted:        init.trusted,
+		// Sparse part, relay and control maps are initialized by their first
+		// writer. Many rejected or one-part streams never need all four.
+		decoder:       decoder,
+		budgetBytes:   budgetBytes,
+		lastMessageAt: now,
+		sourceObj:     init.sourceObj,
+		certificate:   init.certificate,
+		source:        init.source,
+		sourceID:      append([]byte(nil), init.sourceID...),
+		dataHash:      append([]byte(nil), init.dataHash...),
+		fec:           init.fec,
+		date:          init.date,
+		flags:         init.flags,
+		trusted:       init.trusted,
 	}
 
 	s.mx.Lock()
@@ -579,7 +604,7 @@ func addFECBroadcastBudgetEstimate(values ...int64) int64 {
 // decode failure. The small terminal entry is retained until normal cleanup,
 // preventing repeated expensive decode attempts for the same broadcast ID.
 // The caller must hold stream.mx; this function releases it before returning.
-func terminalFECBroadcastErrorLocked(state *BroadcastFECRelayState, id string, stream *fecBroadcastStream,
+func terminalFECBroadcastErrorLocked(state *BroadcastFECRelayState, id broadcastFECIDKey, stream *fecBroadcastStream,
 	now time.Time, err error) error {
 	stream.failLocked(now, err)
 	stream.mx.Unlock()
@@ -603,6 +628,9 @@ func (a *ADNLOverlayWrapper) relaySimpleBroadcast(ctx context.Context, sourcePee
 		return nil
 	}
 
+	var prepared *PreparedBroadcastMessage
+	var prepareErr error
+	preparedAttempted := false
 	var sendErr error
 	var sent, failed uint64
 	for _, peer := range relayCfg.peerSet.Peers() {
@@ -613,7 +641,27 @@ func (a *ADNLOverlayWrapper) relaySimpleBroadcast(ctx context.Context, sourcePee
 		if len(peerID) == 0 || bytes.Equal(peerID, sourcePeerID) || bytes.Equal(peerID, relayCfg.localID) {
 			continue
 		}
-		if err := peer.SendCustomMessage(ctx, msg); err != nil {
+
+		usesPrepared := false
+		switch peer.(type) {
+		case PreparedBroadcastMessagePeer, PreparedBroadcastPeer:
+			usesPrepared = true
+		}
+		if usesPrepared && !preparedAttempted {
+			prepared, prepareErr = PrepareBroadcastMessage(msg)
+			preparedAttempted = true
+		}
+
+		var err error
+		if usesPrepared {
+			err = prepareErr
+			if err == nil {
+				err = SendPreparedBroadcast(ctx, peer, msg, prepared)
+			}
+		} else {
+			err = peer.SendCustomMessage(ctx, msg)
+		}
+		if err != nil {
 			failed++
 			if sendErr == nil {
 				sendErr = fmt.Errorf("failed to relay broadcast to peer %x: %w", peerID, err)
@@ -853,7 +901,10 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	if err != nil {
 		return fmt.Errorf("failed to calc broadcast hash: %w", err)
 	}
-	id := string(broadcastHash)
+	id, ok := newBroadcastFECIDKey(broadcastHash)
+	if !ok {
+		return fmt.Errorf("invalid fec broadcast hash length %d", len(broadcastHash))
+	}
 	state := a.activeFECState()
 	partDataHash := calcBroadcastFECPartDataHash(t.Data)
 	var stream *fecBroadcastStream
@@ -1261,7 +1312,10 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		return fmt.Errorf("invalid signer key format")
 	}
 
-	id := string(t.BroadcastHash)
+	id, ok := newBroadcastFECIDKey(t.BroadcastHash)
+	if !ok {
+		return fmt.Errorf("invalid fec broadcast hash length %d", len(t.BroadcastHash))
+	}
 	state := a.activeFECState()
 	seqno := uint32(t.Seqno)
 	relayCfg := a.broadcastFECRelayConfig()

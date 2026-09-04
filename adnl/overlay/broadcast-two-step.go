@@ -99,7 +99,7 @@ type broadcastTwoStepRelayTask struct {
 
 type broadcastTwoStepRelayPayload struct {
 	message tl.Serializable
-	body    []byte
+	body    *PreparedBroadcastMessage
 	bytes   int64
 	refs    atomic.Int64
 }
@@ -189,10 +189,10 @@ func (d *broadcastTwoStepRelayDispatcher) Submit(task broadcastTwoStepRelayTask)
 	}
 }
 
-func (d *broadcastTwoStepRelayDispatcher) reservePayload(message tl.Serializable, body []byte, refs int) (*broadcastTwoStepRelayPayload, bool) {
+func (d *broadcastTwoStepRelayDispatcher) reservePayload(message tl.Serializable, body *PreparedBroadcastMessage, refs int) (*broadcastTwoStepRelayPayload, bool) {
 	// The slice retains its complete backing allocation while any peer task is
 	// alive, so charge capacity rather than only the serialized length.
-	bodyBytes := int64(cap(body))
+	bodyBytes := int64(cap(body.Body()))
 	for {
 		active := d.activeBytes.Load()
 		if bodyBytes > d.maxActiveBytes || active > d.maxActiveBytes-bodyBytes {
@@ -265,7 +265,7 @@ func (d *broadcastTwoStepRelayDispatcher) send(task broadcastTwoStepRelayTask) {
 	defer d.releasePayload(task.payload)
 
 	ctx, cancel := context.WithTimeout(d.ctx, d.peerTimeout)
-	err := sendPreparedBroadcastMessage(ctx, task.peer, task.payload.message, task.payload.body)
+	err := SendPreparedBroadcast(ctx, task.peer, task.payload.message, task.payload.body)
 	cancel()
 	if err == nil {
 		d.sent.Add(1)
@@ -750,7 +750,7 @@ func (a *ADNLOverlayWrapper) enqueueRebroadcastTwoStep(sourceADNL []byte, msg tl
 	// Incoming TL slices may alias the pooled datagram buffer. Serialize before
 	// local delivery returns, then let every async prepared send share this
 	// immutable owned body.
-	body, err := prepareBroadcastMessage(msg)
+	body, err := PrepareBroadcastMessage(msg)
 	if err != nil {
 		relay.prepareFailed.Add(uint64(len(targets)))
 		return
@@ -762,7 +762,7 @@ func (a *ADNLOverlayWrapper) enqueueRebroadcastTwoStep(sourceADNL []byte, msg tl
 		// message API. Reparse the owned body once so those async calls never
 		// retain pooled receive memory, while preserving the original pointer form.
 		var parsed any
-		if _, err = tl.Parse(&parsed, body, true); err != nil {
+		if _, err = tl.Parse(&parsed, body.Body(), true); err != nil {
 			relay.prepareFailed.Add(uint64(len(targets)))
 			return
 		}

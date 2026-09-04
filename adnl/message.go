@@ -3,23 +3,151 @@ package adnl
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"github.com/xssnick/tonutils-go/tl"
 	"sync"
 	"time"
 )
 
+// Constructor ids of the adnl.Message kinds, taken from the registry so the
+// hand-written parser in parseMessageNoCopy can never disagree with the schema
+// tl serializes from.
+var (
+	_MessagePartID           uint32
+	_MessageCustomID         uint32
+	_MessageNopID            uint32
+	_MessageAnswerID         uint32
+	_MessageQueryID          uint32
+	_MessageReinitID         uint32
+	_MessageCreateChannelID  uint32
+	_MessageConfirmChannelID uint32
+	_MessagePingID           uint32
+	_MessagePongID           uint32
+)
+
 func init() {
-	tl.Register(MessagePart{}, "adnl.message.part hash:int256 total_size:int offset:int data:bytes = adnl.Message")
-	tl.Register(MessageCustom{}, "adnl.message.custom data:bytes = adnl.Message")
-	tl.Register(MessageNop{}, "adnl.message.nop = adnl.Message")
-	tl.Register(MessageAnswer{}, "adnl.message.answer query_id:int256 answer:bytes = adnl.Message")
-	tl.Register(MessageQuery{}, "adnl.message.query query_id:int256 query:bytes = adnl.Message")
-	tl.Register(MessageReinit{}, "adnl.message.reinit date:int = adnl.Message")
-	tl.Register(MessageCreateChannel{}, "adnl.message.createChannel key:int256 date:int = adnl.Message")
-	tl.Register(MessageConfirmChannel{}, "adnl.message.confirmChannel key:int256 peer_key:int256 date:int = adnl.Message")
-	tl.Register(MessagePing{}, "adnl.ping value:long = adnl.Pong")
-	tl.Register(MessagePong{}, "adnl.pong value:long = adnl.Pong")
+	_MessagePartID = tl.Register(MessagePart{}, "adnl.message.part hash:int256 total_size:int offset:int data:bytes = adnl.Message")
+	_MessageCustomID = tl.Register(MessageCustom{}, "adnl.message.custom data:bytes = adnl.Message")
+	_MessageNopID = tl.Register(MessageNop{}, "adnl.message.nop = adnl.Message")
+	_MessageAnswerID = tl.Register(MessageAnswer{}, "adnl.message.answer query_id:int256 answer:bytes = adnl.Message")
+	_MessageQueryID = tl.Register(MessageQuery{}, "adnl.message.query query_id:int256 query:bytes = adnl.Message")
+	_MessageReinitID = tl.Register(MessageReinit{}, "adnl.message.reinit date:int = adnl.Message")
+	_MessageCreateChannelID = tl.Register(MessageCreateChannel{}, "adnl.message.createChannel key:int256 date:int = adnl.Message")
+	_MessageConfirmChannelID = tl.Register(MessageConfirmChannel{}, "adnl.message.confirmChannel key:int256 peer_key:int256 date:int = adnl.Message")
+	_MessagePingID = tl.Register(MessagePing{}, "adnl.ping value:long = adnl.Pong")
+	_MessagePongID = tl.Register(MessagePong{}, "adnl.pong value:long = adnl.Pong")
+}
+
+// parseMessageNoCopy decodes one boxed adnl.Message the way
+// tl.ParseNoCopy(&msg, data, true) does, without reflection: the kind is
+// switched on its constructor id and the fields are read in schema order. The
+// result carries the same value type and the same ownership as the reflective
+// decode, so the type switches downstream and the buffer-reuse rules are
+// unchanged: fixed-size and bytes fields alias data (they are consumed before
+// the datagram buffer is released), while the custom, query and answer
+// payloads are copied by their ParseNoCopy methods because handlers keep them.
+// Kinds this switch does not know keep going through tl.
+func parseMessageNoCopy(data []byte) (msg any, rest []byte, err error) {
+	rest, err = parseMessageNoCopyInto(&msg, data)
+	return msg, rest, err
+}
+
+// parseMessageNoCopyInto writes the decoded value directly into dst. Receive
+// paths use it to avoid making the interface result of parseMessageNoCopy
+// escape independently from the slot that ultimately owns it.
+func parseMessageNoCopyInto(dst *any, data []byte) (rest []byte, err error) {
+	if len(data) < 4 {
+		return nil, ErrTooShortData
+	}
+	id := binary.LittleEndian.Uint32(data)
+	body := data[4:]
+
+	switch id {
+	case _MessageCustomID:
+		var m MessageCustom
+		if body, err = m.ParseNoCopy(body); err != nil {
+			return nil, err
+		}
+		*dst = m
+		return body, nil
+	case _MessagePartID:
+		if len(body) < 32+4+4 {
+			return nil, ErrTooShortData
+		}
+		m := MessagePart{
+			Hash:      body[:32:32],
+			TotalSize: int32(binary.LittleEndian.Uint32(body[32:])),
+			Offset:    int32(binary.LittleEndian.Uint32(body[36:])),
+		}
+		if m.Data, body, err = tl.FromBytesNoCopy(body[40:]); err != nil {
+			return nil, err
+		}
+		*dst = m
+		return body, nil
+	case _MessageNopID:
+		*dst = MessageNop{}
+		return body, nil
+	case _MessageAnswerID:
+		var m MessageAnswer
+		if body, err = m.ParseNoCopy(body); err != nil {
+			return nil, err
+		}
+		*dst = m
+		return body, nil
+	case _MessageQueryID:
+		var m MessageQuery
+		if body, err = m.ParseNoCopy(body); err != nil {
+			return nil, err
+		}
+		*dst = m
+		return body, nil
+	case _MessageReinitID:
+		if len(body) < 4 {
+			return nil, ErrTooShortData
+		}
+		*dst = MessageReinit{Date: int32(binary.LittleEndian.Uint32(body))}
+		return body[4:], nil
+	case _MessageCreateChannelID:
+		if len(body) < 32+4 {
+			return nil, ErrTooShortData
+		}
+		m := MessageCreateChannel{
+			Key:  body[:32:32],
+			Date: int32(binary.LittleEndian.Uint32(body[32:])),
+		}
+		*dst = m
+		return body[36:], nil
+	case _MessageConfirmChannelID:
+		if len(body) < 32+32+4 {
+			return nil, ErrTooShortData
+		}
+		m := MessageConfirmChannel{
+			Key:     body[:32:32],
+			PeerKey: body[32:64:64],
+			Date:    int32(binary.LittleEndian.Uint32(body[64:])),
+		}
+		*dst = m
+		return body[68:], nil
+	case _MessagePingID:
+		if len(body) < 8 {
+			return nil, ErrTooShortData
+		}
+		*dst = MessagePing{Value: int64(binary.LittleEndian.Uint64(body))}
+		return body[8:], nil
+	case _MessagePongID:
+		if len(body) < 8 {
+			return nil, ErrTooShortData
+		}
+		*dst = MessagePong{Value: int64(binary.LittleEndian.Uint64(body))}
+		return body[8:], nil
+	default:
+		rest, err = tl.ParseNoCopy(dst, data, true)
+		if err != nil {
+			return nil, err
+		}
+		return rest, nil
+	}
 }
 
 type MessagePing struct {

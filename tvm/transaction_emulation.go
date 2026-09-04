@@ -560,7 +560,10 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	if err != nil {
 		return nil, err
 	}
-	importFee := bigint.FromInt64(0)
+	// importFee is nil when no import fee applies (an internal message, or a
+	// special account): the readers below treat nil as zero, so the common path
+	// does not allocate a zero it would immediately discard.
+	var importFee *big.Int
 	if !isSpecial {
 		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg.msg, msg.cell)
 		if err != nil {
@@ -658,17 +661,23 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	var actionPhase *tlb.ActionPhase
 	var actionBounce bool
 	var actionDeleted bool
-	actionFine := bigint.FromInt64(0)
-	gasFees := bigint.FromInt64(0)
+	// actionFine, gasFees and actionFees are all fresh private values on every
+	// path; the zeros are only built on the branches that keep them, so the
+	// common accepted-with-actions path does not allocate values that the
+	// action phase immediately replaces.
+	var actionFine *big.Int
+	var gasFees *big.Int
 	if msgRes != nil && msgRes.Accepted && !isSpecial {
 		gasFees = transactionComputeGasFee(blockchainCfg, runtimeAcc.addr, uint64(msgRes.GasUsed))
+	} else {
+		gasFees = bigint.FromInt64(0)
 	}
 	finalBalance := new(big.Int).Sub(prepared.balance, gasFees)
 	if finalBalance.Sign() < 0 {
 		return nil, errors.New("transaction fees exceed account balance")
 	}
 
-	actionFees := bigint.FromInt64(0)
+	var actionFees *big.Int
 	if msgRes != nil {
 		actionRes, applyErr := transactionApplyActions(computeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance())
 		if applyErr != nil {
@@ -686,12 +695,17 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 		actionBounce = actionRes.bounce
 		actionDeleted = actionRes.deleteAccount
 		msgBalanceRemaining = actionRes.msgBalanceRemaining
+	} else {
+		actionFine = bigint.FromInt64(0)
+		actionFees = bigint.FromInt64(0)
 	}
 
-	// Nano already returns a private copy to accumulate into.
-	totalFees := prepared.storagePhase.StorageFeesCollected.Nano()
+	// bigint.Set returns a private copy to accumulate into.
+	totalFees := bigint.Set(prepared.storagePhase.StorageFeesCollected.NanoRef())
 	totalFees.Add(totalFees, gasFees)
-	totalFees.Add(totalFees, importFee)
+	if importFee != nil {
+		totalFees.Add(totalFees, importFee)
+	}
 	totalFees.Add(totalFees, actionFees)
 
 	computeSuccess := transactionComputeSucceeded(msgRes)

@@ -50,7 +50,7 @@ func TestBroadcastReceiverHandleMessageRoutesFECControl(t *testing.T) {
 	peerID := bytes.Repeat([]byte{0xD6}, 32)
 	stream := &fecBroadcastStream{lastMessageAt: time.Now()}
 	receiver.fecState.mx.Lock()
-	receiver.fecState.streams[string(hash)] = stream
+	receiver.fecState.streams[testBroadcastFECIDKey(hash)] = stream
 	receiver.fecState.mx.Unlock()
 
 	peer := &mockBroadcastPeer{id: peerID}
@@ -59,8 +59,9 @@ func TestBroadcastReceiverHandleMessageRoutesFECControl(t *testing.T) {
 	}
 
 	stream.mx.Lock()
-	_, received := stream.receivedPeers[string(peerID)]
-	_, completed := stream.completedPeers[string(peerID)]
+	peerKey := newBroadcastExternalPeerIDKey(peerID)
+	_, received := stream.receivedPeers[peerKey]
+	_, completed := stream.completedPeers[peerKey]
 	stream.mx.Unlock()
 	if !received || !completed {
 		t.Fatalf("FEC control state: received=%v completed=%v, want true/true", received, completed)

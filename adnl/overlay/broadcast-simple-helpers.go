@@ -3,11 +3,11 @@ package overlay
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"reflect"
 
 	"github.com/xssnick/tonutils-go/adnl/keys"
-	"github.com/xssnick/tonutils-go/tl"
 )
 
 func calcBroadcastDataHash(data []byte) []byte {
@@ -16,20 +16,22 @@ func calcBroadcastDataHash(data []byte) []byte {
 }
 
 func calcBroadcastIDFromDataHash(source any, flags int32, dataHash []byte) ([]byte, error) {
+	if len(dataHash) != sha256.Size {
+		return nil, fmt.Errorf("failed to compute hash id of the broadcast: data hash should be %d bytes", sha256.Size)
+	}
+
 	src, err := broadcastSourceID(source, flags)
 	if err != nil {
 		return nil, err
 	}
 
-	broadcastHash, err := tl.Hash(&BroadcastID{
-		Source:   src[:],
-		DataHash: dataHash,
-		Flags:    flags,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute hash id of the broadcast: %w", err)
-	}
-	return broadcastHash, nil
+	var wire [4 + 32 + 32 + 4]byte
+	binary.LittleEndian.PutUint32(wire[0:4], broadcastIDTLID)
+	copy(wire[4:36], src[:])
+	copy(wire[36:68], dataHash)
+	binary.LittleEndian.PutUint32(wire[68:72], uint32(flags))
+	broadcastHash := sha256.Sum256(wire[:])
+	return broadcastHash[:], nil
 }
 
 func calcBroadcastID(source any, flags int32, data []byte) ([]byte, []byte, error) {
@@ -42,22 +44,19 @@ func calcBroadcastID(source any, flags int32, data []byte) ([]byte, []byte, erro
 }
 
 func serializeBroadcastToSign(hash []byte, date uint32) ([]byte, error) {
-	toSign, err := tl.Serialize(&BroadcastToSign{
-		Hash: hash,
-		Date: date,
-	}, true)
-	if err != nil {
-		return nil, fmt.Errorf("failed to serialize broadcast for sign check: %w", err)
+	var wire [4 + 32 + 4]byte
+	if err := fillBroadcastToSign(&wire, hash, date); err != nil {
+		return nil, err
 	}
-	return toSign, nil
+	return append([]byte(nil), wire[:]...), nil
 }
 
 func signBroadcast(key ed25519.PrivateKey, hash []byte, date uint32) ([]byte, error) {
-	toSign, err := serializeBroadcastToSign(hash, date)
-	if err != nil {
+	var toSign [4 + 32 + 4]byte
+	if err := fillBroadcastToSign(&toSign, hash, date); err != nil {
 		return nil, err
 	}
-	return ed25519.Sign(key, toSign), nil
+	return ed25519.Sign(key, toSign[:]), nil
 }
 
 func verifyBroadcastSignature(source any, hash []byte, date uint32, signature []byte) error {
@@ -66,12 +65,12 @@ func verifyBroadcastSignature(source any, hash []byte, date uint32, signature []
 		return fmt.Errorf("invalid signer key format")
 	}
 
-	toSign, err := serializeBroadcastToSign(hash, date)
-	if err != nil {
+	var toSign [4 + 32 + 4]byte
+	if err := fillBroadcastToSign(&toSign, hash, date); err != nil {
 		return err
 	}
 
-	if !ed25519.Verify(sourceKey.Key, toSign, signature) {
+	if !ed25519.Verify(sourceKey.Key, toSign[:], signature) {
 		return fmt.Errorf("invalid broadcast signature")
 	}
 	return nil

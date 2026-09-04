@@ -64,20 +64,43 @@ type broadcastFECSendPeerState struct {
 	completed bool
 }
 
+// broadcastExternalPeerIDKey keeps the protocol's 32-byte ADNL IDs directly
+// in map buckets. The overflow string preserves the released BroadcastPeer
+// extension point for custom IDs without making the normal path allocate.
+type broadcastExternalPeerIDKey struct {
+	fixed    [32]byte
+	overflow string
+	length   int8
+}
+
+func newBroadcastExternalPeerIDKey(id []byte) broadcastExternalPeerIDKey {
+	if len(id) > len(broadcastExternalPeerIDKey{}.fixed) {
+		return broadcastExternalPeerIDKey{overflow: string(id), length: -1}
+	}
+
+	key := broadcastExternalPeerIDKey{length: int8(len(id))}
+	copy(key.fixed[:], id)
+	return key
+}
+
 type broadcastFECSendPart struct {
 	full      *BroadcastFEC
 	short     *BroadcastFECShort
-	fullWire  []byte
-	shortWire []byte
+	fullWire  *PreparedBroadcastMessage
+	shortWire *PreparedBroadcastMessage
 }
 
 // BroadcastFECPart contains both full and short forms for one FEC seqno.
-// Messages and canonical wire bodies share the sender's immutable cache.
+// Messages and canonical wire bodies share the sender's immutable cache;
+// FullMessage and ShortMessage carry those bodies with the ADNL frame cache
+// that lets SendPreparedBroadcast fan one part out without re-serializing.
 type BroadcastFECPart struct {
-	Full      *BroadcastFEC
-	Short     *BroadcastFECShort
-	FullWire  []byte
-	ShortWire []byte
+	Full         *BroadcastFEC
+	Short        *BroadcastFECShort
+	FullWire     []byte
+	ShortWire    []byte
+	FullMessage  *PreparedBroadcastMessage
+	ShortMessage *PreparedBroadcastMessage
 }
 
 // BroadcastFECControl is a delivery acknowledgement decoded from FECReceived or FECCompleted.
@@ -92,30 +115,6 @@ func (p BroadcastFECPart) Message(useShort bool) tl.Serializable {
 		return p.Short
 	}
 	return p.Full
-}
-
-func sendPreparedBroadcastMessage(
-	ctx context.Context,
-	peer BroadcastPeer,
-	message tl.Serializable,
-	body []byte,
-) error {
-	if prepared, ok := peer.(PreparedBroadcastPeer); ok {
-		return prepared.SendPreparedCustomMessage(ctx, body)
-	}
-
-	// BroadcastPeer is a released extension point. Keep legacy peers working;
-	// production transports implement PreparedBroadcastPeer and never take this
-	// reflective serialization path.
-	return peer.SendCustomMessage(ctx, message)
-}
-
-func prepareBroadcastMessage(message tl.Serializable) ([]byte, error) {
-	body, err := tl.Serialize(message, true)
-	if err != nil {
-		return nil, fmt.Errorf("serialize broadcast message: %w", err)
-	}
-	return body, nil
 }
 
 type BroadcastFECSender struct {
@@ -140,7 +139,8 @@ type BroadcastFECSender struct {
 
 	parts     map[uint32]*broadcastFECSendPart
 	partOrder []uint32
-	peers     map[string]*broadcastFECSendPeerState
+	partHead  int
+	peers     map[broadcastExternalPeerIDKey]*broadcastFECSendPeerState
 	mx        sync.Mutex
 }
 
@@ -275,7 +275,7 @@ func NewBroadcastFECSender(key ed25519.PrivateKey, certificate any, payload []by
 		signKey:       key,
 		parts:         map[uint32]*broadcastFECSendPart{},
 		partOrder:     make([]uint32, 0, min(uint32(64), cfg.partCache)),
-		peers:         map[string]*broadcastFECSendPeerState{},
+		peers:         map[broadcastExternalPeerIDKey]*broadcastFECSendPeerState{},
 	}, nil
 }
 
@@ -367,7 +367,7 @@ func (s *BroadcastFECSender) SendNow(ctx context.Context, peerSet BroadcastPeerS
 
 	var sendErr error
 	for _, op := range ops {
-		if err = sendPreparedBroadcastMessage(ctx, op.peer, op.msg, op.wire); err != nil && sendErr == nil {
+		if err = SendPreparedBroadcast(ctx, op.peer, op.msg, op.wire); err != nil && sendErr == nil {
 			sendErr = fmt.Errorf("failed to send part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
 		}
 	}
@@ -450,15 +450,17 @@ func (s *BroadcastFECSender) Part(seqno uint32) (BroadcastFECPart, error) {
 	}
 
 	return BroadcastFECPart{
-		Full:      part.full,
-		Short:     part.short,
-		FullWire:  part.fullWire,
-		ShortWire: part.shortWire,
+		Full:         part.full,
+		Short:        part.short,
+		FullWire:     part.fullWire.Body(),
+		ShortWire:    part.shortWire.Body(),
+		FullMessage:  part.fullWire,
+		ShortMessage: part.shortWire,
 	}, nil
 }
 
 func (s *BroadcastFECSender) ensurePeerState(peerID []byte) *broadcastFECSendPeerState {
-	id := string(peerID)
+	id := newBroadcastExternalPeerIDKey(peerID)
 	state := s.peers[id]
 	if state == nil {
 		state = &broadcastFECSendPeerState{}
@@ -528,11 +530,11 @@ func (s *BroadcastFECSender) partLocked(seqno uint32) (*broadcastFECSendPart, er
 		Seqno:         int32(seqno),
 		Signature:     append([]byte(nil), signature...),
 	}
-	fullWire, err := prepareBroadcastMessage(full)
+	fullWire, err := PrepareBroadcastMessage(full)
 	if err != nil {
 		return nil, fmt.Errorf("prepare full broadcast part %d: %w", seqno, err)
 	}
-	shortWire, err := prepareBroadcastMessage(short)
+	shortWire, err := PrepareBroadcastMessage(short)
 	if err != nil {
 		return nil, fmt.Errorf("prepare short broadcast part %d: %w", seqno, err)
 	}
@@ -552,13 +554,20 @@ func (s *BroadcastFECSender) cachePartLocked(seqno uint32, part *broadcastFECSen
 		return
 	}
 
-	s.parts[seqno] = part
-	s.partOrder = append(s.partOrder, seqno)
+	if uint32(len(s.partOrder)) < s.partCacheSize {
+		s.parts[seqno] = part
+		s.partOrder = append(s.partOrder, seqno)
+		return
+	}
 
-	for uint32(len(s.partOrder)) > s.partCacheSize {
-		delete(s.parts, s.partOrder[0])
-		copy(s.partOrder, s.partOrder[1:])
-		s.partOrder = s.partOrder[:len(s.partOrder)-1]
+	// Once full, partOrder is a circular FIFO. Shifting a multi-thousand-part
+	// cache for every repair symbol made eviction linear in the cache size.
+	delete(s.parts, s.partOrder[s.partHead])
+	s.parts[seqno] = part
+	s.partOrder[s.partHead] = seqno
+	s.partHead++
+	if s.partHead == len(s.partOrder) {
+		s.partHead = 0
 	}
 }
 
@@ -572,7 +581,7 @@ func (s *BroadcastFECSender) totalPartsLimit() uint32 {
 type broadcastFECSendOp struct {
 	peer  BroadcastPeer
 	msg   tl.Serializable
-	wire  []byte
+	wire  *PreparedBroadcastMessage
 	seqno uint32
 }
 

@@ -803,6 +803,29 @@ func (rs *ReadSet) Prunable(hash Hash) (*Cell, bool) {
 	return rs.referenced.lookup(hash)
 }
 
+// ensureReferencedCurrent brings the frontier up to date with every cell read
+// so far and reports how many entries it then holds. The source-graph walk
+// calls it before sizing itself: every unread reference the walk can stop at
+// is an unread child of a read cell, which is exactly the frontier's
+// population, so the count is an upper bound on the graph's fringe and the
+// frontier's entry positions can key the fringe nodes the way the read tables
+// key the read ones. The extension is the same one the next Prunable question
+// would have performed; no reads happen while an update is being built, so the
+// tables it leaves behind are frozen for the walk that sized itself from them.
+func (rs *ReadSet) ensureReferencedCurrent() int {
+	if rs.referencedAt.Load() != rs.recorded.Load() {
+		rs.referencedMu.Lock()
+		if rs.referencedAt.Load() != rs.recorded.Load() {
+			rs.extendReferencedLocked()
+		}
+		rs.referencedMu.Unlock()
+	}
+	rs.referenced.mu.Lock()
+	used := rs.referenced.used
+	rs.referenced.mu.Unlock()
+	return used
+}
+
 // extendReferencedLocked walks the read cells recorded since the previous call and
 // adds their unread children to the frontier.
 //
@@ -817,7 +840,8 @@ func (rs *ReadSet) extendReferencedLocked() {
 	// what makes the next call pick that cell up.
 	upTo := rs.recorded.Load()
 	if rs.referenced.table.Load() == nil {
-		rs.referenced.table.Store(newReadSetTable(referencedTableFor(upTo, rs.expected)))
+		slots, entries := referencedTableFor(upTo, rs.expected)
+		rs.referenced.table.Store(newReadSetTable(slots, entries))
 	}
 
 	for i := range rs.shards {

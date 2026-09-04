@@ -355,8 +355,8 @@ func (g *Gateway) listen(rootId []byte) {
 				continue
 			}
 
-			packet, err := parsePacket(data)
-			if err != nil {
+			var packet PacketContent
+			if err = parsePacketInto(&packet, data); err != nil {
 				if Logger != nil {
 					Logger("failed to parse packet:", err.Error())
 				}
@@ -428,7 +428,7 @@ func (g *Gateway) listen(rootId []byte) {
 			}
 			cli.client.noteInboundPacket(pk.n)
 
-			err = cli.client.processPacket(packet, false)
+			err = cli.client.processPacket(&packet, false)
 			if err != nil {
 				cli.client.noteInboundError(time.Now())
 				if Logger != nil {
@@ -916,6 +916,17 @@ func (p *peerConn) SetDisconnectHandler(handler func(addr string, key ed25519.Pu
 
 func (p *peerConn) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
 	return p.client.SendCustomMessage(ctx, req)
+}
+
+// SendPreparedCustomMessage forwards a prepared message to the underlying
+// ADNL. There is no way to deliver an already framed adnl.message.custom
+// through SendCustomMessage, so a client without the prepared path is an
+// error rather than a fallback.
+func (p *peerConn) SendPreparedCustomMessage(ctx context.Context, msg *PreparedCustomMessage) error {
+	if sender, ok := p.client.(PreparedCustomMessageSender); ok {
+		return sender.SendPreparedCustomMessage(ctx, msg)
+	}
+	return ErrPreparedCustomMessageUnsupported
 }
 
 func (p *peerConn) GetQueryHandler() func(msg *MessageQuery) error {

@@ -3,7 +3,6 @@ package overlay
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"sync"
@@ -40,6 +39,9 @@ var ErrRLDPMessageUnsupported = errors.New("overlay: RLDP transport does not sup
 type RLDPWrapper struct {
 	mx sync.RWMutex
 
+	// CreateOverlay historically accepts IDs of any length. Keep exact byte
+	// identity in a raw string key while avoiding the old 64-byte hex key and
+	// its encoding allocation for normal 32-byte overlay IDs.
 	overlays map[string]*RLDPOverlayWrapper
 
 	messageSender         RLDPMessageSender
@@ -184,7 +186,7 @@ func parseRLDPMessagePayload(data []byte) (tl.Serializable, error) {
 func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {
 	obj, over := UnwrapQuery(query.Data)
 	if over != nil {
-		id := hex.EncodeToString(over)
+		id := string(over)
 		r.mx.RLock()
 		o := r.overlays[id]
 		r.mx.RUnlock()
@@ -192,7 +194,7 @@ func (r *RLDPWrapper) queryHandler(transferId []byte, query *rldp.Query) error {
 			if h := loadRLDPQueryHandler(&r.unknownOverlayHandler); h != nil {
 				return h(transferId, query)
 			}
-			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
+			return fmt.Errorf("got query for unregistered overlay with id: %x", over)
 		}
 
 		h := o.overlayQueryHandler()

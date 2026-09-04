@@ -17,6 +17,7 @@ var (
 	fecRaptorQTLID         = tl.CRC("fec.raptorQ data_size:int symbol_size:int symbols_count:int = fec.Type")
 	fecRoundRobinTLID      = tl.CRC("fec.roundRobin data_size:int symbol_size:int symbols_count:int = fec.Type")
 	fecOnlineTLID          = tl.CRC("fec.online data_size:int symbol_size:int symbols_count:int = fec.Type")
+	broadcastIDTLID        = tl.CRC("overlay.broadcast.id src:int256 data_hash:int256 flags:int = overlay.broadcast.Id")
 	broadcastFECIDTLID     = tl.CRC("overlay.broadcastFec.id src:int256 type:int256 data_hash:int256 size:int flags:int = overlay.broadcastFec.Id")
 	broadcastFECPartIDTLID = tl.CRC("overlay.broadcastFec.partId broadcast_hash:int256 data_hash:int256 seqno:int = overlay.broadcastFec.PartId")
 	broadcastToSignTLID    = tl.CRC("overlay.broadcast.toSign hash:int256 date:int = overlay.broadcast.ToSign")
@@ -142,13 +143,13 @@ func calcBroadcastFECPartData(broadcastHash, data []byte, seqno uint32) (partHas
 
 func serializeBroadcastFECToSign(partHash []byte, date uint32) ([]byte, error) {
 	var wire [4 + 32 + 4]byte
-	if err := fillBroadcastFECToSign(&wire, partHash, date); err != nil {
+	if err := fillBroadcastToSign(&wire, partHash, date); err != nil {
 		return nil, err
 	}
 	return append([]byte(nil), wire[:]...), nil
 }
 
-func fillBroadcastFECToSign(wire *[4 + 32 + 4]byte, partHash []byte, date uint32) error {
+func fillBroadcastToSign(wire *[4 + 32 + 4]byte, partHash []byte, date uint32) error {
 	if len(partHash) != sha256.Size {
 		return fmt.Errorf("failed to serialize broadcast for sign check: hash should be %d bytes", sha256.Size)
 	}
@@ -161,7 +162,7 @@ func fillBroadcastFECToSign(wire *[4 + 32 + 4]byte, partHash []byte, date uint32
 
 func signBroadcastFECPart(key ed25519.PrivateKey, partHash []byte, date uint32) ([]byte, error) {
 	var toSign [4 + 32 + 4]byte
-	if err := fillBroadcastFECToSign(&toSign, partHash, date); err != nil {
+	if err := fillBroadcastToSign(&toSign, partHash, date); err != nil {
 		return nil, err
 	}
 	return ed25519.Sign(key, toSign[:]), nil
@@ -174,7 +175,7 @@ func verifyBroadcastFECPartSignature(source any, partHash []byte, date uint32, s
 	}
 
 	var toSign [4 + 32 + 4]byte
-	if err := fillBroadcastFECToSign(&toSign, partHash, date); err != nil {
+	if err := fillBroadcastToSign(&toSign, partHash, date); err != nil {
 		return err
 	}
 

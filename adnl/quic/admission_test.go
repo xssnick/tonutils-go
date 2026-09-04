@@ -171,7 +171,16 @@ func TestReadAdmittedPayloadChargesOnlyArrivedBytes(t *testing.T) {
 }
 
 func TestReadAdmittedPayloadReadsWholePayload(t *testing.T) {
-	for _, size := range []int{1, payloadReadChunk - 1, payloadReadChunk, payloadReadChunk + 1, payloadCommitThreshold + 7} {
+	for _, size := range []int{
+		1,
+		payloadReadChunk - 1,
+		payloadReadChunk,
+		payloadReadChunk + 1,
+		payloadCommitThreshold - 1,
+		payloadCommitThreshold,
+		payloadCommitThreshold + 1,
+		4*payloadCommitThreshold + 7,
+	} {
 		want := make([]byte, size)
 		for i := range want {
 			want[i] = byte(i)
@@ -189,6 +198,32 @@ func TestReadAdmittedPayloadReadsWholePayload(t *testing.T) {
 		if charged := global.reservedPayloadBytes(); charged != int64(size) {
 			t.Fatalf("size %d: charged %d, want %d", size, charged, size)
 		}
+	}
+}
+
+func TestReadAdmittedPayloadCommitRefusalStopsAtThreshold(t *testing.T) {
+	data := make([]byte, 4*payloadCommitThreshold)
+	reader := bytes.NewReader(data)
+	admission := newStreamAdmission(1, payloadCommitThreshold)
+	lease := streamAdmissionLease{admission: admission}
+
+	payload, err := readAdmittedPayload(reader, len(data), &lease)
+	if !errors.Is(err, errPayloadAdmissionFull) {
+		t.Fatalf("read error = %v, want %v", err, errPayloadAdmissionFull)
+	}
+	if payload != nil {
+		t.Fatalf("refused payload has %d bytes, want nil", len(payload))
+	}
+	if got := len(data) - reader.Len(); got != payloadCommitThreshold {
+		t.Fatalf("bytes read before refusal = %d, want %d", got, payloadCommitThreshold)
+	}
+	if got := admission.reservedPayloadBytes(); got != payloadCommitThreshold {
+		t.Fatalf("charged before refusal = %d, want %d", got, payloadCommitThreshold)
+	}
+
+	lease.release()
+	if got := admission.reservedPayloadBytes(); got != 0 {
+		t.Fatalf("charged after release = %d, want 0", got)
 	}
 }
 

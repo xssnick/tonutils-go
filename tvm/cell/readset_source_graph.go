@@ -29,11 +29,16 @@ type sourceGraph struct {
 	// index maps a hash to its node. Read cells ride the read set's own table:
 	// readPos[shard][entryPos] holds the node index plus one, keyed by the
 	// position lookupPos returns, so the graph never hashes a 32-byte key the
-	// read set has already hashed. Only unread references — the fringe the walk
-	// stops at — fall back to a map, and they are the small minority.
-	rs       *ReadSet
-	readPos  [readSetShards][]int32
-	byUnread map[Hash]int32
+	// read set has already hashed. Unread references — the fringe the walk stops
+	// at — ride the referenced frontier's table the same way: every fringe cell
+	// is an unread child of a read cell, which is exactly the frontier's
+	// population, so unreadPos[entryPos] holds its node index plus one. Only a
+	// hash the frontier does not index — an entirely unread root — falls back to
+	// the map, allocated on first need.
+	rs        *ReadSet
+	readPos   [readSetShards][]int32
+	unreadPos []int32
+	byUnread  map[Hash]int32
 	// boundaries counts the nodes the destination replaced, so a source with
 	// none skips the fold entirely.
 	boundaries int
@@ -126,18 +131,46 @@ func (rs *ReadSet) buildSourceGraph(workers int) (*sourceGraph, error) {
 
 // newSourceGraphFor opens an empty graph keyed to the read set's current table
 // generation.
+//
+// The record's size bounds the READ nodes, but it is not the graph: the walk
+// also registers a node for every unread reference it stops at, and on a
+// mainnet block that fringe is over half the record again — sized from the
+// record alone, the nodes slice grew twice and the fringe map grew from empty
+// a dozen times, all inside the one walk on the finish path. The fringe has an
+// exact ruler of its own: every fringe cell is an unread child of a read cell,
+// which is the referenced frontier's population, so the frontier is brought
+// current once and its count closes the bound. Extending it here is spend the
+// estimator's next Prunable question would have paid anyway; the table it
+// fills is the same one either way.
 func newSourceGraphFor(rs *ReadSet) *sourceGraph {
 	hint := rs.Size()
+	fringe := rs.ensureReferencedCurrent()
 	g := &sourceGraph{
-		nodes:    make([]sourceNode, 0, hint),
-		edges:    make([]int32, 0, hint),
-		rs:       rs,
-		byUnread: make(map[Hash]int32),
+		nodes: make([]sourceNode, 0, hint+fringe),
+		edges: make([]int32, 0, hint+fringe),
+		rs:    rs,
 	}
 	for i := range g.readPos {
 		g.readPos[i] = make([]int32, rs.shards[i].entryCapacity())
 	}
+	g.unreadPos = make([]int32, rs.referenced.entryCapacity())
 	return g
+}
+
+// lookupUnread resolves a fringe hash to its node, and to the frontier position
+// that add will key it by when the node does not exist yet. A hash outside the
+// frontier reports position -1 and is served by the fallback map.
+func (g *sourceGraph) lookupUnread(hash Hash) (int32, int32, bool) {
+	if _, pos, ok := g.rs.referenced.lookupPos(hash); ok && int(pos) < len(g.unreadPos) {
+		if idx := g.unreadPos[pos]; idx != 0 {
+			return idx - 1, pos, true
+		}
+		return 0, pos, false
+	}
+	if idx, seen := g.byUnread[hash]; seen {
+		return idx, -1, true
+	}
+	return 0, -1, false
 }
 
 // visit returns the node standing for c and whether this call is the one that
@@ -160,12 +193,13 @@ func (g *sourceGraph) visit(rs *ReadSet, c *Cell, depth int) (int32, bool, error
 			return idx - 1, false, nil
 		}
 	} else {
-		if idx, seen := g.byUnread[hash]; seen {
+		idx, fpos, seen := g.lookupUnread(hash)
+		if seen {
 			return idx, false, nil
 		}
 		// An unread reference is still a legitimate boundary — the update may
 		// prune onto it — but nothing below it was reached, so the walk stops.
-		return g.add(hash, pos, c, false, nil), true, nil
+		return g.add(hash, fpos, c, false, nil), true, nil
 	}
 
 	// Descend the cell the walk arrived at, falling back to the recorded
@@ -212,6 +246,10 @@ func (g *sourceGraph) sawLazyInstance() bool {
 	return g != nil && g.lazyInstance.Load()
 }
 
+// add registers a finished node. pos keys it for later lookups: the read-table
+// entry position for a read cell, the frontier entry position for a fringe
+// cell, and -1 for a fringe hash the frontier does not index, which lands in
+// the fallback map.
 func (g *sourceGraph) add(hash Hash, pos int32, held *Cell, read bool, children []int32) int32 {
 	node := sourceNode{cell: held, read: read, claimedBy: -1, firstRef: int32(len(g.edges))}
 	if len(children) > 0 {
@@ -220,9 +258,15 @@ func (g *sourceGraph) add(hash Hash, pos int32, held *Cell, read bool, children 
 	}
 	idx := int32(len(g.nodes))
 	g.nodes = append(g.nodes, node)
-	if read {
+	switch {
+	case read:
 		g.readPos[shardOf(hash)][pos] = idx + 1
-	} else {
+	case pos >= 0:
+		g.unreadPos[pos] = idx + 1
+	default:
+		if g.byUnread == nil {
+			g.byUnread = make(map[Hash]int32, 8)
+		}
 		g.byUnread[hash] = idx
 	}
 	return idx
@@ -236,7 +280,7 @@ func (g *sourceGraph) held(hash Hash) (*Cell, int32, bool) {
 		}
 		return nil, 0, false
 	}
-	idx, ok := g.byUnread[hash]
+	idx, _, ok := g.lookupUnread(hash)
 	if !ok {
 		return nil, 0, false
 	}
@@ -522,10 +566,11 @@ func (rs *ReadSet) buildSourceGraphParallel(g *sourceGraph, workers int) (bool, 
 				return idx - 1, nil
 			}
 		} else {
-			if idx, seen := g.byUnread[hash]; seen {
+			idx, fpos, seen := g.lookupUnread(hash)
+			if seen {
 				return idx, nil
 			}
-			return g.add(hash, pos, c, false, nil), nil
+			return g.add(hash, fpos, c, false, nil), nil
 		}
 		descend := c
 		if descend.IsLazy() || descend.refsCount() == 0 {
@@ -661,20 +706,25 @@ func (g *sourceGraph) mergeSourceSubtree(task *sourceGraphTask) int32 {
 	var childBuf [4]int32
 	for i := range task.local {
 		n := &task.local[i]
+		pos := n.pos
 		if n.read {
 			if idx := g.readPos[shardOf(n.hash)][n.pos]; idx != 0 {
 				remap[i] = idx - 1
 				continue
 			}
-		} else if idx, seen := g.byUnread[n.hash]; seen {
-			remap[i] = idx
-			continue
+		} else {
+			idx, fpos, seen := g.lookupUnread(n.hash)
+			if seen {
+				remap[i] = idx
+				continue
+			}
+			pos = fpos
 		}
 		children := childBuf[:0]
 		for _, child := range task.edges[n.firstRef : n.firstRef+n.refCount] {
 			children = append(children, remap[child])
 		}
-		remap[i] = g.add(n.hash, n.pos, n.cell, n.read, children)
+		remap[i] = g.add(n.hash, pos, n.cell, n.read, children)
 	}
 	return remap[len(task.local)-1]
 }

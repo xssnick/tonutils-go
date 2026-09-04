@@ -186,8 +186,13 @@ func assertDetachedTestGraphParity(t *testing.T, source, detached *Cell) {
 			t.Fatal("detached cell fields changed")
 		}
 		if current.source.meta != nil && current.source.meta.extraHashes != nil {
+			// Only the slots the level mask makes significant are compared: the
+			// storage is packed (see prewireParsedExtraHashes), so the rest of a
+			// window belongs to other cells on both sides.
+			slots := current.source.extraHashSlots()
 			if current.detached.meta == nil || current.detached.meta.extraHashes == nil ||
-				*current.source.meta.extraHashes != *current.detached.meta.extraHashes ||
+				!bytes.Equal(extraHashBytes(current.source.meta.extraHashes, slots),
+					extraHashBytes(current.detached.meta.extraHashes, slots)) ||
 				current.source.meta.extraDepths != current.detached.meta.extraDepths {
 				t.Fatal("detached cell hash/depth metadata changed")
 			}
@@ -200,6 +205,63 @@ func assertDetachedTestGraphParity(t *testing.T, source, detached *Cell) {
 		}
 		for i := 0; i < current.source.refsCount(); i++ {
 			queue = append(queue, pair{source: current.source.refs[i], detached: current.detached.refs[i]})
+		}
+	}
+}
+
+// extraHashBytes is the significant prefix of a packed extra-hash window as
+// bytes, for comparisons that must not look past a cell's own slots.
+func extraHashBytes(window *[3]Hash, slots int) []byte {
+	out := make([]byte, 0, slots*hashSize)
+	for i := 0; i < slots; i++ {
+		out = append(out, window[i][:]...)
+	}
+	return out
+}
+
+// TestCloneDetachedSizedIsTheSameGraphForEveryHint holds the property the
+// hint is documented with: it sizes scratch structures and changes nothing
+// about the clone. A hint below the true count, one equal to it and one far
+// above it must all produce the graph CloneDetached does, out of a parsed
+// arena whose level>0 cells carry packed hash windows.
+func TestCloneDetachedSizedIsTheSameGraphForEveryHint(t *testing.T) {
+	var counter uint64
+	tree := buildFinalizeParityTree(t, 3, &counter)
+	skeleton := CreateProofSkeleton()
+	skeleton.ProofRef(0).ProofRef(1).SetRecursive()
+	skeleton.ProofRef(2).ProofRef(3).ProofRef(0).SetRecursive()
+	proof, err := tree.CreateProof(skeleton)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := BeginCell().MustStoreUInt(0xdeadbeef, 32).EndCell()
+	combined := ToBOCWithOptions([]*Cell{proof, unrelated}, BOCSerializeOptions{WithCRC32C: true})
+	roots, err := FromBOCMultiRootWithOptions(combined, BOCParseOptions{NoCopyPayload: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := roots[0]
+	reachable := len(collectDetachedTestGraph(source))
+	if reachable < 8 {
+		t.Fatalf("fixture proof has %d cells, too small to exercise sizing", reachable)
+	}
+
+	want, err := source.CloneDetached()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBOC := want.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true, WithIntHashes: true})
+	for _, hint := range []int{-1, 0, 1, reachable / 2, reachable, reachable * 4, 1 << 20} {
+		got, err := source.CloneDetachedSized(hint)
+		if err != nil {
+			t.Fatalf("hint %d: %v", hint, err)
+		}
+		assertDetachedTestGraphParity(t, source, got)
+		if gotBOC := got.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true, WithIntHashes: true}); !bytes.Equal(gotBOC, wantBOC) {
+			t.Fatalf("hint %d: detached graph serialization differs from the unsized clone", hint)
+		}
+		if err := CheckProof(got, tree.Hash()); err != nil {
+			t.Fatalf("hint %d: detached proof no longer verifies: %v", hint, err)
 		}
 	}
 }

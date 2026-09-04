@@ -661,7 +661,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 	case tlb.MsgTypeInternal:
 		in := msg.AsInternal()
 		prepared.creditFirst = !in.Bounce
-		prepared.msgBalance, err = transactionCurrencyFromOwnedParts(in.Amount.Nano(), in.ExtraCurrencies)
+		prepared.msgBalance, err = transactionCurrencyFromOwnedParts(bigint.Set(in.Amount.NanoRef()), in.ExtraCurrencies)
 		if err != nil {
 			return nil, err
 		}
@@ -685,7 +685,7 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 		}
 	case tlb.MsgTypeExternalIn:
 		prepared.msgBalance = transactionZeroCurrencyBalance()
-		if importFee.Sign() > 0 {
+		if importFee != nil && importFee.Sign() > 0 {
 			if prepared.balance.Cmp(importFee) < 0 {
 				return nil, errors.New("external import fees exceed account balance")
 			}
@@ -705,21 +705,25 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 }
 
 func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAccount, storageFee *big.Int, now uint32, globalVersion uint32, limits transactionStorageDueLimits, adjustMsgValue bool) {
-	collected := bigint.FromInt64(0)
-	due := bigint.FromInt64(0)
+	// collected and due are built only on the branches that produce them: a
+	// nil collected reads back as zero through tlb.FromOwnedNanoTON, and
+	// transactionCoinsPtr maps a nil due to the absent-coins it mapped a zero
+	// to before. Both stay private values on every path.
+	var collected, due *big.Int
 	statusChange := tlb.AccStatusChange{Type: tlb.AccStatusChangeUnchanged}
 
 	p.duePayment = transactionCoinsClonePtr(acc.storageInfo.DuePayment)
 	p.lastPaid = now
 	if storageFee != nil && storageFee.Sign() > 0 {
 		if storageFee.Cmp(p.balance) <= 0 {
-			collected.Set(storageFee)
+			collected = bigint.Set(storageFee)
 			p.balance.Sub(p.balance, storageFee)
 			if globalVersion >= 7 {
 				p.duePayment = nil
 			}
 		} else {
-			collected.Set(p.balance)
+			collected = bigint.Set(p.balance)
+			due = bigint.New()
 			due.Sub(storageFee, p.balance)
 			p.balance.SetInt64(0)
 
@@ -750,7 +754,8 @@ func (p *transactionPreparedPhases) applyStoragePhase(acc *transactionRuntimeAcc
 	}
 
 	p.storagePhase = &tlb.StoragePhase{
-		// collected was built by this function and is dead after this line.
+		// collected was built by this function and is dead after this line;
+		// nil means no fee was collected and reads back as zero.
 		StorageFeesCollected: tlb.FromOwnedNanoTON(collected),
 		StorageFeesDue:       transactionCoinsPtr(due),
 		StatusChange:         statusChange,

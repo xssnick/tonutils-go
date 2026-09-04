@@ -2,8 +2,8 @@ package tvm
 
 import (
 	"errors"
+	"math/big"
 
-	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
@@ -52,7 +52,8 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 	if err != nil {
 		return nil, err
 	}
-	importFee := bigint.FromInt64(0)
+	// importFee is nil for a special account: the readers treat nil as zero.
+	var importFee *big.Int
 	if !isSpecial {
 		importFee, err = transactionComputeImportFee(blockchainCfg, runtimeAcc.addr, &msg.msg, msg.cell)
 		if err != nil {

@@ -281,6 +281,9 @@ func (d *AugmentedDictionary) setManyItems(
 		parallelism:  parallelism,
 		captureDiff:  captureDiff,
 	}
+	if d.bornEmpty && len(items) >= augBulkArenaMinItems {
+		state.arena = newAugBulkArena(items, d.keySz)
+	}
 	root, rootExtra, replay, err := d.setMany(d.root, d.root.Trace(), items, d.keySz, &state, nil)
 	if err != nil {
 		return nil, err
@@ -453,6 +456,40 @@ func augmentedBulkParallelism(values []int) (int, error) {
 	return values[0], nil
 }
 
+// augBulkArenaMinItems is the batch size below which a bulk write does not arm
+// a node arena: a tiny batch builds a handful of nodes, and the two slab
+// allocations would cost as much as they save.
+const augBulkArenaMinItems = 8
+
+// augBulkArenaNodesPerKey bounds the nodes a batched key rebuilds: its own leaf
+// and fork plus its share of the rebuilt path above, whose per-key cost grows
+// as the batch thins out against the tree it lands in. Running past the
+// estimate only means the remaining nodes take the ordinary allocation.
+//
+// Four is the bytes-neutral point, measured on the mainnet collation bench:
+// five nodes per key saved 5.06% of allocations but grew B/op by 0.4-1 MB of
+// slab slack, four saves 4.3% with B/op unchanged. The bytes axis is what sets
+// GC cycle frequency, so the smaller slab is the better trade — the remaining
+// fallbacks are structural (deletes, single sets, state-loaded dictionaries),
+// not capacity: nine nodes per key bought 0.7% more for another megabyte.
+const augBulkArenaNodesPerKey = 4
+
+// newAugBulkArena sizes node slabs for a bulk write over items. The data bound
+// mirrors dictBulkArenaDataBytes: every key contributes its bits to the labels
+// along its path exactly once, values are stored inline in their leaves, and
+// each node gets an allowance for its label header and augmentation extra.
+func newAugBulkArena(items []augBulkItem, keySz uint) *dictBuildArena {
+	bits := uint64(len(items)) * uint64(keySz)
+	for i := range items {
+		if items[i].value != nil {
+			bits += uint64(items[i].value.BitsUsed())
+		}
+	}
+	nodes := augBulkArenaNodesPerKey * len(items)
+	dataBytes := int(bits/8) + nodes*16 + 128
+	return newDictBuildArena(nodes, dataBytes)
+}
+
 type augmentedBranchResult struct {
 	cell   *Cell
 	extra  Slice
@@ -498,6 +535,17 @@ func runAugmentedBranches(
 
 	leftState := state.branch(leftParallelism)
 	rightState := state.branch(rightParallelism)
+	if state.arena != nil {
+		// The right branch runs on this goroutine and finishes before the join,
+		// so it can keep filling the parent's arena; the left branch runs
+		// concurrently and gets a disjoint window carved out of the same slabs,
+		// holding its key share of whatever capacity remains. An exhausted
+		// arena just leaves the left branch on the ordinary allocating path.
+		if state.arena.carveShareInto(&leftState.carvedArena, leftKeys, totalKeys) {
+			leftState.arena = &leftState.carvedArena
+		}
+		rightState.arena = state.arena
+	}
 	var leftResult augmentedBranchResult
 	var wait sync.WaitGroup
 	wait.Add(1)
@@ -734,7 +782,7 @@ func (d *AugmentedDictionary) setMany(
 	if err != nil {
 		return nil, Slice{}, nil, fmt.Errorf("failed to extract old child extra: %w", err)
 	}
-	oldChildCell := oldChild.EndCell()
+	oldChildCell := endNodeCellArena(oldChild, state.arena)
 	var oldReplay *augDiffReplayNode
 	if state.captureDiff {
 		oldReplay = relabeledAugDiffReplay(oldChildCell, childOffset, node.loader.trace, prior)

@@ -47,6 +47,35 @@ func (a *dictBuildArena) take(size int) (*Cell, []byte) {
 	return cell, a.data[start : start+size : start+size]
 }
 
+// carveShareInto splits off a window holding the keys/totalKeys share of this
+// arena's remaining capacity into dst and advances past it, so the window and
+// the remainder never overlap: a parallel branch can fill its window while the
+// parent keeps carving from what is left, without a new slab allocation for
+// either. Splitting what remains rather than a per-key estimate keeps the two
+// sides of every split proportionally funded however deep the splits nest. An
+// empty remainder reports false and leaves both arenas untouched — the branch
+// then simply allocates its nodes the ordinary way.
+func (a *dictBuildArena) carveShareInto(dst *dictBuildArena, keys, totalKeys int) bool {
+	if a == nil || keys <= 0 || totalKeys <= 0 {
+		return false
+	}
+	nodes := (cap(a.cells) - len(a.cells)) * keys / totalKeys
+	dataBytes := (cap(a.data) - len(a.data)) * keys / totalKeys
+	if nodes <= 0 {
+		return false
+	}
+
+	cellStart := len(a.cells)
+	a.cells = a.cells[:cellStart+nodes]
+	dataStart := len(a.data)
+	a.data = a.data[:dataStart+dataBytes]
+	*dst = dictBuildArena{
+		cells: a.cells[cellStart : cellStart : cellStart+nodes],
+		data:  a.data[dataStart : dataStart : dataStart+dataBytes],
+	}
+	return true
+}
+
 // dictBulkArenaDataBytes estimates the cell data a bulk build over items will
 // produce. Every key contributes its bits to the labels along its own path
 // exactly once, so the key material is bounded by len(items)*keySz; the rest
@@ -88,6 +117,25 @@ func storeDictNodeArena(arena *dictBuildArena, label *Slice, payload *Builder, k
 		return nil, err
 	}
 	return cell, nil
+}
+
+// endNodeCellArena is (*Builder).EndCell with the allocation redirected into
+// arena when one is armed and has room. It keeps EndCell's exact semantics —
+// the trace refuses the creation before the cell exists, and a failure panics
+// the same way — so the two paths stay interchangeable node for node. A spent
+// or absent arena falls back to the ordinary allocating EndCell.
+func endNodeCellArena(b *Builder, arena *dictBuildArena) *Cell {
+	cell, buf := arena.take(b.usedBytes())
+	if cell == nil {
+		return b.EndCell()
+	}
+	if err := b.trace.NotifyCreate(); err != nil {
+		panic(err)
+	}
+	if err := finalizeCellInto(cell, buf, b, false); err != nil {
+		panic(err)
+	}
+	return cell
 }
 
 func (d *Dictionary) storeLeafArena(arena *dictBuildArena, keyPfx *Slice, value *Builder, keyOffset uint) (*Cell, error) {

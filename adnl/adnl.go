@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -192,8 +193,9 @@ func (c *Channel) process(buf []byte) error {
 		return fmt.Errorf("failed to decode packet: %w", err)
 	}
 
-	packet, err := parsePacket(data)
-	if err != nil {
+	packet := getPacketContent()
+	defer putPacketContent(packet)
+	if err = parsePacketInto(packet, data); err != nil {
 		c.adnl.noteInboundError(time.Now())
 		return fmt.Errorf("failed to parse packet: %w", err)
 	}
@@ -648,8 +650,7 @@ func (a *ADNL) processMessageWithState(state *inboundPacketState, message any) e
 				return fmt.Errorf("failed to build final message from parts: %w", err)
 			}
 
-			var msg any
-			_, err = tl.ParseNoCopy(&msg, data, true)
+			msg, _, err := parseMessageNoCopy(data)
 			if err != nil {
 				return fmt.Errorf("failed to parse message answer from parts: %w", err)
 			}
@@ -841,12 +842,86 @@ func (a *ADNL) processAnswer(id []byte, query any) {
 }
 
 func (a *ADNL) SendCustomMessage(_ context.Context, req tl.Serializable) error {
+	return a.sendCustomMessage(&MessageCustom{Data: req}, nil)
+}
+
+// PreparedCustomMessage is an adnl.message.custom serialized to its wire form
+// once, for delivery to any number of peers through SendPreparedCustomMessage.
+// A broadcast part relayed to five peers used to be serialized five times; the
+// prepared form is built once and only the per-peer packet (seqno, random
+// padding, channel encryption) is produced per send. It is immutable after
+// creation and safe to share between goroutines.
+type PreparedCustomMessage struct {
+	wire []byte
+}
+
+// PrepareCustomMessage serializes data exactly as SendCustomMessage does.
+func PrepareCustomMessage(data tl.Serializable) (*PreparedCustomMessage, error) {
+	wire, err := tl.Serialize(&MessageCustom{Data: data}, true)
+	if err != nil {
+		return nil, fmt.Errorf("failed to prepare custom message: %w", err)
+	}
+	return &PreparedCustomMessage{wire: wire}, nil
+}
+
+// PrepareCustomMessageParts frames the concatenation of parts, each already a
+// boxed TL object, as an adnl.message.custom. It yields the bytes
+// SendCustomMessage would build for a []tl.Serializable of those objects, with
+// no serialization pass over them.
+func PrepareCustomMessageParts(parts ...[]byte) *PreparedCustomMessage {
+	size := 4 + 8 // constructor plus the widest bytes header
+	for _, part := range parts {
+		size += len(part)
+	}
+	wire := make([]byte, 0, size+3) // plus alignment padding
+
+	wire = binary.LittleEndian.AppendUint32(wire, _MessageCustomID)
+	from := len(wire)
+	wire = append(wire, 0, 0, 0, 0)
+	for _, part := range parts {
+		wire = append(wire, part...)
+	}
+	wire = tl.RemapSliceAsTLBytes(wire, from)
+	return &PreparedCustomMessage{wire: wire}
+}
+
+// Wire returns the serialized adnl.message.custom. It must not be modified.
+func (m *PreparedCustomMessage) Wire() []byte {
+	return m.wire
+}
+
+// PreparedCustomMessageSender is implemented by transports that deliver a
+// PreparedCustomMessage without serializing it again.
+type PreparedCustomMessageSender interface {
+	SendPreparedCustomMessage(ctx context.Context, msg *PreparedCustomMessage) error
+}
+
+var ErrPreparedCustomMessageUnsupported = errors.New("transport does not support prepared custom messages")
+
+// SendPreparedCustomMessage sends a message prepared by PrepareCustomMessage
+// or PrepareCustomMessageParts. It splits, packs, encrypts and retries on MTU
+// exactly as SendCustomMessage does; only the serialization is skipped.
+func (a *ADNL) SendPreparedCustomMessage(_ context.Context, msg *PreparedCustomMessage) error {
+	if msg == nil || len(msg.wire) == 0 {
+		return fmt.Errorf("failed to send custom message: empty prepared message")
+	}
+	return a.sendCustomMessage(nil, msg.wire)
+}
+
+// sendCustomMessage takes either the message object to serialize or its
+// prepared wire form.
+func (a *ADNL) sendCustomMessage(req tl.Serializable, wire []byte) error {
 	baseMTU := false
 
 reSplit:
-	packet, packets, err := a.buildRequestMaySplit(&MessageCustom{
-		Data: req,
-	}, baseMTU)
+	var packet []byte
+	var packets [][]byte
+	var err error
+	if wire != nil {
+		packet, packets, err = a.buildRequestMaySplitWire(wire, baseMTU)
+	} else {
+		packet, packets, err = a.buildRequestMaySplit(req, baseMTU)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to send custom message: %w", err)
 	}
@@ -1052,11 +1127,25 @@ reSplit:
 const MaxMTU = 1500 - 40 - 8 // max is for ipv6 over ethernet
 
 func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packet []byte, packets [][]byte, err error) {
-	msg, err := tl.Serialize(req, true)
+	// The body is only read to be copied into the packets built below, and
+	// every one of those is copied out of its own staging buffer, so nothing
+	// outlives this call and the buffer can go back to the pool.
+	body := getMessageBuild()
+	defer putMessageBuild(body)
+
+	msg, err := tl.Serialize(req, true, body)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	return a.buildRequestMaySplitWire(msg, useBase)
+}
+
+// buildRequestMaySplitWire builds the packet, or the multipart packets, for a
+// message already in boxed wire form. msg is only read: the split parts alias
+// it and every packet copies it, so a shared PreparedCustomMessage may be
+// passed straight in.
+func (a *ADNL) buildRequestMaySplitWire(msg []byte, useBase bool) (packet []byte, packets [][]byte, err error) {
 	mtu := BasePayloadMTU
 	if !useBase { // useBase is true when packet is oversize, and we rebuild it with lower MTU
 		if sz := atomic.LoadUint32(&a.prevPacketHeaderSz); sz > 0 {
@@ -1082,7 +1171,7 @@ func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packet [
 		return nil, packets, nil
 	}
 
-	buf, err := a.buildRequest(tl.Raw(msg))
+	buf, err := a.buildRequestWire(msg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filed to build message, err: %w", err)
 	}
@@ -1090,6 +1179,18 @@ func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packet [
 }
 
 func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
+	return a.buildRequestMessage(req, nil)
+}
+
+// buildRequestWire is buildRequest for a message already in boxed wire form.
+// On an established channel, which is where every relay send lands, the wire
+// goes into the packet directly; the root-packet branches, which also carry a
+// channel message, box it as tl.Raw and take the generic path.
+func (a *ADNL) buildRequestWire(msg []byte) (buf []byte, err error) {
+	return a.buildRequestMessage(nil, msg)
+}
+
+func (a *ADNL) buildRequestMessage(req tl.Serializable, wire []byte) (buf []byte, err error) {
 	a.lifecycleMx.RLock()
 	defer a.lifecycleMx.RUnlock()
 
@@ -1103,24 +1204,32 @@ func (a *ADNL) buildRequest(req tl.Serializable) (buf []byte, err error) {
 		forceRoot, rootOpts = a.rootReinitOptions(time.Now())
 	}
 
-	if channelReady && !forceRoot {
-		if ch.wantConfirm.Load() {
-			// if client not yet received confirmation - we will send it till his first packet in channel
-			chMsg := &MessageConfirmChannel{
-				Key:     ch.key.Public().(ed25519.PublicKey),
-				PeerKey: ch.peerKey,
-				Date:    ch.initDate,
-			}
+	if channelReady && !forceRoot && !ch.wantConfirm.Load() {
+		// channel is active
+		if wire != nil {
+			buf, err = ch.createPacketRaw(seqno, wire)
+		} else {
+			buf, err = ch.createPacket(seqno, req)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to create packet: %w", err)
+		}
+		return buf, nil
+	}
 
-			buf, err = a.createPacket(seqno, chMsg, req)
-			if err != nil {
-				return nil, fmt.Errorf("failed to create packet: %w", err)
-			}
-			return buf, nil
+	if wire != nil {
+		req = tl.Raw(wire)
+	}
+
+	if channelReady && !forceRoot {
+		// if client not yet received confirmation - we will send it till his first packet in channel
+		chMsg := &MessageConfirmChannel{
+			Key:     ch.key.Public().(ed25519.PublicKey),
+			PeerKey: ch.peerKey,
+			Date:    ch.initDate,
 		}
 
-		// channel is active
-		buf, err = ch.createPacket(seqno, req)
+		buf, err = a.createPacket(seqno, chMsg, req)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create packet: %w", err)
 		}
@@ -1209,12 +1318,9 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	ctr, err := keys.BuildSharedCipher(key, checksum)
-	if err != nil {
+	if err = keys.XORSharedStream(data, data, key, checksum); err != nil {
 		return nil, err
 	}
-
-	ctr.XORKeyStream(data, data)
 
 	hash := sha256.Sum256(data)
 	if !bytes.Equal(hash[:], checksum) {
@@ -1360,8 +1466,8 @@ func (a *ADNL) createPacketWithOptions(seqno int64, opts rootPacketOptions, msgs
 		packet.Address = ourAddr
 	}
 
-	buf := bytes.NewBuffer(make([]byte, 96))
-	buf.Grow(MaxMTU - 32)
+	buf := getPacketBuild(96)
+	defer putPacketBuild(buf)
 
 	if _, err = packet.Serialize(buf); err != nil {
 		return nil, err
@@ -1390,18 +1496,17 @@ func (a *ADNL) createPacketWithOptions(seqno int64, opts rootPacketOptions, msgs
 		return nil, err
 	}
 
-	ctr, err := keys.BuildSharedCipher(sharedKey, checksum)
-	if err != nil {
+	if err = keys.XORSharedStream(packetData, packetData, sharedKey, checksum); err != nil {
 		return nil, err
 	}
-
-	ctr.XORKeyStream(packetData, packetData)
 
 	copy(bufData, a.peerID)
 	copy(bufData[32:], outerPriv.Public().(ed25519.PublicKey))
 	copy(bufData[64:], checksum)
 
-	return bufData, nil
+	out := make([]byte, len(bufData))
+	copy(out, bufData)
+	return out, nil
 }
 
 func (a *ADNL) noteReceivedPacket() {

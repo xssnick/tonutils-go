@@ -3,10 +3,12 @@ package quic
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 )
 
 var admissionBenchErr error
+var admissionBenchPayload []byte
 
 func BenchmarkReadBoxedObjectHeaderRejection(b *testing.B) {
 	header, headerLen, _, _, err := boxedObjectHeader(idQuicQuery, MaxPlumtreePayloadSize)
@@ -60,4 +62,27 @@ func BenchmarkReadBoxedObjectHeaderRejection(b *testing.B) {
 		}
 		admissionBenchErr = err
 	})
+}
+
+func BenchmarkReadAdmittedPayload(b *testing.B) {
+	for _, size := range []int{payloadCommitThreshold, 4 * payloadCommitThreshold} {
+		data := bytes.Repeat([]byte{0xA5}, size)
+
+		b.Run(fmt.Sprintf("size=%dMiB", size>>20), func(b *testing.B) {
+			reader := bytes.NewReader(data)
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+
+			var payload []byte
+			var err error
+			for b.Loop() {
+				reader.Reset(data)
+				payload, err = readAdmittedPayload(reader, len(data), nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			admissionBenchPayload = payload
+		})
+	}
 }

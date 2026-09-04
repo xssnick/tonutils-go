@@ -591,9 +591,12 @@ func transactionComputeGasFee(cfg *PreparedBlockchainConfig, addr *address.Addre
 	return prices.ComputeGasPrice(gasUsed)
 }
 
+// transactionComputeImportFee returns nil for an internal message: no import
+// fee applies, and the caller treats nil as zero rather than paying an
+// allocation per internal transaction for a value that is never read.
 func transactionComputeImportFee(cfg *PreparedBlockchainConfig, addr *address.Address, msg *tlb.Message, msgCell *cell.Cell) (*big.Int, error) {
 	if msg.MsgType != tlb.MsgTypeExternalIn {
-		return bigint.FromInt64(0), nil
+		return nil, nil
 	}
 
 	prices := cfg.msgForwardPricesFor(transactionIsMasterchain(addr))
@@ -614,9 +617,13 @@ func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactio
 		return nil, fmt.Errorf("transaction unix time %d is before account last_paid %d", now, acc.storageInfo.LastPaid)
 	}
 
-	total := bigint.FromInt64(0)
+	// total stays nil while no term exists, and nil is the returned form of
+	// "no storage fee": every consumer (applyStoragePhase's nil-and-sign
+	// check) already treats nil as zero, so the common fee-less account does
+	// not pay an allocation for it. A non-nil result is a fresh private value.
+	var total *big.Int
 	if acc.storageInfo.DuePayment != nil && acc.storageInfo.DuePayment.NanoRef().Sign() > 0 {
-		total.Add(total, acc.storageInfo.DuePayment.NanoRef())
+		total = bigint.Set(acc.storageInfo.DuePayment.NanoRef())
 	}
 	if acc.isSpecial {
 		return total, nil
@@ -630,6 +637,10 @@ func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactio
 	fee, err := cfg.computeStorageFee(transactionIsMasterchain(acc.addr), acc.storageInfo.LastPaid, now, usage.BitsUsed.Uint64(), usage.CellsUsed.Uint64())
 	if err != nil {
 		return nil, err
+	}
+	if total == nil {
+		// computeStorageFee built fee for this call alone; take it as the total.
+		return fee, nil
 	}
 	total.Add(total, fee)
 	return total, nil

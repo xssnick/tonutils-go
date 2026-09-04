@@ -67,7 +67,7 @@ func (p *twoStepRelayTestPeer) sendMessage(ctx context.Context, body []byte) err
 func mustReserveTwoStepRelayPayload(t testing.TB, dispatcher *broadcastTwoStepRelayDispatcher, body []byte, refs int) *broadcastTwoStepRelayPayload {
 	t.Helper()
 
-	payload, ok := dispatcher.reservePayload(nil, body, refs)
+	payload, ok := dispatcher.reservePayload(nil, NewPreparedBroadcastMessage(body), refs)
 	if !ok {
 		t.Fatal("failed to reserve relay test payload")
 	}
@@ -1597,7 +1597,7 @@ func TestBroadcastTwoStepRelayDispatcherBoundsDistinctBodyBytes(t *testing.T) {
 		dispatcher.Close()
 		t.Fatalf("shared relay body charged %d bytes, want 8", stats.ActiveBytes)
 	}
-	if unexpected, ok := dispatcher.reservePayload(nil, []byte("x"), 3); ok {
+	if unexpected, ok := dispatcher.reservePayload(nil, NewPreparedBroadcastMessage([]byte("x")), 3); ok {
 		for range 3 {
 			dispatcher.releasePayload(unexpected)
 		}

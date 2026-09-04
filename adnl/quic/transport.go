@@ -850,19 +850,7 @@ func writeBoxedObjectPartsVia(w io.Writer, st *quicgo.Stream, id uint32, prefix,
 		return fmt.Errorf("payload size overflow")
 	}
 	if payloadLen < directWriteObjectThreshold {
-		header, headerLen, pad, total, err := boxedObjectHeader(id, payloadLen)
-		if err != nil {
-			return err
-		}
-		buf := wireBuffers.Get().(*[]byte)
-		wire := (*buf)[:total]
-		copy(wire, header[:headerLen])
-		offset := headerLen + copy(wire[headerLen:], prefix)
-		copy(wire[offset:], body)
-		clear(wire[total-pad:])
-		err = writeFull(w, wire)
-		wireBuffers.Put(buf)
-		if err != nil {
+		if err := writeSmallBoxedObject(w, id, prefix, body, payloadLen, &wireBuffers); err != nil {
 			return err
 		}
 		return st.Close()
@@ -872,6 +860,26 @@ func writeBoxedObjectPartsVia(w io.Writer, st *quicgo.Stream, id uint32, prefix,
 		return err
 	}
 	return st.Close()
+}
+
+func writeSmallBoxedObject(w io.Writer, id uint32, prefix, body []byte, payloadLen int, buffers *sync.Pool) error {
+	header, headerLen, pad, total, err := boxedObjectHeader(id, payloadLen)
+	if err != nil {
+		return err
+	}
+	buf := buffers.Get().(*[]byte)
+	wire := (*buf)[:total]
+	copy(wire, header[:headerLen])
+	offset := headerLen + copy(wire[headerLen:], prefix)
+	copy(wire[offset:], body)
+	clear(wire[total-pad:])
+	if err = writeFull(w, wire); err != nil {
+		// The QUIC writer may still own wire after an error.
+		return err
+	}
+
+	buffers.Put(buf)
+	return nil
 }
 
 func validateBoxedObjectSize(payload []byte, maxSize int64) error {
@@ -948,48 +956,103 @@ const payloadReadChunk = 64 << 10
 // legitimate multi-MiB broadcast does not pay repeated regrow copies.
 const payloadCommitThreshold = 1 << 20
 
-// Charges the admission scopes for bytes that actually arrived rather than for
-// the declared length, so a peer cannot pin MaxObjectSize of budget and heap per
-// stream by sending only the header. Mirrors QuicSender::StreamState::append.
+const payloadStagingChunks = (payloadCommitThreshold + payloadReadChunk - 1) / payloadReadChunk
+
+// Staging buffers keep the pre-commit reads independently owned. They are
+// copied into the returned contiguous payload only after the stream has sent
+// the whole pre-commit prefix. Pooling them removes the geometric grow churn
+// without letting a header-only stream reserve payloadCommitThreshold bytes.
+var payloadReadBuffers = sync.Pool{
+	New: func() any {
+		return new([payloadReadChunk]byte)
+	},
+}
+
+// Charges admission one bounded chunk at a time before the pre-commit reads,
+// so a header-only peer accounts for at most one chunk instead of its declared
+// length. After the complete prefix proves progress, the remaining payload is
+// committed in one charge before the final allocation and read.
 func readAdmittedPayload(r io.Reader, payloadLen int, lease *streamAdmissionLease) ([]byte, error) {
 	if payloadLen == 0 {
 		return nil, nil
 	}
 
-	// Nothing is allocated before the first chunk is charged.
-	var payload []byte
-	for len(payload) < payloadLen {
-		want := payloadLen - len(payload)
-		if len(payload) < payloadCommitThreshold && want > payloadReadChunk {
-			want = payloadReadChunk
-		}
+	if payloadLen <= payloadReadChunk {
 		if lease != nil {
-			if err := lease.chargeBytes(int64(want)); err != nil {
+			if err := lease.chargeBytes(int64(payloadLen)); err != nil {
 				return nil, err
 			}
 		}
 
-		if cap(payload)-len(payload) < want {
-			// Geometric until the stream proves itself, then one exact resize.
-			capacity := len(payload) + want
-			if doubled := 2 * cap(payload); doubled > capacity {
-				capacity = doubled
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(r, payload); err != nil {
+			return nil, err
+		}
+		return payload, nil
+	}
+
+	stagedLen := payloadLen
+	if stagedLen > payloadCommitThreshold {
+		stagedLen = payloadCommitThreshold
+	}
+
+	var staged [payloadStagingChunks]*[payloadReadChunk]byte
+	stagedCount := 0
+	read := 0
+	for read < stagedLen {
+		want := stagedLen - read
+		if want > payloadReadChunk {
+			want = payloadReadChunk
+		}
+		if lease != nil {
+			if err := lease.chargeBytes(int64(want)); err != nil {
+				releasePayloadReadBuffers(staged[:stagedCount])
+				return nil, err
 			}
-			if capacity > payloadLen {
-				capacity = payloadLen
-			}
-			grown := make([]byte, len(payload), capacity)
-			copy(grown, payload)
-			payload = grown
 		}
 
-		start := len(payload)
-		payload = payload[:start+want]
-		if _, err := io.ReadFull(r, payload[start:]); err != nil {
+		buf := payloadReadBuffers.Get().(*[payloadReadChunk]byte)
+		staged[stagedCount] = buf
+		stagedCount++
+		if _, err := io.ReadFull(r, buf[:want]); err != nil {
+			releasePayloadReadBuffers(staged[:stagedCount])
+			return nil, err
+		}
+		read += want
+	}
+
+	remaining := payloadLen - stagedLen
+	if lease != nil && remaining > 0 {
+		if err := lease.chargeBytes(int64(remaining)); err != nil {
+			releasePayloadReadBuffers(staged[:stagedCount])
+			return nil, err
+		}
+	}
+
+	payload := make([]byte, payloadLen)
+	offset := 0
+	for i := 0; i < stagedCount; i++ {
+		want := stagedLen - offset
+		if want > payloadReadChunk {
+			want = payloadReadChunk
+		}
+		copy(payload[offset:offset+want], staged[i][:want])
+		offset += want
+	}
+	releasePayloadReadBuffers(staged[:stagedCount])
+
+	if remaining > 0 {
+		if _, err := io.ReadFull(r, payload[stagedLen:]); err != nil {
 			return nil, err
 		}
 	}
 	return payload, nil
+}
+
+func releasePayloadReadBuffers(buffers []*[payloadReadChunk]byte) {
+	for _, buf := range buffers {
+		payloadReadBuffers.Put(buf)
+	}
 }
 
 // Bounds a stream by how long it stays silent rather than by one absolute budget,

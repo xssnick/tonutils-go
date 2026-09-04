@@ -261,12 +261,48 @@ func CRC(schema string) uint32 {
 	return crc32.Checksum([]byte(schema), ieeeTable)
 }
 
+const maxPooledHashBufferSize = 64 << 10
+
+type hashSerializeBuffer struct {
+	data []byte
+}
+
+var hashSerializeBufferPool = sync.Pool{
+	New: func() any {
+		return &hashSerializeBuffer{}
+	},
+}
+
 func Hash(key any) ([]byte, error) {
-	data, err := Serialize(key, true)
+	if raw, ok := key.(Raw); ok {
+		hash := sha256.Sum256(raw)
+		return hash[:], nil
+	}
+
+	capacity := initialSerializeCapacity(key, true)
+	buffer := hashSerializeBufferPool.Get().(*hashSerializeBuffer)
+	if capacity < 0 || cap(buffer.data) < capacity {
+		buffer.data = make([]byte, 0, capacity)
+	} else {
+		buffer.data = buffer.data[:0]
+	}
+
+	data, err := Append(buffer.data, key, true)
 	if err != nil {
+		releaseHashSerializeBuffer(buffer, buffer.data)
 		return nil, fmt.Errorf("key serialize err: %w", err)
 	}
 
 	hash := sha256.Sum256(data)
+	releaseHashSerializeBuffer(buffer, data)
 	return hash[:], nil
+}
+
+func releaseHashSerializeBuffer(buffer *hashSerializeBuffer, data []byte) {
+	if cap(data) <= maxPooledHashBufferSize {
+		buffer.data = data[:0]
+	} else {
+		buffer.data = nil
+	}
+	hashSerializeBufferPool.Put(buffer)
 }

@@ -166,36 +166,89 @@ func TestFECBroadcastBudgetCheckDoesNotOverflow(t *testing.T) {
 	state.maxActiveBytes = maxFECBroadcastBudgetEstimate
 	state.activeBytes = maxFECBroadcastBudgetEstimate - 4
 
-	if state.hasBudgetLocked(1, 8) {
+	if state.hasBudgetLocked(1, 8, true) {
 		t.Fatal("overflowing byte sum must not pass the budget check")
 	}
-	if !state.hasBudgetLocked(1, 4) {
+	if !state.hasBudgetLocked(1, 4, true) {
 		t.Fatal("exact remaining byte budget must pass")
+	}
+}
+
+// Large streams may fill all but one eighth of the byte budget; small streams
+// — external messages, shard descriptions — are admitted from the whole of
+// it, so a flood of blocks cannot shut them out.
+func TestFECBroadcastBudgetKeepsAReserveForSmallStreams(t *testing.T) {
+	state := NewBroadcastFECRelayState()
+	state.maxActiveStreams = 16
+	state.maxActiveBytes = 1024
+
+	if state.hasBudgetLocked(1, 900, false) {
+		t.Fatal("a large stream must not reach into the small-stream reserve")
+	}
+	if !state.hasBudgetLocked(1, 896, false) {
+		t.Fatal("a large stream that leaves the reserve untouched must pass")
+	}
+	if !state.hasBudgetLocked(1, 1024, true) {
+		t.Fatal("a small stream may use the whole budget")
+	}
+
+	now := time.Now()
+	if !state.reserveLocked(now, 896, false) {
+		t.Fatal("reserving up to the large-stream limit must pass")
+	}
+	if state.reserveLocked(now, 1, false) {
+		t.Fatal("no large stream fits once the large-stream limit is reached")
+	}
+	if !state.reserveLocked(now, 128, true) {
+		t.Fatal("a small stream must still fit in the reserve")
+	}
+	if state.reserveLocked(now, 1, true) {
+		t.Fatal("a small stream past the whole budget must be refused")
+	}
+	if state.dropped != 2 {
+		t.Fatalf("dropped = %d, want the two refused reservations", state.dropped)
 	}
 }
 
 func TestBroadcastFECImmediatePeerID(t *testing.T) {
 	tests := []struct {
-		name  string
-		id    []byte
-		match bool
+		name string
+		id   []byte
 	}{
-		{name: "empty", id: nil, match: true},
-		{name: "short test ID", id: bytes.Repeat([]byte{0x11}, 3), match: true},
-		{name: "protocol ID", id: bytes.Repeat([]byte{0x22}, 32), match: true},
-		{name: "oversized invalid ID", id: bytes.Repeat([]byte{0x33}, 33), match: false},
+		{name: "empty", id: nil},
+		{name: "short test ID", id: bytes.Repeat([]byte{0x11}, 3)},
+		{name: "protocol ID", id: bytes.Repeat([]byte{0x22}, 32)},
+		{name: "oversized extension ID", id: bytes.Repeat([]byte{0x33}, 33)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			stored := newBroadcastFECImmediatePeerID(tt.id)
-			if got := stored.matches(tt.id); got != tt.match {
-				t.Fatalf("matches() = %v, want %v", got, tt.match)
+			stored := newBroadcastExternalPeerIDKey(tt.id)
+			if stored != newBroadcastExternalPeerIDKey(bytes.Clone(tt.id)) {
+				t.Fatal("stored peer ID did not match an equal ID")
 			}
-			if len(tt.id) > 0 && stored.matches(tt.id[:len(tt.id)-1]) {
+			if len(tt.id) > 0 && stored == newBroadcastExternalPeerIDKey(tt.id[:len(tt.id)-1]) {
 				t.Fatal("stored peer ID matched a different length")
 			}
 		})
+	}
+}
+
+func TestBroadcastFECRelaySkipsArbitraryImmediatePeerID(t *testing.T) {
+	immediateID := bytes.Repeat([]byte{0x44}, 33)
+	otherID := bytes.Repeat([]byte{0x55}, 33)
+	stream := &fecBroadcastStream{
+		parts: map[uint32]broadcastFECRelayPart{
+			1: {immediatePeerID: newBroadcastExternalPeerIDKey(immediateID)},
+		},
+	}
+
+	ops := stream.relayPartOpsLocked(1, []BroadcastPeer{
+		&mockBroadcastPeer{id: immediateID},
+		&mockBroadcastPeer{id: otherID},
+	}, nil, false)
+	if len(ops) != 1 || !bytes.Equal(ops[0].peer.ID(), otherID) {
+		t.Fatalf("relay ops = %#v, want only the non-source peer", ops)
 	}
 }
 
@@ -218,7 +271,7 @@ func TestFECBroadcastConcurrentReservationsRespectStreamLimit(t *testing.T) {
 			<-start
 
 			state.mx.Lock()
-			reserved := state.reserveLocked(time.Now(), streamBudget)
+			reserved := state.reserveLocked(time.Now(), streamBudget, false)
 			state.mx.Unlock()
 			results <- reserved
 			if !reserved {
@@ -363,6 +416,8 @@ func TestProcessFECBroadcastCompactsTerminalDecodeFailures(t *testing.T) {
 
 func TestTerminalFECBroadcastErrorClosesAdmissionAndReleasesBudget(t *testing.T) {
 	state := NewBroadcastFECRelayState()
+	id := testBroadcastFECIDKey([]byte("id"))
+	peerID := newBroadcastExternalPeerIDKey([]byte{1})
 	errTerminal := errors.New("encoder failed")
 	admissionDone := make(chan struct{})
 	stream := &fecBroadcastStream{
@@ -370,15 +425,15 @@ func TestTerminalFECBroadcastErrorClosesAdmissionAndReleasesBudget(t *testing.T)
 		lastMessageAt:  time.Now(),
 		partHashes:     map[uint32][32]byte{1: {}},
 		parts:          map[uint32]broadcastFECRelayPart{1: {}},
-		receivedPeers:  map[string]struct{}{"peer": {}},
-		completedPeers: map[string]struct{}{"peer": {}},
+		receivedPeers:  map[broadcastExternalPeerIDKey]struct{}{peerID: {}},
+		completedPeers: map[broadcastExternalPeerIDKey]struct{}{peerID: {}},
 		admissionDone:  admissionDone,
 	}
-	state.streams["id"] = stream
+	state.streams[id] = stream
 	state.activeBytes = stream.budgetBytes
 
 	stream.mx.Lock()
-	if got := terminalFECBroadcastErrorLocked(state, "id", stream, time.Now(), errTerminal); !errors.Is(got, errTerminal) {
+	if got := terminalFECBroadcastErrorLocked(state, id, stream, time.Now(), errTerminal); !errors.Is(got, errTerminal) {
 		t.Fatalf("terminal error = %v, want %v", got, errTerminal)
 	}
 
@@ -433,7 +488,7 @@ func TestFECBroadcastAcceptRelayTransitionsToRetainedBudget(t *testing.T) {
 	}
 
 	state.mx.RLock()
-	stream := state.streams[string(sender.BroadcastHash())]
+	stream := state.streams[testBroadcastFECIDKey(sender.BroadcastHash())]
 	state.mx.RUnlock()
 	if stream == nil {
 		t.Fatal("accepted relay stream was not retained")
@@ -484,7 +539,7 @@ func TestProcessFECBroadcastAcceptsLowPartsAfterHighRepair(t *testing.T) {
 
 	state := o.activeFECState()
 	state.mx.RLock()
-	stream := state.streams[string(sender.BroadcastHash())]
+	stream := state.streams[testBroadcastFECIDKey(sender.BroadcastHash())]
 	state.mx.RUnlock()
 	if stream == nil {
 		t.Fatal("high repair part did not create a stream")
@@ -540,7 +595,7 @@ func TestProcessFECBroadcastRecontendsAfterCleanup(t *testing.T) {
 		t.Fatalf("process first part: %v", err)
 	}
 
-	id := string(sender.BroadcastHash())
+	id := testBroadcastFECIDKey(sender.BroadcastHash())
 	state.mx.Lock()
 	old := state.streams[id]
 	if old == nil {
@@ -621,7 +676,7 @@ func TestProcessFECBroadcastShortDoesNotContinueAfterCleanup(t *testing.T) {
 		t.Fatal("test stream did not complete")
 	}
 
-	id := string(sender.BroadcastHash())
+	id := testBroadcastFECIDKey(sender.BroadcastHash())
 	state.mx.Lock()
 	old := state.streams[id]
 	if old == nil {
@@ -699,7 +754,7 @@ func TestFECBroadcastCleanupKeepsStreamDuringAdmission(t *testing.T) {
 	<-entered
 
 	state := o.activeFECState()
-	id := string(sender.BroadcastHash())
+	id := testBroadcastFECIDKey(sender.BroadcastHash())
 	state.mx.Lock()
 	stream := state.streams[id]
 	state.cleanupLocked(time.Now().Add(fecBroadcastFinishedTTL+time.Second), true)
@@ -759,12 +814,12 @@ func BenchmarkMeasureRetainedFECBroadcastHeap(b *testing.B) {
 
 		maxParts := int(broadcastFECPartLimit(fec.SymbolsCount))
 		partHashes := make(map[uint32][32]byte, maxParts)
-		receivedPeers := make(map[string]struct{}, maxParts)
-		completedPeers := make(map[string]struct{}, maxParts)
+		receivedPeers := make(map[broadcastExternalPeerIDKey]struct{}, maxParts)
+		completedPeers := make(map[broadcastExternalPeerIDKey]struct{}, maxParts)
 		for seqno := range uint32(maxParts) {
 			partHashes[seqno] = [32]byte{byte(seqno), byte(seqno >> 8), byte(seqno >> 16), byte(seqno >> 24)}
 			peerID := [32]byte{byte(seqno), byte(seqno >> 8), byte(seqno >> 16), byte(seqno >> 24)}
-			id := string(peerID[:])
+			id := newBroadcastExternalPeerIDKey(peerID[:])
 			receivedPeers[id] = struct{}{}
 			completedPeers[id] = struct{}{}
 		}
@@ -804,7 +859,7 @@ func BenchmarkFECBroadcastReserveCancel(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		state.mx.Lock()
-		if !state.reserveLocked(now, 1<<20) {
+		if !state.reserveLocked(now, 1<<20, false) {
 			state.mx.Unlock()
 			b.Fatal("reservation unexpectedly rejected")
 		}
@@ -908,7 +963,7 @@ func assertTerminalFECStream(t *testing.T, state *BroadcastFECRelayState, part *
 		t.Fatalf("calculate broadcast ID: %v", err)
 	}
 	state.mx.RLock()
-	stream := state.streams[string(id)]
+	stream := state.streams[testBroadcastFECIDKey(id)]
 	activeBytes := state.activeBytes
 	reservedStreams := state.reservedStreams
 	state.mx.RUnlock()

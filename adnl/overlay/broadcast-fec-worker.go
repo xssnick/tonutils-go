@@ -27,15 +27,22 @@ type broadcastFECWorkerConfig struct {
 type BroadcastFECBroadcaster struct {
 	sender  *BroadcastFECSender
 	peerSet BroadcastPeerSet
+	hash    []byte
 
 	tick time.Duration
 	now  func() time.Time
 
 	cfg broadcastFECWorkerConfig
 
-	mx      sync.Mutex
-	workers map[string]*broadcastFECPeerWorker
-	rrHead  uint32
+	tickMx sync.Mutex
+	mx     sync.Mutex
+
+	workers           map[broadcastExternalPeerIDKey]*broadcastFECPeerWorker
+	workerOrder       []*broadcastFECPeerWorker
+	workerPeers       []broadcastFECWorkerPeer
+	staleWorkers      []*broadcastFECPeerWorker
+	workersGeneration uint64
+	rrHead            uint32
 }
 
 type broadcastFECPeerWorker struct {
@@ -64,6 +71,7 @@ type broadcastFECPeerWorker struct {
 	sendErrorDelay    int64
 
 	unregisterControl func()
+	seenGeneration    uint64
 
 	mx sync.Mutex
 }
@@ -112,10 +120,11 @@ func NewBroadcastFECBroadcaster(sender *BroadcastFECSender, peerSet BroadcastPee
 	return &BroadcastFECBroadcaster{
 		sender:  sender,
 		peerSet: peerSet,
+		hash:    sender.BroadcastHash(),
 		tick:    cfg.tick,
 		now:     cfg.now,
 		cfg:     cfg,
-		workers: map[string]*broadcastFECPeerWorker{},
+		workers: map[broadcastExternalPeerIDKey]*broadcastFECPeerWorker{},
 	}, nil
 }
 
@@ -165,6 +174,9 @@ func (b *BroadcastFECBroadcaster) Done() bool {
 }
 
 func (b *BroadcastFECBroadcaster) Tick(ctx context.Context) error {
+	b.tickMx.Lock()
+	defer b.tickMx.Unlock()
+
 	if b.sender.Expired() {
 		b.closeControls()
 		return nil
@@ -195,7 +207,7 @@ func (b *BroadcastFECBroadcaster) Tick(ctx context.Context) error {
 
 func (b *BroadcastFECBroadcaster) TrackControlMessage(peerID []byte, control BroadcastFECControl) bool {
 	b.mx.Lock()
-	worker := b.workers[string(peerID)]
+	worker := b.workers[newBroadcastExternalPeerIDKey(peerID)]
 	b.mx.Unlock()
 
 	if !b.sender.TrackControlMessage(peerID, control) {
@@ -211,47 +223,56 @@ func (b *BroadcastFECBroadcaster) TrackControlMessage(peerID []byte, control Bro
 }
 
 func (b *BroadcastFECBroadcaster) ensureWorkers(peers []BroadcastPeer) []*broadcastFECPeerWorker {
-	hash := b.sender.BroadcastHash()
-	var stale []*broadcastFECPeerWorker
-	workerPeers := make([]broadcastFECWorkerPeer, 0, len(peers))
-
 	b.mx.Lock()
+	b.workersGeneration++
+	generation := b.workersGeneration
+	// Tick runs every millisecond. Reuse the topology scratch and mark workers
+	// with a generation instead of allocating two slices, a seen map and ID
+	// strings on every unchanged pass.
+	clear(b.workerOrder)
+	clear(b.workerPeers)
+	clear(b.staleWorkers)
+	b.workerOrder = b.workerOrder[:0]
+	b.workerPeers = b.workerPeers[:0]
+	b.staleWorkers = b.staleWorkers[:0]
 
-	workers := make([]*broadcastFECPeerWorker, 0, len(peers))
-	seen := make(map[string]struct{}, len(peers))
 	for _, peer := range peers {
-		id := string(peer.ID())
-		seen[id] = struct{}{}
+		peerID := peer.ID()
+		id := newBroadcastExternalPeerIDKey(peerID)
 
 		worker := b.workers[id]
 		if worker == nil {
-			worker = newBroadcastFECPeerWorker(peer, b.sender, b.cfg)
+			worker = newBroadcastFECPeerWorker(peer, peerID, b.sender, b.cfg)
 			b.workers[id] = worker
 		} else {
 			worker.setPeer(peer)
 		}
-		worker.syncState(b.sender.peerState(peer.ID()))
-		workers = append(workers, worker)
-		workerPeers = append(workerPeers, broadcastFECWorkerPeer{
+		worker.seenGeneration = generation
+		worker.syncState(b.sender.peerState(peerID))
+		b.workerOrder = append(b.workerOrder, worker)
+		b.workerPeers = append(b.workerPeers, broadcastFECWorkerPeer{
 			worker: worker,
 			peer:   peer,
 		})
 	}
 
 	for id, worker := range b.workers {
-		if _, ok := seen[id]; ok {
+		if worker.seenGeneration == generation {
 			continue
 		}
 		delete(b.workers, id)
-		stale = append(stale, worker)
+		b.staleWorkers = append(b.staleWorkers, worker)
 	}
+	workers := b.workerOrder
+	workerPeers := b.workerPeers
+	stale := b.staleWorkers
 	b.mx.Unlock()
 
 	for _, worker := range stale {
 		worker.closeControl()
 	}
 	for _, item := range workerPeers {
-		item.worker.ensureControl(item.peer, hash, b.TrackControlMessage)
+		item.worker.ensureControl(item.peer, b.hash, b)
 	}
 
 	return workers
@@ -262,17 +283,17 @@ type broadcastFECWorkerPeer struct {
 	peer   BroadcastPeer
 }
 
-func newBroadcastFECPeerWorker(peer BroadcastPeer, sender *BroadcastFECSender, cfg broadcastFECWorkerConfig) *broadcastFECPeerWorker {
+func newBroadcastFECPeerWorker(peer BroadcastPeer, peerID []byte, sender *BroadcastFECSender, cfg broadcastFECWorkerConfig) *broadcastFECPeerWorker {
 	totalParts := sender.totalPartsLimit()
 	fastSeqnoTill := sender.fec.SymbolsCount + sender.fec.SymbolsCount/33 + 1
 	if fastSeqnoTill > totalParts {
 		fastSeqnoTill = totalParts
 	}
 
-	state := sender.peerState(peer.ID())
-	limiter := rldp.NewTokenBucket(cfg.minRate, fmt.Sprintf("overlay-%x", peer.ID()))
+	state := sender.peerState(peerID)
+	limiter := rldp.NewTokenBucket(cfg.minRate, fmt.Sprintf("overlay-%x", peerID))
 	ctrl := rldp.NewBBRv2Controller(limiter, rldp.BBRv2Options{
-		Name:    fmt.Sprintf("overlay-%x", peer.ID()),
+		Name:    fmt.Sprintf("overlay-%x", peerID),
 		MinRate: cfg.minRate,
 	})
 
@@ -315,7 +336,7 @@ func (w *broadcastFECPeerWorker) setPeer(peer BroadcastPeer) {
 	w.mx.Unlock()
 }
 
-func (w *broadcastFECPeerWorker) ensureControl(peer BroadcastPeer, hash []byte, handler broadcastFECControlHandler) {
+func (w *broadcastFECPeerWorker) ensureControl(peer BroadcastPeer, hash []byte, broadcaster *BroadcastFECBroadcaster) {
 	registrar, ok := peer.(broadcastFECControlRegistrar)
 	if !ok {
 		return
@@ -326,7 +347,7 @@ func (w *broadcastFECPeerWorker) ensureControl(peer BroadcastPeer, hash []byte, 
 		w.mx.Unlock()
 		return
 	}
-	w.unregisterControl = registrar.registerBroadcastFECControl(hash, handler)
+	w.unregisterControl = registrar.registerBroadcastFECControl(hash, broadcaster.TrackControlMessage)
 	w.mx.Unlock()
 }
 
@@ -526,7 +547,7 @@ func (w *broadcastFECPeerWorker) sendBatchLocked(ctx context.Context, sender *Br
 			return fmt.Errorf("failed to build part %d: %w", w.nextSeqno, err)
 		}
 
-		if err = sendPreparedBroadcastMessage(ctx, w.peer, part.full, part.fullWire); err != nil {
+		if err = SendPreparedBroadcast(ctx, w.peer, part.full, part.fullWire); err != nil {
 			return fmt.Errorf("failed to send part %d to peer %x: %w", w.nextSeqno, w.peer.ID(), err)
 		}
 
@@ -558,7 +579,7 @@ func (w *broadcastFECPeerWorker) sendShortProbeLocked(ctx context.Context, sende
 	if err != nil {
 		return fmt.Errorf("failed to build short probe %d: %w", seqno, err)
 	}
-	if err = sendPreparedBroadcastMessage(ctx, w.peer, part.short, part.shortWire); err != nil {
+	if err = SendPreparedBroadcast(ctx, w.peer, part.short, part.shortWire); err != nil {
 		return fmt.Errorf("failed to send short probe %d to peer %x: %w", seqno, w.peer.ID(), err)
 	}
 	return nil

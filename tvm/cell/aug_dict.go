@@ -61,6 +61,15 @@ type AugmentedDictionary struct {
 	rootExtra *Cell
 	wrapped   bool
 
+	// bornEmpty marks a dictionary that started as NewAugDict rather than as a
+	// view of an existing tree. Such a dictionary owns every node it ever
+	// builds, so its bulk writes may carve nodes out of shared slabs: the tree
+	// is retained or dropped as a whole, exactly the trade dictBuildArena
+	// documents. A dictionary loaded from state stays off the slabs, because
+	// nodes it builds replace nodes of a long-lived tree one path at a time and
+	// a surviving node would pin its whole birth slab.
+	bornEmpty bool
+
 	aug Augmentation
 
 	trace *Trace
@@ -88,6 +97,17 @@ type augmentedMutationState struct {
 	// captureDiff enables the receipt-only metadata maintained by bulk writes.
 	// Ordinary mutation APIs keep this false and allocate no replay nodes.
 	captureDiff bool
+	// arena, when armed, carves the nodes this mutation builds out of shared
+	// slabs instead of one size-classed allocation each. Only bulk writes on a
+	// bornEmpty dictionary arm it; the single-key paths and every delete keep
+	// it nil. Each parallel branch works on a disjoint window of the slabs —
+	// the branch on the spawning goroutine inherits this arena, which is idle
+	// until the join, and the spawned branch gets carvedArena.
+	arena *dictBuildArena
+	// carvedArena backs arena for a spawned parallel branch: a window carved
+	// out of the parent's slabs, held by value here so the split costs no
+	// allocation of its own.
+	carvedArena dictBuildArena
 }
 
 func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
@@ -104,6 +124,7 @@ func NewAugDict(keySz uint, aug Augmentation) (*AugmentedDictionary, error) {
 		keySz:     keySz,
 		rootExtra: rootExtra.EndCell(),
 		wrapped:   true,
+		bornEmpty: true,
 		aug:       aug,
 	}, nil
 }
@@ -463,6 +484,7 @@ func (d *AugmentedDictionary) Copy() *AugmentedDictionary {
 		root:      d.root,
 		rootExtra: d.rootExtra,
 		wrapped:   d.wrapped,
+		bornEmpty: d.bornEmpty,
 		aug:       d.aug,
 		trace:     d.trace,
 	}
@@ -1745,7 +1767,7 @@ func (d *AugmentedDictionary) storePreparedLeafWithExtra(keyPfx *Slice, keyOffse
 	if err := b.StoreSliceFrom(&payload); err != nil {
 		return nil, Slice{}, fmt.Errorf("failed to store value: %w", err)
 	}
-	leaf := b.EndCell()
+	leaf := endNodeCellArena(b, state.arena)
 	return leaf, Slice{
 		cell:     leaf,
 		bitStart: uint16(extraBitStart),
@@ -1813,7 +1835,7 @@ func (d *AugmentedDictionary) storeForkWithExtraSlices(label *Slice, left *Cell,
 	if err := b.StoreBuilder(&state.extra); err != nil {
 		return nil, Slice{}, fmt.Errorf("failed to store fork extra: %w", err)
 	}
-	fork := b.EndCell()
+	fork := endNodeCellArena(b, state.arena)
 	return fork, Slice{
 		cell:     fork,
 		bitStart: uint16(extraBitStart),

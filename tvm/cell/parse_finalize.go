@@ -41,8 +41,28 @@ func finalizeParsedCells(cells []Cell, rootsIndex []uint32, stored []storedHashe
 // that will need it in two batch allocations instead of two small allocations
 // per cell during hash finalization. Pruned cells keep higher-level hashes in
 // their payload and never use the extra storage.
+//
+// The storage is packed. A cell with level mask m computes popcount(m)+1
+// hashes and keeps the ones above level 0 in extraHashes, so it uses exactly
+// popcount(m) of the three slots — one for the level-1 cells that make up the
+// entire spine of a Merkle proof. Each cell's extraHashes therefore points at
+// a window of one shared slab that is precisely that long, rather than at its
+// own [3]Hash: the windows overlap in the type of the pointer but never in the
+// bytes a cell touches. That holds because every reader and writer of the
+// slots derives its index from the cell's own level mask, which the parser set
+// from the descriptor byte and finalization never changes: calculateHashes and
+// applyTrustedStoredHashesDepths write slots 0..popcount(m)-1 and getHash reads
+// the same range (applyTrustedStoredHashesDepths writes only hash0 on a pruned
+// cell, and a pruned cell gets no window here). The two spare trailing slots
+// keep the *[3]Hash conversion of the last window inside the slab. Copies of a
+// cell's metadata — cloneCellMeta, CloneDetached, the merkle-update tables —
+// read a window whole, and what they read past the cell's own slots is bytes
+// they never look at again by the same index rule.
+//
+// Measured on a received mainnet candidate (23k cells, 15k of them above
+// level 0), the slab is 0.5 MB instead of 1.4 MB.
 func prewireParsedExtraHashes(cells []Cell) {
-	extra := 0
+	extra, slots := 0, 0
 	for i := range cells {
 		c := &cells[i]
 		if c.flags&cellFlagLevelMaskMask == 0 {
@@ -50,6 +70,7 @@ func prewireParsedExtraHashes(cells []Cell) {
 		}
 		if c.resolveType() != PrunedCellType {
 			extra++
+			slots += c.getLevelMask().getHashIndex()
 		}
 	}
 	if extra == 0 {
@@ -57,17 +78,37 @@ func prewireParsedExtraHashes(cells []Cell) {
 	}
 
 	metas := make([]cellMeta, extra)
-	hashes := make([][3]Hash, extra)
-	k := 0
+	hashes := make([]Hash, slots+extraHashWindowSpare)
+	k, off := 0, 0
 	for i := range cells {
 		c := &cells[i]
 		if c.flags&cellFlagLevelMaskMask == 0 || c.GetType() == PrunedCellType {
 			continue
 		}
-		metas[k].extraHashes = &hashes[k]
+		metas[k].extraHashes = extraHashWindow(hashes, off)
 		c.meta = &metas[k]
+		off += c.getLevelMask().getHashIndex()
 		k++
 	}
+}
+
+// extraHashWindowSpare is how many slots a packed extra-hash slab carries past
+// its last window, so that the window can be viewed as a *[3]Hash whatever its
+// real length. A level mask is at most three bits, so a window is at most
+// three slots and needs at most two of slack.
+const extraHashWindowSpare = 2
+
+// extraHashWindow is the *[3]Hash view of the packed window starting at off.
+// The slab must extend at least three slots past off; see extraHashWindowSpare.
+func extraHashWindow(slab []Hash, off int) *[3]Hash {
+	return (*[3]Hash)(slab[off : off+3])
+}
+
+// extraHashSlots is how many of a cell's extraHashes slots it uses: one per
+// significant level above zero. It is the window length of the packed layout
+// and the number of slots a copy of the metadata has to carry over.
+func (c *Cell) extraHashSlots() int {
+	return c.getLevelMask().getHashIndex()
 }
 
 func finalizeParsedCell(c *Cell, storedMeta *storedHashesDepths, options BOCParseOptions) error {

@@ -197,6 +197,9 @@ func (rs *ReadSet) createMerkleUpdateRaw(
 	buildState.parallelism = parallelism
 	if parallelism > 1 {
 		buildState.parallel = newProofParallelCache(memoSize)
+		// See CreateHashUsageProofResolvedSizedParallel: one entry slab for the
+		// whole walk, where the per-branch hints only plan workers.
+		buildState.built.slab = newProofBuildSlab(memoSize)
 	} else {
 		buildState.built.init(memoSize)
 	}

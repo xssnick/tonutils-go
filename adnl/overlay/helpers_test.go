@@ -3,6 +3,7 @@ package overlay
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 
@@ -10,6 +11,15 @@ import (
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
+
+func testBroadcastFECIDKey(id []byte) broadcastFECIDKey {
+	if len(id) == sha256.Size {
+		key, _ := newBroadcastFECIDKey(id)
+		return key
+	}
+
+	return broadcastFECIDKey(sha256.Sum256(id))
+}
 
 // Legacy constructor-shaped helpers keep older behavioral tests concise while
 // production callers use one explicitly owned BroadcastReceiver per overlay.

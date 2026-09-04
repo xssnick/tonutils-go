@@ -298,7 +298,8 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 	}
 	now := time.Now()
 	state := o.activeFECState()
-	state.streams[string(id)] = &fecBroadcastStream{
+	streamID := testBroadcastFECIDKey(id)
+	state.streams[streamID] = &fecBroadcastStream{
 		source:        priv.Public().(ed25519.PublicKey),
 		fec:           finished.FEC.(rldp.FECRaptorQ),
 		date:          finished.Date,
@@ -318,7 +319,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 		t.Fatalf("expected FECReceived while handler is not completed")
 	}
 
-	state.streams[string(id)].completedAt = &now
+	state.streams[streamID].completedAt = &now
 	if err = o.processFECBroadcast(finished); err != nil {
 		t.Fatalf("expected completed stream ack path, got err=%v", err)
 	}
@@ -445,7 +446,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 
 	state := o.activeFECState()
 	state.mx.RLock()
-	stream := state.streams[string(sender.BroadcastHash())]
+	stream := state.streams[testBroadcastFECIDKey(sender.BroadcastHash())]
 	state.mx.RUnlock()
 	if stream != nil {
 		t.Fatalf("completed broadcast stream should be removed after decode")
@@ -585,7 +586,8 @@ func TestProcessFECBroadcastShortFinishedButNotCompleted(t *testing.T) {
 
 	now := time.Now()
 	state := o.activeFECState()
-	state.streams[string(sender.BroadcastHash())] = &fecBroadcastStream{
+	streamID := testBroadcastFECIDKey(sender.BroadcastHash())
+	state.streams[streamID] = &fecBroadcastStream{
 		source:        priv.Public().(ed25519.PublicKey),
 		fec:           sender.fec,
 		encoder:       sender.encoder,
@@ -602,7 +604,7 @@ func TestProcessFECBroadcastShortFinishedButNotCompleted(t *testing.T) {
 		t.Fatalf("expected FECReceived while handler is not completed, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
 
-	state.streams[string(sender.BroadcastHash())].completedAt = &now
+	state.streams[streamID].completedAt = &now
 	repairPart, err := sender.part(sender.fec.SymbolsCount)
 	if err != nil {
 		t.Fatalf("repair part build failed: %v", err)
@@ -753,8 +755,8 @@ func TestProcessFECBroadcastDropsNewStreamWhenLimitReached(t *testing.T) {
 		t.Fatalf("expected second partial broadcast to hit budget, got: %v", err)
 	}
 
-	firstHash := string(firstSender.BroadcastHash())
-	secondHash := string(secondSender.BroadcastHash())
+	firstHash := testBroadcastFECIDKey(firstSender.BroadcastHash())
+	secondHash := testBroadcastFECIDKey(secondSender.BroadcastHash())
 
 	state := o.activeFECState()
 	state.mx.RLock()
@@ -793,7 +795,7 @@ func TestProcessFECBroadcastCleanupEvictsStaleStream(t *testing.T) {
 		t.Fatalf("partial broadcast failed: %v", err)
 	}
 
-	hash := string(sender.BroadcastHash())
+	hash := testBroadcastFECIDKey(sender.BroadcastHash())
 	state := o.activeFECState()
 	state.mx.Lock()
 	stream := state.streams[hash]
@@ -900,7 +902,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	}
 
 	state.mx.RLock()
-	retained := state.streams[string(sender.BroadcastHash())]
+	retained := state.streams[testBroadcastFECIDKey(sender.BroadcastHash())]
 	state.mx.RUnlock()
 	if retained == nil {
 		t.Fatalf("completed relay stream should be retained for short parts")

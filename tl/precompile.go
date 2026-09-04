@@ -270,6 +270,10 @@ type structInfo struct {
 	raw             bool
 	tlName          string
 	minimumWireSize uint64
+	// fixedWireSize is the exact unboxed size for structs without variable fields.
+	// fixedSize distinguishes an empty fixed struct from a variable-sized one.
+	fixedWireSize uint64
+	fixedSize     bool
 }
 
 type fieldInfo struct {
@@ -351,7 +355,7 @@ func Serialize(v Serializable, boxed bool, bufOpt ...*bytes.Buffer) ([]byte, err
 			return raw, nil
 		}
 
-		return Append(make([]byte, 0, DefaultSerializeBufferSize), v, boxed)
+		return Append(make([]byte, 0, initialSerializeCapacity(v, boxed)), v, boxed)
 	}
 
 	if list, ok := v.([]Serializable); ok {
@@ -374,6 +378,43 @@ func Serialize(v Serializable, boxed bool, bufOpt ...*bytes.Buffer) ([]byte, err
 	}
 
 	return buf.Bytes()[startLen:], nil
+}
+
+func initialSerializeCapacity(v Serializable, boxed bool) int {
+	if DefaultSerializeBufferSize < 0 {
+		return DefaultSerializeBufferSize
+	}
+
+	tp := reflect.TypeOf(v)
+	if tp == nil {
+		return DefaultSerializeBufferSize
+	}
+	if tp.Kind() == reflect.Pointer {
+		tp = tp.Elem()
+	}
+	if tp.Kind() != reflect.Struct {
+		return DefaultSerializeBufferSize
+	}
+
+	si := _structInfoTableByType[tp]
+	if si == nil || !si.fixedSize {
+		return DefaultSerializeBufferSize
+	}
+
+	size := si.fixedWireSize
+	if boxed {
+		if size > ^uint64(0)-4 {
+			return DefaultSerializeBufferSize
+		}
+		size += 4
+	}
+
+	maxInt := uint64(^uint(0) >> 1)
+	if size > maxInt {
+		return DefaultSerializeBufferSize
+	}
+
+	return int(size)
 }
 
 // Append serializes v and appends the TL bytes to dst.
@@ -687,6 +728,81 @@ func calculateMinimumFieldWireSize(field *fieldInfo, visiting map[*structInfo]bo
 	return 0
 }
 
+type fixedWireSizeResult struct {
+	size  uint64
+	fixed bool
+}
+
+func calculateFixedWireSize(si *structInfo, visiting map[*structInfo]bool, memo map[*structInfo]fixedWireSizeResult) (uint64, bool) {
+	if si == nil || !si.finalized || si.raw || si.manualSerialize || visiting[si] {
+		return 0, false
+	}
+	if result, ok := memo[si]; ok {
+		return result.size, result.fixed
+	}
+
+	visiting[si] = true
+	defer delete(visiting, si)
+
+	var size uint64
+	for _, field := range si.fields {
+		fieldSize, ok := calculateFixedFieldWireSize(field, visiting, memo)
+		if !ok || size > ^uint64(0)-fieldSize {
+			memo[si] = fixedWireSizeResult{}
+			return 0, false
+		}
+		size += fieldSize
+	}
+
+	memo[si] = fixedWireSizeResult{size: size, fixed: true}
+	return size, true
+}
+
+func calculateFixedFieldWireSize(field *fieldInfo, visiting map[*structInfo]bool, memo map[*structInfo]fixedWireSizeResult) (uint64, bool) {
+	if field.hasFlags {
+		return 0, false
+	}
+
+	if size := serializedFixedSize(field); size > 0 {
+		return uint64(size), true
+	}
+
+	if field.typ != _ExecuteTypeStruct {
+		return 0, false
+	}
+
+	flags := field.meta.(uint32)
+	if flags&_StructFlagsInterface != 0 {
+		return 0, false
+	}
+
+	size, ok := calculateFixedWireSize(field.structInfo, visiting, memo)
+	if !ok {
+		return 0, false
+	}
+	if flags&_StructFlagsBoxed != 0 {
+		if size > ^uint64(0)-4 {
+			return 0, false
+		}
+		size += 4
+	}
+	if flags&_StructFlagsBytes == 0 {
+		return size, true
+	}
+
+	maxInt := uint64(^uint(0) >> 1)
+	if size > maxInt {
+		return 0, false
+	}
+
+	encodedSize, err := tlBytesEncodedSize(int(size))
+	if err != nil {
+		return 0, false
+	}
+
+	return uint64(encodedSize), true
+}
+
 func collectStructInfos(si *structInfo, seen map[*structInfo]struct{}, infos *[]*structInfo) {
 	if si == nil {
 		return
@@ -731,6 +847,11 @@ func precomputeMinimumWireSizes() {
 
 	for _, si := range infos {
 		si.minimumWireSize = calculateMinimumWireSize(si, map[*structInfo]bool{})
+	}
+
+	fixedSizeMemo := make(map[*structInfo]fixedWireSizeResult, len(infos))
+	for _, si := range infos {
+		si.fixedWireSize, si.fixedSize = calculateFixedWireSize(si, map[*structInfo]bool{}, fixedSizeMemo)
 	}
 }
 
@@ -1116,46 +1237,55 @@ func growSerializeVector(buf *bytes.Buffer, field *fieldInfo, hdr *sliceHeader, 
 	elemField := field.structInfo.fields[0]
 	total := 4
 	if sz := serializedFixedSize(elemField); sz > 0 {
-		total += hdr.Len * sz
+		var err error
+		if total, err = addVectorEncodedSize(total, hdr.Len, sz); err != nil {
+			return err
+		}
 		if total > buf.Available() {
+			if total > int(^uint(0)>>1)-buf.Len() {
+				return fmt.Errorf("TL vector encoded size overflows buffer length")
+			}
 			buf.Grow(total)
 		}
+		return nil
+	}
+
+	if !shouldPreflightVariableVector(elemField, hdr, elemSize) {
 		return nil
 	}
 
 	ePtr := hdr.Data
 	switch elemField.typ {
 	case _ExecuteTypeString:
-		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
-			return nil
-		}
-
 		for x := 0; x < hdr.Len; x++ {
 			s := *(*string)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(s))
 			if err != nil {
 				return err
 			}
-			total += sz
+			if total, err = addVectorEncodedSize(total, 1, sz); err != nil {
+				return err
+			}
 		}
 	case _ExecuteTypeBytes:
-		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
-			return nil
-		}
-
 		for x := 0; x < hdr.Len; x++ {
 			b := *(*[]byte)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(b))
 			if err != nil {
 				return err
 			}
-			total += sz
+			if total, err = addVectorEncodedSize(total, 1, sz); err != nil {
+				return err
+			}
 		}
 	default:
 		return nil
 	}
 
 	if total > buf.Available() {
+		if total > int(^uint(0)>>1)-buf.Len() {
+			return fmt.Errorf("TL vector encoded size overflows buffer length")
+		}
 		buf.Grow(total)
 	}
 	return nil
@@ -1169,43 +1299,88 @@ func growAppendVector(dst []byte, field *fieldInfo, hdr *sliceHeader, elemSize u
 	elemField := field.structInfo.fields[0]
 	total := 4
 	if sz := serializedFixedSize(elemField); sz > 0 {
-		total += hdr.Len * sz
+		var err error
+		if total, err = addVectorEncodedSize(total, hdr.Len, sz); err != nil {
+			return nil, err
+		}
+		if total > int(^uint(0)>>1)-len(dst) {
+			return nil, fmt.Errorf("TL vector encoded size overflows destination length")
+		}
 		return growAppend(dst, total), nil
+	}
+
+	if !shouldPreflightVariableVector(elemField, hdr, elemSize) {
+		return dst, nil
 	}
 
 	ePtr := hdr.Data
 	switch elemField.typ {
 	case _ExecuteTypeString:
-		if hdr.Len < 8 && len(*(*string)(ePtr)) < 4096 {
-			return dst, nil
-		}
-
 		for x := 0; x < hdr.Len; x++ {
 			s := *(*string)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(s))
 			if err != nil {
 				return nil, err
 			}
-			total += sz
+			if total, err = addVectorEncodedSize(total, 1, sz); err != nil {
+				return nil, err
+			}
 		}
 	case _ExecuteTypeBytes:
-		if hdr.Len < 8 && len(*(*[]byte)(ePtr)) < 4096 {
-			return dst, nil
-		}
-
 		for x := 0; x < hdr.Len; x++ {
 			b := *(*[]byte)(unsafe.Add(ePtr, uintptr(x)*elemSize))
 			sz, err := tlBytesEncodedSize(len(b))
 			if err != nil {
 				return nil, err
 			}
-			total += sz
+			if total, err = addVectorEncodedSize(total, 1, sz); err != nil {
+				return nil, err
+			}
 		}
 	default:
 		return dst, nil
 	}
 
+	if total > int(^uint(0)>>1)-len(dst) {
+		return nil, fmt.Errorf("TL vector encoded size overflows destination length")
+	}
 	return growAppend(dst, total), nil
+}
+
+func shouldPreflightVariableVector(field *fieldInfo, hdr *sliceHeader, elemSize uintptr) bool {
+	if field.typ != _ExecuteTypeString && field.typ != _ExecuteTypeBytes {
+		return false
+	}
+	if hdr.Len >= 8 {
+		return true
+	}
+
+	ePtr := hdr.Data
+	switch field.typ {
+	case _ExecuteTypeString:
+		for x := 0; x < hdr.Len; x++ {
+			if len(*(*string)(unsafe.Add(ePtr, uintptr(x)*elemSize))) >= 4096 {
+				return true
+			}
+		}
+	case _ExecuteTypeBytes:
+		for x := 0; x < hdr.Len; x++ {
+			if len(*(*[]byte)(unsafe.Add(ePtr, uintptr(x)*elemSize))) >= 4096 {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func addVectorEncodedSize(total, count, elementSize int) (int, error) {
+	maxInt := int(^uint(0) >> 1)
+	if total < 0 || count < 0 || elementSize < 0 || elementSize > 0 && count > (maxInt-total)/elementSize {
+		return 0, fmt.Errorf("TL vector encoded size overflows int")
+	}
+
+	return total + count*elementSize, nil
 }
 
 func writeCellBOCAsTLBytes(buf *bytes.Buffer, roots []*cell.Cell) error {

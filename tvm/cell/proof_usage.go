@@ -126,21 +126,24 @@ func (c *Cell) CreateHashUsageProofResolvedSized(
 	}
 
 	root := true
-	body, err := buildMerkleProofBodyByPruneFuncResolved(c, func(
-		_ *Cell,
-		_ int,
-		hash Hash,
-	) (*Cell, bool, error) {
-		// MerkleProof::generate always materializes the proof body root. The
-		// loaded-cell predicate selects only descendants; pruning the root would
-		// leave a virtual state with no shape to which a block Merkle update can
-		// be applied.
-		if root {
-			root = false
-			return nil, false, nil
-		}
-		return nil, !isLoaded(hash), nil
-	}, resolveLoaded, 0, expectedCells)
+	state := merkleProofPruneBuildState{
+		shouldPrune: func(_ *Cell, _ int, hash Hash) (*Cell, bool, error) {
+			// MerkleProof::generate always materializes the proof body root. The
+			// loaded-cell predicate selects only descendants; pruning the root
+			// would leave a virtual state with no shape to which a block Merkle
+			// update can be applied.
+			if root {
+				root = false
+				return nil, false, nil
+			}
+			return nil, !isLoaded(hash), nil
+		},
+		resolveLoaded:       resolveLoaded,
+		arena:               &proofCellArena{},
+		memoHint:            expectedCells,
+		pruneUnloadedLeaves: true,
+	}
+	body, _, err := state.build(c, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build hash usage proof: %w", err)
 	}
@@ -190,12 +193,18 @@ func (c *Cell) CreateHashUsageProofResolvedSizedParallel(
 			}
 			return nil, !isLoaded(hash), nil
 		},
-		resolveLoaded: resolveLoaded,
-		arena:         &proofCellArena{},
-		memoHint:      expectedCells,
-		parallelism:   parallelism,
-		parallel:      newProofParallelCache(expectedCells),
+		resolveLoaded:       resolveLoaded,
+		arena:               &proofCellArena{},
+		memoHint:            expectedCells,
+		parallelism:         parallelism,
+		parallel:            newProofParallelCache(expectedCells),
+		pruneUnloadedLeaves: true,
 	}
+	// One entry slab for every build state of this walk, sized from the same
+	// estimate that plans the walk: the branch split conserves the estimate but
+	// distributes it by subtree depth, which misplaces most of it, while the
+	// walk's total population tracks the estimate itself.
+	state.built.slab = newProofBuildSlab(expectedCells)
 	body, _, err := state.build(c, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build hash usage proof: %w", err)
@@ -277,6 +286,39 @@ type merkleProofPruneBuildState struct {
 
 	parallelism int
 	parallel    *proofParallelCache
+
+	// pruneUnloadedLeaves makes a cell the callback declined into a pruned
+	// branch even when it is a resident leaf. createPrunedBranchInto otherwise
+	// keeps such a leaf whole, which is CellBuilder::create_pruned_branch's rule
+	// (CellBuilder.cpp:100-108) — for a cell that is_loaded(). The hash usage
+	// proof is the one build whose callback has already answered that question:
+	// a hash it declines is a cell the recorder never saw, and in the reference
+	// collator that cell is an ExtCell nobody loaded, so create_pruned_branch
+	// prunes it there. Over a resident predecessor every cell is loaded, and the
+	// port kept every unread leaf next to a read cell whole — each queued message
+	// body and StateInit leaf under the split filter's reads, for one.
+	//
+	// Measured on the stand, 2026-09-03, the first post-split blocks of two
+	// splits: 2,498,713 and 2,461,902 bytes of collated data against 2,168,633
+	// and 2,160,356 for the reference's sibling blocks over the same parents,
+	// with the blocks themselves within 0.3%. On the deep-queue fixture (8,192
+	// entries, half with referenced bodies) the previous-state proof goes from
+	// 1,585,867 to 1,553,125 bytes and its unread leaves from 4,096 whole cells
+	// to 4,099 pruned branches; the block is unchanged.
+	//
+	// ReadSet.Proof and the state update keep the loaded-leaf rule: the C++
+	// goldens in readset_golden_test.go pin the reference over an in-memory
+	// tree, where every leaf is loaded, and the update's own callback never
+	// declines a resident leaf.
+	pruneUnloadedLeaves bool
+}
+
+// prunedBranch builds the boundary for a cell the callback declined.
+func (s *merkleProofPruneBuildState) prunedBranch(c *Cell, newLevel int) (*Cell, error) {
+	if s.pruneUnloadedLeaves {
+		return buildPrunedBranchFromCellAtDepth(c, newLevel, _DataCellMaxLevel, s.arena)
+	}
+	return createPrunedBranchFromCellInto(c, newLevel, s.arena)
 }
 
 func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Cell, error) {
@@ -299,7 +341,7 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 			return nil, nil, err
 		}
 		if pruned {
-			built, err := createPrunedBranchFromCellInto(c, merkleDepth+1, s.arena)
+			built, err := s.prunedBranch(c, merkleDepth+1)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -386,7 +428,7 @@ func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*C
 			return nil, nil, err
 		}
 		if pruned {
-			built, err := createPrunedBranchFromCellInto(c, merkleDepth+1, s.arena)
+			built, err := s.prunedBranch(c, merkleDepth+1)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -563,14 +605,19 @@ func (s *merkleProofPruneBuildState) parallelTask(workers, hint int) *merkleProo
 		arena: newParallelProofArena(hint),
 	}
 	task.state = merkleProofPruneBuildState{
-		shouldPrune:   s.shouldPrune,
-		wantApplied:   s.wantApplied,
-		resolveLoaded: s.resolveLoaded,
-		memoHint:      hint,
-		arena:         &task.arena,
-		parallelism:   workers,
-		parallel:      s.parallel,
+		shouldPrune:         s.shouldPrune,
+		wantApplied:         s.wantApplied,
+		resolveLoaded:       s.resolveLoaded,
+		memoHint:            hint,
+		arena:               &task.arena,
+		parallelism:         workers,
+		parallel:            s.parallel,
+		pruneUnloadedLeaves: s.pruneUnloadedLeaves,
 	}
+	// The branch memoises into the walk's shared slab: the depth-planned hint
+	// splits the worker budget well but the storage badly, and the slab is what
+	// makes that misplacement free. Slots stay branch-local.
+	task.state.built.slab = s.built.slab
 
 	return task
 }
@@ -641,7 +688,7 @@ func (s *merkleProofPruneBuildState) memoSize() int {
 		return s.parallel.size()
 	}
 	if s.spilled {
-		return len(s.built.entries)
+		return s.built.count
 	}
 
 	return int(s.inlineLen)

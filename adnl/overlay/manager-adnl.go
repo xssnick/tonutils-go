@@ -32,7 +32,7 @@ type ADNLWrapper struct {
 	overlays map[overlayIDKey]*ADNLOverlayWrapper
 	mx       sync.RWMutex
 
-	broadcastControls      map[string]*broadcastFECControlHandlers
+	broadcastControls      map[broadcastFECIDKey]*broadcastFECControlHandlers
 	nextBroadcastControlID uint64
 	// Replaced as a whole under mx and immutable after publication.
 	broadcastReceivers []*BroadcastReceiver
@@ -87,7 +87,7 @@ func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {
 	w := &ADNLWrapper{
 		ADNL:              adnl,
 		overlays:          map[overlayIDKey]*ADNLOverlayWrapper{},
-		broadcastControls: map[string]*broadcastFECControlHandlers{},
+		broadcastControls: map[broadcastFECIDKey]*broadcastFECControlHandlers{},
 	}
 	w.ADNL.SetQueryHandler(w.queryHandler)
 	w.ADNL.SetCustomMessageHandler(w.customHandler)
@@ -97,11 +97,14 @@ func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {
 }
 
 func (a *ADNLWrapper) registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func() {
-	key := string(hash)
+	key, ok := newBroadcastFECIDKey(hash)
+	if !ok {
+		return func() {}
+	}
 
 	a.mx.Lock()
 	if a.broadcastControls == nil {
-		a.broadcastControls = map[string]*broadcastFECControlHandlers{}
+		a.broadcastControls = map[broadcastFECIDKey]*broadcastFECControlHandlers{}
 	}
 	a.nextBroadcastControlID++
 	id := a.nextBroadcastControlID
@@ -148,9 +151,14 @@ func (a *ADNLWrapper) rebuildBroadcastReceiversLocked() {
 }
 
 func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool {
+	key, ok := newBroadcastFECIDKey(control.Hash)
+	if !ok {
+		return false
+	}
+
 	a.mx.RLock()
 	var handlers []broadcastFECControlHandler
-	if registered := a.broadcastControls[string(control.Hash)]; registered != nil {
+	if registered := a.broadcastControls[key]; registered != nil {
 		handlers = registered.snapshot
 	}
 	receivers := a.broadcastReceivers
