@@ -142,14 +142,22 @@ func TestSerializeUsesExactFixedCapacity(t *testing.T) {
 	}
 }
 
-func TestSerializeVariableSizeKeepsDefaultCapacity(t *testing.T) {
+func TestSerializeVariableSizeReservesAtAppend(t *testing.T) {
 	value := &SerializeAllocationVariableBytes{Data: []byte{0x11}}
 	info := _structInfoTableByType[reflect.TypeOf(*value)]
 	if info.fixedSize {
 		t.Fatal("bytes field should make the wire size variable")
 	}
-	if capacity := initialSerializeCapacity(value, true); capacity != DefaultSerializeBufferSize {
-		t.Fatalf("initial capacity = %d, want default %d", capacity, DefaultSerializeBufferSize)
+	if capacity := initialSerializeCapacity(value, true); capacity != 0 {
+		t.Fatalf("initial capacity = %d, want 0 before reserving the complete object", capacity)
+	}
+
+	wire, err := Serialize(value, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cap(wire) != len(wire) {
+		t.Fatalf("serialized capacity = %d, want exact length %d", cap(wire), len(wire))
 	}
 }
 

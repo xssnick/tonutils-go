@@ -43,8 +43,9 @@ func (a *streamAdmission) tryAcquireSlot() bool {
 }
 
 // acquireSlot blocks until a slot is free or done is closed. Callers take it
-// BEFORE AcceptStream: quic-go only returns MAX_STREAMS credit to the peer once
-// an accepted stream completes, so not accepting is the backpressure signal.
+// before AcceptStream for per-connection admission, preserving QUIC backpressure.
+// Receiver-wide slots are taken after AcceptStream so idle connections do not
+// reserve capacity needed by active peers.
 func (a *streamAdmission) acquireSlot(done <-chan struct{}) bool {
 	select {
 	case a.slots <- struct{}{}:

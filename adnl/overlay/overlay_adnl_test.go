@@ -170,6 +170,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 	if err = o.processBroadcast(msg, sourcePeerID); err != nil {
 		t.Fatalf("process simple broadcast failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if handled != 1 {
 		t.Fatalf("expected one delivery, got %d", handled)
 	}
@@ -194,6 +195,7 @@ func TestProcessBroadcastSimpleDeliversDedupsAndRelays(t *testing.T) {
 	if err = o.processBroadcast(&dup, sourcePeerID); err != nil {
 		t.Fatalf("duplicate simple broadcast should be dropped before signature check: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if handled != 1 || len(relayPeer.sent) != 1 {
 		t.Fatalf("duplicate should not deliver or relay again, deliveries=%d relays=%d", handled, len(relayPeer.sent))
 	}
@@ -312,6 +314,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 	if err = o.processFECBroadcast(finished); err != nil {
 		t.Fatalf("expected finished stream ack path, got err=%v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(m.sendCustomCalls) == 0 {
 		t.Fatalf("expected FEC ack to be sent")
 	}
@@ -323,6 +326,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 	if err = o.processFECBroadcast(finished); err != nil {
 		t.Fatalf("expected completed stream ack path, got err=%v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected FECCompleted after handler completion")
 	}
@@ -335,6 +339,7 @@ func TestProcessFECBroadcast_ErrorAndFinishedFlow(t *testing.T) {
 	if err = o.processFECBroadcast(mismatch); err != nil {
 		t.Fatalf("any-sender finished stream should accept another source for ack path: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 }
 
 func TestProcessFECBroadcastDropsDuplicateBeforeSignature(t *testing.T) {
@@ -354,12 +359,14 @@ func TestProcessFECBroadcastDropsDuplicateBeforeSignature(t *testing.T) {
 	if err = o.processFECBroadcast(part.full); err != nil {
 		t.Fatalf("process first part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	duplicate := *part.full
 	duplicate.Signature = []byte("bad signature")
 	if err = o.processFECBroadcast(&duplicate); err != nil {
 		t.Fatalf("duplicate part should be dropped before signature check: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	conflicting := *part.full
 	conflicting.Data = append([]byte(nil), conflicting.Data...)
@@ -390,12 +397,14 @@ func TestProcessFECBroadcastDeliveredCacheBeforeSignature(t *testing.T) {
 	if err = o.processFECBroadcast(part.full); err != nil {
 		t.Fatalf("process complete part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	late := *part.full
 	late.Signature = []byte("bad signature")
 	if err = o.processFECBroadcast(&late); err != nil {
 		t.Fatalf("late delivered part should hit cache before signature check: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected completed ack for delivered duplicate, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
@@ -433,6 +442,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("process full part 0 failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	if handled != 1 {
 		t.Fatalf("expected one decoded broadcast, got %d", handled)
@@ -466,6 +476,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	if err = o.processFECBroadcastShort(shortPart.short); err != nil {
 		t.Fatalf("finished short part processing failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected FECCompleted on finished short part, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
@@ -476,6 +487,7 @@ func TestProcessFECBroadcastShort_KnownAndFinishedState(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("late full part should hit delivered cache: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if handled != 1 {
 		t.Fatalf("late full part must not deliver broadcast again, got %d deliveries", handled)
 	}
@@ -504,6 +516,7 @@ func TestProcessFECBroadcastDeliveredCacheExpires(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("process full part 0 failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if stats := o.FECBroadcastStats(); stats.DeliveredBroadcasts != 1 {
 		t.Fatalf("expected delivered broadcast to be cached, got %#v", stats)
 	}
@@ -600,6 +613,7 @@ func TestProcessFECBroadcastShortFinishedButNotCompleted(t *testing.T) {
 	if err = o.processFECBroadcastShort(part0.short); err != nil {
 		t.Fatalf("finished short part processing failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECReceived); !ok {
 		t.Fatalf("expected FECReceived while handler is not completed, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
@@ -612,6 +626,7 @@ func TestProcessFECBroadcastShortFinishedButNotCompleted(t *testing.T) {
 	if err = o.processFECBroadcastShort(repairPart.short); err != nil {
 		t.Fatalf("completed short part processing failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if _, ok := m.sendCustomCalls[len(m.sendCustomCalls)-1].(FECCompleted); !ok {
 		t.Fatalf("expected FECCompleted after handler completion, got %T", m.sendCustomCalls[len(m.sendCustomCalls)-1])
 	}
@@ -654,6 +669,7 @@ func TestProcessFECBroadcastHandlerWithInfo(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("process full part 0 failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	if !bytes.Equal(gotInfo.SourceID, sourceID) {
 		t.Fatalf("unexpected source id: %x want %x", gotInfo.SourceID, sourceID)
@@ -686,6 +702,7 @@ func TestProcessFECBroadcastShort_KnownPartialState(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("process first full part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if err = o.processFECBroadcastShort(part0.short); err == nil || !strings.Contains(err.Error(), "unfinished broadcast") {
 		t.Fatalf("expected unfinished broadcast error for partial stream short part, got: %v", err)
 	}
@@ -741,6 +758,7 @@ func TestProcessFECBroadcastDropsNewStreamWhenLimitReached(t *testing.T) {
 	if err = o.processFECBroadcast(firstPart.full); err != nil {
 		t.Fatalf("first partial broadcast failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	_, secondPriv := keyPairFromSeed(38)
 	secondSender, err := NewBroadcastFECSenderFromTL(secondPriv, CertificateEmpty{}, Message{Overlay: bytes.Repeat([]byte{0x5A}, 32)}, BroadcastFlagAnySender, WithBroadcastFECSymbolSize(24))
@@ -794,6 +812,7 @@ func TestProcessFECBroadcastCleanupEvictsStaleStream(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("partial broadcast failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 
 	hash := testBroadcastFECIDKey(sender.BroadcastHash())
 	state := o.activeFECState()
@@ -854,6 +873,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if err = o.processFECBroadcast(part0.full); err != nil {
 		t.Fatalf("process first full part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(fullPeer.sent) != 1 {
 		t.Fatalf("expected full peer to receive first relayed part, got %d", len(fullPeer.sent))
 	}
@@ -881,6 +901,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if err = o.processFECBroadcast(part1.full); err != nil {
 		t.Fatalf("process second full part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(receivedPeer.sent) != 2 {
 		t.Fatalf("expected received peer to receive second relay, got %d", len(receivedPeer.sent))
 	}
@@ -899,6 +920,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 		if err = o.processFECBroadcast(part.full); err != nil {
 			t.Fatalf("process full part %d failed: %v", seqno, err)
 		}
+		waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	}
 
 	state.mx.RLock()
@@ -923,6 +945,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if err = o.processFECBroadcastShort(shortRepairPart.short); err != nil {
 		t.Fatalf("process post-completion short part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(fullPeer.sent) != beforeFull+1 {
 		t.Fatalf("expected short part to relay reconstructed full part, got %d sends before and %d after", beforeFull, len(fullPeer.sent))
 	}
@@ -944,6 +967,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if err = o.processFECBroadcast(repairPart.full); err != nil {
 		t.Fatalf("process post-completion repair part failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(fullPeer.sent) != before+1 {
 		t.Fatalf("expected post-completion full part relay, got %d sends before and %d after", before, len(fullPeer.sent))
 	}
@@ -957,6 +981,7 @@ func TestBroadcastFECRelayStreamsTrustedParts(t *testing.T) {
 	if err = o.processFECBroadcast(&duplicateRepair); err != nil {
 		t.Fatalf("post-completion duplicate should be dropped before signature check: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(fullPeer.sent) != before {
 		t.Fatalf("post-completion duplicate was relayed again")
 	}
@@ -998,6 +1023,7 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 		if err = o.processFECBroadcast(part.full); err != nil {
 			t.Fatalf("ignored broadcast processing failed: %v", err)
 		}
+		waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 		if len(peer.sent) != 0 {
 			t.Fatalf("untrusted rejected broadcast must not be relayed, got %d sends", len(peer.sent))
 		}
@@ -1013,6 +1039,7 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 		if err = o.processFECBroadcast(&duplicate); err != nil {
 			t.Fatalf("ignored duplicate should be suppressed before signature verification: %v", err)
 		}
+		waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 		if handled != 1 {
 			t.Fatalf("ignored duplicate reran handler: %d calls", handled)
 		}
@@ -1042,6 +1069,7 @@ func TestBroadcastFECRelayWaitsForUntrustedCheck(t *testing.T) {
 		if err = o.processFECBroadcast(part.full); err != nil {
 			t.Fatalf("expected accepted untrusted broadcast, got %v", err)
 		}
+		waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 		if !checked {
 			t.Fatalf("expected broadcast check handler to be called")
 		}
@@ -1086,6 +1114,7 @@ func TestBroadcastFECRetryDoesNotAcknowledgeOrCommit(t *testing.T) {
 	if err = o.processFECBroadcast(part.full); err != nil {
 		t.Fatalf("retryable FEC attempt failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if len(m.sendCustomCalls) != 0 {
 		t.Fatalf("retryable FEC attempt sent %d control messages", len(m.sendCustomCalls))
 	}
@@ -1096,6 +1125,7 @@ func TestBroadcastFECRetryDoesNotAcknowledgeOrCommit(t *testing.T) {
 	if err = o.processFECBroadcast(part.full); err != nil {
 		t.Fatalf("accepted FEC retry failed: %v", err)
 	}
+	waitOrdinaryBroadcastRelay(t, o.BroadcastReceiver)
 	if handled != 2 {
 		t.Fatalf("handler calls=%d, want retry plus accepted attempt", handled)
 	}

@@ -315,7 +315,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		valueCopy.Signature = nil
 
 		signature := value.Signature
-		dataToCheck, err := tl.Serialize(valueCopy, true)
+		dataToCheck, err := tl.Serialize(&valueCopy, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize value: %w", err)
 		}
@@ -326,7 +326,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		// check key signature
 		signature = value.KeyDescription.Signature
 		valueCopy.KeyDescription.Signature = nil
-		dataToCheck, err = tl.Serialize(valueCopy.KeyDescription, true)
+		dataToCheck, err = tl.Serialize(&valueCopy.KeyDescription, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize key description: %w", err)
 		}

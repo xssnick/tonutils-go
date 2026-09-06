@@ -583,7 +583,7 @@ func (v *BOCView) buildIndex() error {
 		refsSize := info.refsCount() * int(v.refSize)
 		if refsSize > 0 {
 			refs := refsBuf[:refsSize]
-			if err = v.readPayloadAt(refs, offset+uint64(info.refsOffset)); err != nil {
+			if err = v.readPayloadAt(refs, offset+uint64(info.bodyOffset+cellBodyBytesSize(info.dsc2))); err != nil {
 				return fmt.Errorf("invalid cell #%d: %w", i, err)
 			}
 
@@ -773,7 +773,6 @@ func (v *BOCView) readCellInfoAt(offset, end uint64, scratch *[3]byte) (bocPaylo
 	if end-pos < refsSize {
 		return bocPayloadCellInfo{}, 0, errors.New("failed to read cell refs, corrupted data")
 	}
-	info.refsOffset = int(pos - offset)
 	pos += refsSize
 	return info, pos - offset, nil
 }

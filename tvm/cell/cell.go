@@ -181,16 +181,30 @@ func (c *Cell) WithTrace(trace *Trace) *Cell {
 		fused.c.meta = &fused.m
 		return &fused.c
 	}
-	cp := c.copy()
-	if trace != nil {
-		cp.ensureMeta().trace = trace
+	if c.meta.lazyFlags&cellLazyBOC != 0 {
+		// A raw BoC placeholder owns a resolver extension beyond cellMeta.
+		// Keep the full metadata clone instead of truncating that extension.
+		cp := c.copy()
+		cp.meta.trace = trace
 		return cp
 	}
-	if cp.meta != nil {
-		cp.meta.trace = nil
-		cp.clearMetaIfEmpty()
+	if trace == nil && c.meta.extraHashes == nil && c.meta.viewOf == nil &&
+		c.meta.lazyLoader == nil && c.meta.lazyFlags == 0 && c.meta.viewLevel == 0 {
+		cp := *c
+		cp.meta = nil
+		return &cp
 	}
-	return cp
+
+	fused := new(cellWithMeta)
+	fused.c = *c
+	fused.m = *c.meta
+	if c.meta.extraHashes != nil {
+		extra := *c.meta.extraHashes
+		fused.m.extraHashes = &extra
+	}
+	fused.m.trace = trace
+	fused.c.meta = &fused.m
+	return &fused.c
 }
 
 func (c *Cell) WithoutTrace() *Cell {

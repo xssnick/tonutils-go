@@ -67,18 +67,48 @@ type lazySlab4 struct {
 // the storage path's 128-byte body out of every BOC materialization — the
 // bytes axis is what decides GC cycle frequency, and the BOC path pays zero
 // body bytes today.
+type bocLazySlab1 struct {
+	root   Cell
+	refs   [1]Cell
+	metas  [1]bocLazyCellMeta
+	pruned [1][lazySlabPrunedCap]byte
+}
+
 type bocLazySlab2 struct {
 	root   Cell
 	refs   [2]Cell
-	metas  [2]cellMeta
+	metas  [2]bocLazyCellMeta
 	pruned [2][lazySlabPrunedCap]byte
+}
+
+type bocLazySlab3 struct {
+	root   Cell
+	refs   [3]Cell
+	metas  [3]bocLazyCellMeta
+	pruned [3][lazySlabPrunedCap]byte
 }
 
 type bocLazySlab4 struct {
 	root   Cell
 	refs   [4]Cell
-	metas  [4]cellMeta
+	metas  [4]bocLazyCellMeta
 	pruned [4][lazySlabPrunedCap]byte
+}
+
+// bocLazyCellMeta extends only BoC placeholder metadata with its resolver.
+// cellMeta must remain the first field: the cellLazyBOC tag permits recovering
+// this allocation from the prefix pointer without enlarging storage-cell metas.
+// Direct loader/index state replaces one escaping closure per lazy reference.
+type bocLazyCellMeta struct {
+	cellMeta
+	loader *lazyBOCLoader
+	index  uint32
+}
+
+type bocLazyRef struct {
+	cell   Cell
+	meta   bocLazyCellMeta
+	pruned [lazySlabPrunedCap]byte
 }
 
 // buildLazySlab lays one cell and its placeholders into slab-provided memory.

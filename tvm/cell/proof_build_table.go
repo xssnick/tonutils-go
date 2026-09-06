@@ -74,7 +74,7 @@ func (t *proofBuildTable) init(hint int) {
 }
 
 func proofBuildFingerprint(hash Hash, merkleDepth int) uint32 {
-	return (usageCellFingerprint(hash) ^ uint32(merkleDepth)*0x9e3779b1) | 1
+	return usageCellFingerprint(hash) ^ uint32(merkleDepth)*0x9e3779b1
 }
 
 // entryAt resolves a slot value to its entry.

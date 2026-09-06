@@ -125,7 +125,7 @@ func NewGatewayWithNetManager(key ed25519.PrivateKey, reader NetManager) *Gatewa
 		panic("key is nil")
 	}
 
-	id, err := tl.Hash(keys.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)})
+	id, err := tl.Hash(&keys.PublicKeyED25519{Key: key.Public().(ed25519.PublicKey)})
 	if err != nil {
 		panic(err)
 	}
@@ -382,7 +382,7 @@ func (g *Gateway) listen(rootId []byte) {
 			)
 			if packet.From != nil {
 				peerKey = append(ed25519.PublicKey(nil), packet.From.Key...)
-				peerId, err = tl.Hash(keys.PublicKeyED25519{Key: peerKey})
+				peerId, err = tl.Hash(&keys.PublicKeyED25519{Key: peerKey})
 				if err != nil {
 					if Logger != nil {
 						Logger("invalid peer id, err:", err.Error())
@@ -695,7 +695,7 @@ func (g *Gateway) registerClient(addr net.Addr, key ed25519.PublicKey, id string
 
 	a := g.initADNL()
 
-	peerId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
+	peerId, err := tl.Hash(&keys.PublicKeyED25519{Key: key})
 	if err != nil {
 		g.mx.Unlock()
 		return nil, err
@@ -807,7 +807,7 @@ func (g *Gateway) RegisterClient(addr string, key ed25519.PublicKey) (Peer, erro
 	}
 	udpAddr := net.UDPAddrFromAddrPort(pAddr)
 
-	clientId, err := tl.Hash(keys.PublicKeyED25519{Key: key})
+	clientId, err := tl.Hash(&keys.PublicKeyED25519{Key: key})
 	if err != nil {
 		return nil, err
 	}

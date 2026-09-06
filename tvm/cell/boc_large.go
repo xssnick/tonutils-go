@@ -69,7 +69,7 @@ type LargeBOCLoader interface {
 	// LoadPayload must append exactly one LargeBOCPayloadRecord per input hash
 	// to dst, in the same order as hashes. The returned records may borrow Data
 	// from the loader; Data must stay valid while the following batch may
-	// already be loading.
+	// already be loading. Cells with zero payload bits are not requested.
 	LoadPayload(hashes []Hash, dst []LargeBOCPayloadRecord) ([]LargeBOCPayloadRecord, error)
 }
 
@@ -763,22 +763,29 @@ func (s *largeBOCSerializer) shouldSerializeHashes(item *largeBOCItem, mode int)
 }
 
 func (s *largeBOCSerializer) loadPayloadBatch(start int, hashes []Hash, payloads []LargeBOCPayloadRecord) largeBOCPayloadBatch {
-	end := start + s.loadBatchSize
-	if end > s.cellCount {
-		end = s.cellCount
+	hashes = hashes[:0]
+	end := start
+	for end < s.cellCount {
+		item := &s.cellList[s.cellCount-1-end]
+		if item.bitsSz > 0 {
+			if len(hashes) == s.loadBatchSize {
+				break
+			}
+			if len(hashes) == cap(hashes) {
+				next := make([]Hash, len(hashes), min(s.loadBatchSize, s.cellCount-start))
+				copy(next, hashes)
+				hashes = next
+			}
+			hashes = append(hashes, item.hash)
+		}
+		end++
 	}
 
-	batchSize := end - start
-	if cap(hashes) < batchSize {
-		hashes = make([]Hash, batchSize)
-	} else {
-		hashes = hashes[:batchSize]
+	records := payloads[:0]
+	var err error
+	if len(hashes) > 0 {
+		records, err = s.batchLoad.LoadPayload(hashes, records)
 	}
-	for i := start; i < end; i++ {
-		hashes[i-start] = s.cellList[s.cellCount-1-i].hash
-	}
-
-	records, err := s.batchLoad.LoadPayload(hashes, payloads[:0])
 	return largeBOCPayloadBatch{
 		start:   start,
 		end:     end,
@@ -806,13 +813,20 @@ func (s *largeBOCSerializer) writePayloadBatch(w *bocStreamWriter, info bocSeria
 	if batch.err != nil {
 		return batch.err
 	}
-	if len(batch.records) != batch.end-batch.start {
+	if len(batch.records) != len(batch.hashes) {
 		return ErrLazyRefNotFound
 	}
 
-	for i := range batch.records {
-		item := &s.cellList[s.cellCount-1-batch.start-i]
-		if err := s.writePayloadRecord(w, info, mode, item, &batch.records[i], cellBuf); err != nil {
+	var empty LargeBOCPayloadRecord
+	recordIdx := 0
+	for i := batch.start; i < batch.end; i++ {
+		item := &s.cellList[s.cellCount-1-i]
+		record := &empty
+		if item.bitsSz > 0 {
+			record = &batch.records[recordIdx]
+			recordIdx++
+		}
+		if err := s.writePayloadRecord(w, info, mode, item, record, cellBuf); err != nil {
 			return err
 		}
 	}
@@ -844,7 +858,7 @@ func (s *largeBOCSerializer) writePayloadBatches(w *bocStreamWriter, info bocSer
 			clearPayloadRecords(current.records)
 			return current.err
 		}
-		if len(current.records) != current.end-current.start {
+		if len(current.records) != len(current.hashes) {
 			clearPayloadRecords(current.records)
 			return ErrLazyRefNotFound
 		}

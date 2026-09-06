@@ -1,5 +1,7 @@
 package cell
 
+import "unsafe"
+
 const (
 	cellFlagSpecial        uint8 = 1 << 0
 	cellFlagLevelMaskShift uint8 = 1
@@ -34,6 +36,11 @@ func decodeCellTypeCache(v uint8) Type {
 	return Type(v - 1)
 }
 
+const (
+	cellLazySkipValidation uint8 = 1 << iota
+	cellLazyBOC
+)
+
 type cellMeta struct {
 	extraHashes *[3]Hash
 	viewOf      *Cell
@@ -42,14 +49,22 @@ type cellMeta struct {
 
 	extraDepths [3]uint16
 	viewLevel   uint8 // effectiveLevel + 1
-	// skipLazyRefValidation is set only for internal trusted BoC loaders whose
-	// materialized cell metadata comes from the same payload as the placeholder.
-	skipLazyRefValidation bool
+	// cellLazyBOC marks a bocLazyCellMeta allocation whose first field is this
+	// cellMeta. Virtualized wrappers keep the resolver on their raw cell.
+	lazyFlags uint8
 }
 
 func cloneCellMeta(meta *cellMeta) *cellMeta {
 	if meta == nil {
 		return nil
+	}
+
+	if meta.lazyFlags&cellLazyBOC != 0 {
+		// Tagged metadata belongs to a raw BoC placeholder: it has no extra
+		// hashes or view, but copying it must preserve its resolver extension.
+		cp := *(*bocLazyCellMeta)(unsafe.Pointer(meta))
+		cp.trace = nil
+		return &cp.cellMeta
 	}
 
 	cp := *meta
@@ -58,7 +73,7 @@ func cloneCellMeta(meta *cellMeta) *cellMeta {
 		cp.extraHashes = &extra
 	}
 	cp.trace = nil
-	if cp.extraHashes == nil && cp.viewOf == nil && cp.lazyLoader == nil && cp.viewLevel == 0 {
+	if cp.extraHashes == nil && cp.viewOf == nil && cp.lazyLoader == nil && cp.lazyFlags == 0 && cp.viewLevel == 0 {
 		return nil
 	}
 	return &cp
@@ -189,7 +204,7 @@ func (c *Cell) clearMetaIfEmpty() {
 		return
 	}
 	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil ||
-		c.meta.trace != nil || c.meta.viewLevel != 0 {
+		c.meta.trace != nil || c.meta.viewLevel != 0 || c.meta.lazyFlags != 0 {
 		return
 	}
 	c.meta = nil

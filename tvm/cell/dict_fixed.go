@@ -697,6 +697,12 @@ func fixedDictLookupNearestNode(root *Cell, remaining uint, prefix *Builder, tar
 	if err != nil {
 		return DictItem{}, false, err
 	}
+
+	// A label mismatch can restart at this root to find its boundary key.
+	// Keep the loaded cell before special resolution so that restart preserves
+	// library resolution and trace charges, but does not repeat lazy I/O.
+	root = node.cell
+
 	if err = node.resolveIfSpecial(remaining, walk.trace, walk.resolver); err != nil {
 		return DictItem{}, false, err
 	}

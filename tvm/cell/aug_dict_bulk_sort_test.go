@@ -127,7 +127,7 @@ func augmentedBulkSortFixture(
 
 	items := make([]augBulkItem, count)
 	deletes := make([]Slice, count)
-	markers := make([]Builder, count)
+	markers := make([]Cell, count)
 	keyBytes := make([]byte, (keyBits+7)/8)
 	for i := range count {
 		if _, err := rnd.Read(keyBytes); err != nil {

@@ -33,7 +33,7 @@ const broadcastTwoStepStreamTTL = 25 * time.Second
 type broadcastTwoStepStream struct {
 	decoder           *raptorq.Decoder
 	decodeBuffer      []byte
-	seenParts         map[uint32]struct{}
+	seenParts         map[uint32][32]byte
 	admission         *broadcastAdmission
 	budgetBytes       int64
 	date              uint32
@@ -102,6 +102,8 @@ type broadcastTwoStepRelayPayload struct {
 	body    *PreparedBroadcastMessage
 	bytes   int64
 	refs    atomic.Int64
+	state   *BroadcastFECRelayState
+	fec     bool
 }
 
 type broadcastTwoStepRelaySubmitStatus uint8
@@ -112,13 +114,15 @@ const (
 	broadcastTwoStepRelayClosed
 )
 
-// broadcastTwoStepRelayDispatcher owns a fixed worker pool. Peer sends are
+// broadcastTwoStepRelayDispatcher owns a fixed worker pool, also reused by
+// ordinary FEC and simple relays. Peer sends are
 // bounded by queue slots, while shared serialized bodies are independently
 // bounded by bytes so large broadcasts cannot hide behind small task objects.
 type broadcastTwoStepRelayDispatcher struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	queue          chan broadcastTwoStepRelayTask
+	ordinary       *broadcastOrdinaryRelayScheduler
 	peerTimeout    time.Duration
 	maxActiveBytes int64
 
@@ -139,7 +143,7 @@ type broadcastTwoStepRelayDispatcher struct {
 	activeBytes       atomic.Int64
 }
 
-func newBroadcastTwoStepRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration) *broadcastTwoStepRelayDispatcher {
+func newBroadcastRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration, ordinary bool) *broadcastTwoStepRelayDispatcher {
 	if queueSize < 1 {
 		queueSize = DefaultTwoStepRelayQueueSize
 	}
@@ -157,9 +161,22 @@ func newBroadcastTwoStepRelayDispatcher(queueSize, concurrency int, maxActiveByt
 	d := &broadcastTwoStepRelayDispatcher{
 		ctx:            ctx,
 		cancel:         cancel,
-		queue:          make(chan broadcastTwoStepRelayTask, queueSize),
 		peerTimeout:    peerTimeout,
 		maxActiveBytes: maxActiveBytes,
+	}
+	if ordinary {
+		d.ordinary = &broadcastOrdinaryRelayScheduler{
+			peers:        make(map[broadcastExternalPeerIDKey]*broadcastOrdinaryRelayPeer),
+			ready:        make(chan *broadcastOrdinaryRelayPeer, queueSize),
+			slots:        make([]broadcastOrdinaryRelaySlot, queueSize),
+			perPeerLimit: queueSize / max(2, concurrency),
+		}
+		for index := range d.ordinary.slots {
+			d.ordinary.slots[index].next = index + 1
+		}
+		d.ordinary.slots[queueSize-1].next = -1
+	} else {
+		d.queue = make(chan broadcastTwoStepRelayTask, queueSize)
 	}
 	d.workers.Add(concurrency)
 	for range concurrency {
@@ -174,25 +191,43 @@ func (d *broadcastTwoStepRelayDispatcher) Submit(task broadcastTwoStepRelayTask)
 
 	if d.closed {
 		d.closedSubmissions.Add(1)
+		if task.payload != nil && task.payload.state != nil {
+			task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+		}
 		d.releasePayload(task.payload)
 		return broadcastTwoStepRelayClosed
 	}
 
-	select {
-	case d.queue <- task:
+	queued := false
+	if d.ordinary != nil {
+		queued = d.ordinary.submit(task)
+	} else {
+		select {
+		case d.queue <- task:
+			queued = true
+		default:
+		}
+	}
+	if queued {
 		d.enqueued.Add(1)
 		return broadcastTwoStepRelayQueued
-	default:
-		d.queueFull.Add(1)
-		d.releasePayload(task.payload)
-		return broadcastTwoStepRelayQueueFull
 	}
+
+	d.queueFull.Add(1)
+	if task.payload.state != nil {
+		task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+	}
+	d.releasePayload(task.payload)
+	return broadcastTwoStepRelayQueueFull
 }
 
 func (d *broadcastTwoStepRelayDispatcher) reservePayload(message tl.Serializable, body *PreparedBroadcastMessage, refs int) (*broadcastTwoStepRelayPayload, bool) {
 	// The slice retains its complete backing allocation while any peer task is
 	// alive, so charge capacity rather than only the serialized length.
 	bodyBytes := int64(cap(body.Body()))
+	if frame := body.frame.Load(); frame != nil {
+		bodyBytes += int64(cap(frame.message.Wire())) + int64(cap(frame.overlayID))
+	}
 	for {
 		active := d.activeBytes.Load()
 		if bodyBytes > d.maxActiveBytes || active > d.maxActiveBytes-bodyBytes {
@@ -227,10 +262,21 @@ func (d *broadcastTwoStepRelayDispatcher) Close() {
 		d.submitMx.Unlock()
 
 		d.workers.Wait()
+		if d.ordinary != nil {
+			for _, task := range d.ordinary.drain() {
+				d.canceled.Add(1)
+				task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+				d.releasePayload(task.payload)
+			}
+			return
+		}
 		for {
 			select {
 			case task := <-d.queue:
 				d.canceled.Add(1)
+				if task.payload.state != nil {
+					task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+				}
 				d.releasePayload(task.payload)
 			default:
 				return
@@ -241,6 +287,11 @@ func (d *broadcastTwoStepRelayDispatcher) Close() {
 
 func (d *broadcastTwoStepRelayDispatcher) runWorker() {
 	defer d.workers.Done()
+
+	if d.ordinary != nil {
+		d.runOrdinaryWorker()
+		return
+	}
 
 	for {
 		// Give shutdown priority over queued work. A task accepted before Close
@@ -268,10 +319,16 @@ func (d *broadcastTwoStepRelayDispatcher) send(task broadcastTwoStepRelayTask) {
 	err := SendPreparedBroadcast(ctx, task.peer, task.payload.message, task.payload.body)
 	cancel()
 	if err == nil {
+		if task.payload.state != nil {
+			task.payload.state.addRelayStats(task.payload.fec, 1, 0)
+		}
 		d.sent.Add(1)
 		return
 	}
 
+	if task.payload.state != nil {
+		task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+	}
 	d.failed.Add(1)
 	if errors.Is(err, context.Canceled) && d.ctx.Err() != nil {
 		d.canceled.Add(1)
@@ -282,8 +339,14 @@ func (d *broadcastTwoStepRelayDispatcher) send(task broadcastTwoStepRelayTask) {
 }
 
 func (d *broadcastTwoStepRelayDispatcher) Stats() BroadcastTwoStepRelayStats {
+	queueDepth := len(d.queue)
+	if d.ordinary != nil {
+		d.ordinary.mx.Lock()
+		queueDepth = d.ordinary.queued
+		d.ordinary.mx.Unlock()
+	}
 	return BroadcastTwoStepRelayStats{
-		QueueDepth:         len(d.queue),
+		QueueDepth:         queueDepth,
 		ActiveBytes:        d.activeBytes.Load(),
 		EnqueuedTotal:      d.enqueued.Load(),
 		QueueFullTotal:     d.queueFull.Load(),
@@ -541,7 +604,9 @@ func estimateTwoStepBroadcastBudgetBytes(dataSize, partSize uint32) int64 {
 
 	symbols := broadcastTwoStepSymbolsNeeded(dataSize, partSize)
 	symbolBytes := multiplyFECBroadcastBudgetEstimate(uint64(symbols), uint64(partSize))
-	hashBytes := multiplyFECBroadcastBudgetEstimate(uint64(symbols), 16)
+	// Each allowed seqno can retain one verified digest. Include map capacity
+	// and growth overhead, rather than charging only the 32-byte hash.
+	hashBytes := multiplyFECBroadcastBudgetEstimate(uint64(broadcastTwoStepSeqnoLimit(dataSize, partSize)), 128)
 	return addFECBroadcastBudgetEstimate(int64(dataSize), symbolBytes, hashBytes, 4096)
 }
 
@@ -570,7 +635,7 @@ func broadcastTwoStepSourceInfo(source any) (keys.PublicKeyED25519, []byte, erro
 		return keys.PublicKeyED25519{}, nil, fmt.Errorf("invalid signer key format")
 	}
 
-	sourceID, err := tl.Hash(source)
+	sourceID, err := tl.Hash(&sourceKey)
 	if err != nil {
 		return keys.PublicKeyED25519{}, nil, fmt.Errorf("source key id serialize failed: %w", err)
 	}
@@ -702,11 +767,12 @@ func (r *BroadcastReceiver) ensureBroadcastTwoStepRelayDispatcher() *broadcastTw
 		return relay
 	}
 
-	relay := newBroadcastTwoStepRelayDispatcher(
+	relay := newBroadcastRelayDispatcher(
 		DefaultTwoStepRelayQueueSize,
 		DefaultTwoStepRelayConcurrency,
 		DefaultTwoStepRelayMaxActiveBytes,
 		DefaultTwoStepRelayPeerTimeout,
+		false,
 	)
 	r.twoStepRelay.Store(relay)
 	return relay
@@ -977,8 +1043,21 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 		checkedNewStream = true
 	}
 
-	if err := verifyBroadcastTwoStepFECSignature(t.Source, broadcastID, t.Seqno, t.Part, t.Signature); err != nil {
-		return twoStepFECPartResult{err: err}
+	// The identity binds every signed broadcast parameter, including part size.
+	// Only an exact match with bytes verified earlier in this live stream can
+	// bypass serialization and Ed25519 verification. A changed signature or
+	// symbol still takes the ordinary verification path.
+	fingerprint := broadcastTwoStepPartFingerprint(broadcastID, sourceKey, t.Seqno, t.Part, t.Signature)
+	verified := false
+	if stream != nil && lockLiveTwoStepStream(stream) {
+		previous, seen := stream.seenParts[t.Seqno]
+		verified = seen && previous == fingerprint
+		stream.mx.Unlock()
+	}
+	if !verified {
+		if err := verifyBroadcastTwoStepFECSignature(t.Source, broadcastID, t.Seqno, t.Part, t.Signature); err != nil {
+			return twoStepFECPartResult{err: err}
+		}
 	}
 
 	if checkedNewStream {
@@ -1018,7 +1097,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 
 		stream = &broadcastTwoStepStream{
 			decoder:       decoder,
-			seenParts:     map[uint32]struct{}{},
+			seenParts:     map[uint32][32]byte{},
 			budgetBytes:   budgetBytes,
 			date:          t.Date,
 			dataHash:      append([]byte(nil), t.DataHash...),
@@ -1063,7 +1142,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 	if stream.admission != nil {
 		waitAdmission = stream.admission
 		if _, seen := stream.seenParts[t.Seqno]; !seen {
-			stream.seenParts[t.Seqno] = struct{}{}
+			stream.seenParts[t.Seqno] = fingerprint
 			stream.lastMessageAt = now
 			if bytes.Equal(srcPeerID, t.SourceADNL) && !stream.rebroadcastedPart {
 				stream.rebroadcastedPart = true
@@ -1077,7 +1156,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
 			return twoStepFECPartResult{}
 		}
 
-		stream.seenParts[t.Seqno] = struct{}{}
+		stream.seenParts[t.Seqno] = fingerprint
 		stream.lastMessageAt = now
 		if bytes.Equal(srcPeerID, t.SourceADNL) && !stream.rebroadcastedPart {
 			stream.rebroadcastedPart = true

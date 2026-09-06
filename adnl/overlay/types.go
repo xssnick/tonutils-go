@@ -69,7 +69,7 @@ func (c Certificate) Check(issuedToId []byte, overlayId []byte, dataSize uint32,
 		return CertCheckResultForbidden, nil
 	}
 
-	toSign, err := tl.Serialize(CertificateId{
+	toSign, err := tl.Serialize(&CertificateId{
 		OverlayID: overlayId,
 		Node:      issuedToId,
 		ExpireAt:  c.ExpireAt,
@@ -129,14 +129,14 @@ func (c CertificateV2) Check(issuedToId []byte, overlayId []byte, dataSize uint3
 	var toSign []byte
 	var err error
 	if c.Flags == defaultCertificateFlags(c.MaxSize) {
-		toSign, err = tl.Serialize(CertificateId{
+		toSign, err = tl.Serialize(&CertificateId{
 			OverlayID: overlayId,
 			Node:      issuedToId,
 			ExpireAt:  c.ExpireAt,
 			MaxSize:   c.MaxSize,
 		}, true)
 	} else {
-		toSign, err = tl.Serialize(CertificateIdV2{
+		toSign, err = tl.Serialize(&CertificateIdV2{
 			OverlayID: overlayId,
 			Node:      issuedToId,
 			ExpireAt:  c.ExpireAt,
@@ -323,12 +323,12 @@ func (n *Node) CheckSignature() error {
 		return fmt.Errorf("unsupported id type %s", reflect.TypeOf(n.ID).String())
 	}
 
-	id, err := tl.Hash(n.ID)
+	id, err := tl.Hash(&pub)
 	if err != nil {
 		return fmt.Errorf("failed to calc id: %w", err)
 	}
 
-	toVerify, err := tl.Serialize(NodeToSign{
+	toVerify, err := tl.Serialize(&NodeToSign{
 		ID:      id,
 		Overlay: n.Overlay,
 		Version: n.Version,
@@ -352,12 +352,12 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 		return fmt.Errorf("incorrect private key")
 	}
 
-	id, err := tl.Hash(n.ID)
+	id, err := tl.Hash(&pub)
 	if err != nil {
 		return fmt.Errorf("failed to calc id: %w", err)
 	}
 
-	toVerify, err := tl.Serialize(NodeToSign{
+	toVerify, err := tl.Serialize(&NodeToSign{
 		ID:      id,
 		Overlay: n.Overlay,
 		Version: n.Version,
@@ -371,7 +371,7 @@ func (n *Node) Sign(key ed25519.PrivateKey) error {
 }
 
 func NewNode(overlay []byte, key ed25519.PrivateKey) (*Node, error) {
-	keyHash, err := tl.Hash(keys.PublicKeyOverlay{
+	keyHash, err := tl.Hash(&keys.PublicKeyOverlay{
 		Key: overlay,
 	})
 	if err != nil {

@@ -60,42 +60,14 @@ func (s *SingleNetManager) InitConnection(gate *Gateway, addr string) error {
 	}
 	s.conn = conn
 
-	go func() {
-		for {
-			p := s.bufPool.Get().(*UDPPacket)
-
-			n, addr, err := s.conn.ReadFrom(p.data)
-			if err != nil {
-				s.bufPool.Put(p)
-
-				select {
-				case <-s.globalCtx.Done():
-					return
-				default:
-				}
-
-				if Logger != nil {
-					Logger("failed to read packet:", err)
-				}
-				continue
-			}
-
-			if n < 64 {
-				s.bufPool.Put(p)
-
-				// too small packet
-				continue
-			}
-
-			p.from = addr
-			p.n = n
-			select {
-			case s.udpBuf <- p:
-			default:
-				s.bufPool.Put(p)
-			}
+	go readUDPPackets(s.globalCtx, conn, newPacketBatchConn(conn), &s.bufPool, func(p *UDPPacket) bool {
+		select {
+		case s.udpBuf <- p:
+			return true
+		default:
+			return false
 		}
-	}()
+	})
 
 	return nil
 }
@@ -106,6 +78,8 @@ func (s *SingleNetManager) Close() {
 }
 
 func (s *SingleNetManager) Free(p *UDPPacket) {
+	p.from = nil
+	p.n = 0
 	s.bufPool.Put(p)
 }
 
@@ -151,57 +125,25 @@ func NewMultiNetReader(conn net.PacketConn) *MultiNetManager {
 		globalCtxCancel: globalCtxCancel,
 	}
 
-	go func() {
-		for {
-			p := m.bufPool.Get().(*UDPPacket)
-
-			n, addr, err := m.conn.ReadFrom(p.data)
-			if err != nil {
-				m.bufPool.Put(p)
-
-				select {
-				case <-m.globalCtx.Done():
-					return
-				default:
-				}
-
-				if Logger != nil {
-					Logger("failed to read packet from multi manager:", err)
-				}
-				continue
-			}
-
-			if n < 64 {
-				m.bufPool.Put(p)
-
-				// too small packet
-				continue
-			}
-
-			h := p.data[:32]
-			m.mx.RLock()
-			t := m.processors[*(*string)(unsafe.Pointer(&h))]
-			m.mx.RUnlock()
-			if t == nil {
-				m.bufPool.Put(p)
-
-				continue
-			}
-
-			p.from = addr
-			p.n = n
-			select {
-			case t <- p:
-			default:
-				m.bufPool.Put(p)
-			}
+	go readUDPPackets(m.globalCtx, conn, newPacketBatchConn(conn), &m.bufPool, func(p *UDPPacket) bool {
+		h := p.data[:32]
+		m.mx.RLock()
+		t := m.processors[*(*string)(unsafe.Pointer(&h))]
+		m.mx.RUnlock()
+		select {
+		case t <- p:
+			return true
+		default:
+			return false
 		}
-	}()
+	})
 
 	return m
 }
 
 func (m *MultiNetManager) Free(p *UDPPacket) {
+	p.from = nil
+	p.n = 0
 	m.bufPool.Put(p)
 }
 

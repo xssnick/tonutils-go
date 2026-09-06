@@ -3,7 +3,7 @@ package adnl
 import (
 	"context"
 	"errors"
-	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -62,9 +62,14 @@ type syncPacket struct {
 
 type SyncConn struct {
 	conn      net.PacketConn
+	batch     packetBatchConn
 	chWrite   chan syncPacket
 	closerCtx context.Context
 	closer    context.CancelFunc
+	writeMx   sync.RWMutex
+	closeOnce sync.Once
+	closeErr  error
+	writeDone chan struct{}
 }
 
 func NewSyncConn(conn net.PacketConn, packetsBufSz int) *SyncConn {
@@ -74,28 +79,95 @@ func NewSyncConn(conn net.PacketConn, packetsBufSz int) *SyncConn {
 		chWrite:   make(chan syncPacket, packetsBufSz),
 		closer:    cancel,
 		closerCtx: ctx,
+		writeDone: make(chan struct{}),
+	}
+	if _, ok := conn.(*net.UDPConn); ok {
+		// Each writer owns its descriptors. In particular, wrapping another
+		// SyncConn must preserve its queue instead of sharing its TX batch.
+		sc.batch = newPacketBatchConn(conn)
 	}
 	go sc.writer()
 	return sc
 }
 
 func (s *SyncConn) writer() {
-	defer s.Close()
+	var slots [udpBatchSize]syncPacket
+	defer func() {
+		_ = s.closeConn()
+		clear(slots[:])
+
+		// Cancelled enqueues leave before taking the exclusive lock. This
+		// makes draining final: no sender can retain a new buffer after exit.
+		s.writeMx.Lock()
+		defer s.writeMx.Unlock()
+		defer close(s.writeDone)
+		for {
+			select {
+			case <-s.chWrite:
+			default:
+				return
+			}
+		}
+	}()
 
 	for {
+		if s.closerCtx.Err() != nil {
+			return
+		}
+
 		select {
 		case p := <-s.chWrite:
-			if _, err := s.conn.WriteTo(p.buf, p.addr); err != nil {
-				if errors.Is(err, net.ErrClosed) {
+			slots[0] = p
+		case <-s.closerCtx.Done():
+			return
+		}
+
+		n := 1
+		if s.batch != nil {
+		drain:
+			for n < len(slots) {
+				select {
+				case p := <-s.chWrite:
+					slots[n] = p
+					n++
+				default:
+					break drain
+				}
+			}
+		}
+
+		for written := 0; written < n; {
+			var sent int
+			var err error
+			if s.batch != nil {
+				sent, err = s.batch.writeBatch(slots[written:n])
+			} else {
+				p := slots[written]
+				_, err = s.conn.WriteTo(p.buf, p.addr)
+				if err == nil {
+					sent = 1
+				}
+			}
+
+			clear(slots[written : written+sent])
+			written += sent
+			if err == nil && sent == 0 {
+				err = io.ErrNoProgress
+			}
+			if err != nil {
+				if errors.Is(err, net.ErrClosed) || s.closerCtx.Err() != nil {
 					return
 				}
-				// should not happen, but if will we want to see
 				if Logger != nil {
 					Logger("[CONN] Write error:", err.Error())
 				}
+				if written < n {
+					// As with a single WriteTo error, discard the failing
+					// datagram and keep later queued packets deliverable.
+					slots[written] = syncPacket{}
+					written++
+				}
 			}
-		case <-s.closerCtx.Done():
-			return
 		}
 	}
 }
@@ -104,18 +176,35 @@ func (s *SyncConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	return s.conn.ReadFrom(p)
 }
 
+// WriteTo queues p for asynchronous transmission. Its contents must remain
+// immutable after return; ADNL sends independent packet buffers for this reason.
 func (s *SyncConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	s.writeMx.RLock()
+	defer s.writeMx.RUnlock()
+
+	if s.closerCtx.Err() != nil {
+		return 0, net.ErrClosed
+	}
 	select {
 	case <-s.closerCtx.Done():
-		return 0, fmt.Errorf("connection was closed")
+		return 0, net.ErrClosed
 	case s.chWrite <- syncPacket{addr, p}:
 		return len(p), nil
 	}
 }
 
 func (s *SyncConn) Close() error {
-	s.closer()
-	return s.conn.Close()
+	err := s.closeConn()
+	<-s.writeDone
+	return err
+}
+
+func (s *SyncConn) closeConn() error {
+	s.closeOnce.Do(func() {
+		s.closer()
+		s.closeErr = s.conn.Close()
+	})
+	return s.closeErr
 }
 
 func (s *SyncConn) LocalAddr() net.Addr {

@@ -238,7 +238,8 @@ type merkleProofFastKey struct {
 }
 
 type merkleProofFastCombiner struct {
-	ready map[merkleProofFastKey]*Cell
+	ready  map[merkleProofFastKey]*Cell
+	loaded cellLoadCache
 }
 
 func (c *merkleProofFastCombiner) merge(leftBoundary, rightBoundary *Cell, merkleDepth int) (*Cell, error) {
@@ -254,14 +255,21 @@ func (c *merkleProofFastCombiner) merge(leftBoundary, rightBoundary *Cell, merkl
 		return rightBoundary, nil
 	}
 
-	left, err := leftBoundary.load()
-	if err != nil {
-		return nil, err
+	left := leftBoundary
+	var err error
+	if left.IsLazy() {
+		left, err = loadLazyPrunedRefCached(leftBoundary, &c.loaded)
+		if err != nil {
+			return nil, err
+		}
 	}
 	left = loadedForBoundary(leftBoundary, left)
-	right, err := rightBoundary.load()
-	if err != nil {
-		return nil, err
+	right := rightBoundary
+	if right.IsLazy() {
+		right, err = loadLazyPrunedRefCached(rightBoundary, &c.loaded)
+		if err != nil {
+			return nil, err
+		}
 	}
 	right = loadedForBoundary(rightBoundary, right)
 

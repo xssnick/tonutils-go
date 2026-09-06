@@ -225,7 +225,7 @@ func (n *Node) checkSignature(ourNetworkID int32) error {
 
 	nodeCopy := *n
 	nodeCopy.Signature = nil
-	toVerify, err := tl.Serialize(nodeCopy, true)
+	toVerify, err := tl.Serialize(&nodeCopy, true)
 	if err != nil {
 		return fmt.Errorf("failed to serialize node: %w", err)
 	}

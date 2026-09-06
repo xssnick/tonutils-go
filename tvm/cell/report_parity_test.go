@@ -212,7 +212,7 @@ func TestLazyTrustedBOCSkipsSamePayloadRefRevalidation(t *testing.T) {
 	if len(refs) != 1 || !refs[0].IsLazy() {
 		t.Fatal("expected a lazy child boundary")
 	}
-	if refs[0].meta == nil || !refs[0].meta.skipLazyRefValidation {
+	if refs[0].meta == nil || refs[0].meta.lazyFlags&cellLazySkipValidation == 0 {
 		t.Fatal("trusted same-payload loader retained redundant ref validation")
 	}
 	loaded, err := refs[0].load()
@@ -230,7 +230,7 @@ func TestReportParityLazyLoaderValidatesPlaceholderMetadata(t *testing.T) {
 	lazy := mustCreateLazyPrunedRef(t, lazyRefFromCell(expected), func(Hash) (*Cell, error) {
 		return wrong, nil
 	})
-	if lazy.meta.skipLazyRefValidation {
+	if lazy.meta.lazyFlags&cellLazySkipValidation != 0 {
 		t.Fatal("external lazy loader unexpectedly bypassed metadata validation")
 	}
 	if _, err := lazy.BeginParse(); !errors.Is(err, ErrLazyRefMismatch) {

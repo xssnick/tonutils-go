@@ -6,6 +6,9 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"runtime"
+	"testing"
+	"time"
 
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -232,4 +235,43 @@ func setSerializableResult(dst tl.Serializable, src tl.Serializable) error {
 	}
 	dv.Elem().Set(val)
 	return nil
+}
+
+func sendBroadcastFECRelayOps(ctx context.Context, state *BroadcastFECRelayState, ops []broadcastFECRelayOp) error {
+	var sendErr error
+	var sent, failed uint64
+	for _, op := range ops {
+		if err := SendPreparedBroadcast(ctx, op.peer, op.msg, op.wire); err != nil {
+			failed++
+			if sendErr == nil {
+				sendErr = fmt.Errorf("failed to relay FEC part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
+			}
+			continue
+		}
+		sent++
+	}
+	if state != nil {
+		state.addRelayStats(true, sent, failed)
+	}
+	return sendErr
+}
+
+func waitOrdinaryBroadcastRelay(t testing.TB, receiver *BroadcastReceiver) {
+	t.Helper()
+	relay := receiver.ordinaryRelay.Load()
+	if relay == nil {
+		return
+	}
+	t.Cleanup(relay.Close)
+	deadline := time.Now().Add(5 * time.Second)
+	for relay.activeBytes.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("broadcast relay did not become idle")
+		}
+		runtime.Gosched()
+	}
+}
+
+func newBroadcastTwoStepRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration) *broadcastTwoStepRelayDispatcher {
+	return newBroadcastRelayDispatcher(queueSize, concurrency, maxActiveBytes, peerTimeout, false)
 }

@@ -133,7 +133,7 @@ func validateDetachedCloneSource(c *Cell) error {
 	if c.meta.viewOf != nil || c.meta.viewLevel != 0 {
 		return errors.New("cell view")
 	}
-	if c.meta.lazyLoader != nil || c.meta.skipLazyRefValidation {
+	if c.meta.lazyLoader != nil || c.meta.lazyFlags != 0 {
 		return errors.New("loader-backed cell")
 	}
 	if c.meta.extraHashes == nil && c.meta.extraDepths != [3]uint16{} {

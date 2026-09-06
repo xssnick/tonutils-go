@@ -332,6 +332,11 @@ func (n *dictCombineNode) visibleLabelValue(start, length uint) Slice {
 
 func (n *dictCombineNode) consumeVisibleLabelBits(bits uint) dictCombineRootView {
 	view := n.view
+	if view.cell.IsLazy() {
+		// Only a consumed lazy root needs a resident handoff. The parsed payload
+		// already carries its cell and path trace, so ordinary views stay small.
+		view.cell = n.payload.cell.WithTrace(n.payload.trace)
+	}
 	view.skip += bits
 	return view
 }

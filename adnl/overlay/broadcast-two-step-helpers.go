@@ -3,6 +3,7 @@ package overlay
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"reflect"
@@ -220,4 +221,18 @@ func (t *BroadcastTwoStepFEC) Sign(key ed25519.PrivateKey) error {
 	}
 	t.Signature, err = signBroadcastTwoStepFEC(key, id, t.Seqno, t.Part)
 	return nil
+}
+
+func broadcastTwoStepPartFingerprint(id, sourceKey []byte, seqno uint32, part, signature []byte) [32]byte {
+	hash := sha256.New()
+	hash.Write(id)
+	hash.Write(sourceKey)
+	var sequence [4]byte
+	binary.LittleEndian.PutUint32(sequence[:], seqno)
+	hash.Write(sequence[:])
+	hash.Write(part)
+	hash.Write(signature)
+	var result [32]byte
+	hash.Sum(result[:0])
+	return result
 }

@@ -3,6 +3,7 @@ package overlay
 import (
 	"bytes"
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 )
 
 type mockBroadcastPeer struct {
+	sendMx   sync.Mutex
 	id       []byte
 	sent     []tl.Serializable
 	sendErr  error
@@ -23,7 +25,9 @@ func (m *mockBroadcastPeer) ID() []byte {
 }
 
 func (m *mockBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	m.sendMx.Lock()
 	m.sent = append(m.sent, req)
+	m.sendMx.Unlock()
 	if m.sendFunc != nil {
 		return m.sendFunc(ctx, req)
 	}

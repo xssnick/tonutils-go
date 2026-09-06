@@ -1,22 +1,8 @@
 package cell
 
-import (
-	"slices"
-	"sync"
-)
-
-// Keep the repeated working set, but do not pin an exceptional one-off batch
-// in the process-wide pool. The order contains only indexes, so releasing it
-// cannot retain key or value cells.
-const augBulkSortMaxRetainedItems = 1 << 16
+import "slices"
 
 const augBulkInsertionSortThreshold = 32
-
-type augBulkSortScratch struct {
-	order []int
-}
-
-var augBulkSortPool sync.Pool
 
 // sortAugBulkItems orders a bulk augmented-dictionary write by its whole key.
 // The incoming slices all start at bit zero and carry keySz bits.
@@ -44,15 +30,15 @@ func sortAugBulkItems(items []augBulkItem, keySz uint) {
 		bounds[i] += bounds[i-1]
 	}
 
-	scratch, order := acquireAugBulkSortOrder(len(items))
+	scratch, order := acquireBulkSortOrder(len(items))
 	cursor := bounds
 	for i := range items {
 		bucket := int(items[i].key.cell.data[0])
 		order[cursor[bucket]] = i
 		cursor[bucket]++
 	}
-	applyAugBulkOrder(items, order)
-	releaseAugBulkSortOrder(scratch)
+	applyBulkOrder(items, order)
+	releaseBulkSortOrder(scratch)
 
 	for bucket := 0; bucket < 256; bucket++ {
 		start, end := bounds[bucket], bounds[bucket+1]
@@ -82,15 +68,15 @@ func sortAugBulkDeleteKeys(items []Slice, keySz uint) {
 		bounds[i] += bounds[i-1]
 	}
 
-	scratch, order := acquireAugBulkSortOrder(len(items))
+	scratch, order := acquireBulkSortOrder(len(items))
 	cursor := bounds
 	for i := range items {
 		bucket := int(items[i].cell.data[0])
 		order[cursor[bucket]] = i
 		cursor[bucket]++
 	}
-	applyAugBulkOrder(items, order)
-	releaseAugBulkSortOrder(scratch)
+	applyBulkOrder(items, order)
+	releaseBulkSortOrder(scratch)
 
 	for bucket := 0; bucket < 256; bucket++ {
 		start, end := bounds[bucket], bounds[bucket+1]
@@ -136,52 +122,5 @@ func sortAugBulkDeleteBucket(items []Slice) {
 			j--
 		}
 		items[j] = item
-	}
-}
-
-// applyAugBulkOrder applies a destination-to-source permutation in place. The
-// permutation itself doubles as the visited set: a negative entry marks a
-// destination already fixed by its cycle.
-func applyAugBulkOrder[T any](items []T, order []int) {
-	for start := range order {
-		next := order[start]
-		if next < 0 {
-			continue
-		}
-		if next == start {
-			order[start] = -1
-			continue
-		}
-
-		saved := items[start]
-		current := start
-		for next != start {
-			items[current] = items[next]
-			order[current] = -1
-			current = next
-			next = order[current]
-		}
-		items[current] = saved
-		order[current] = -1
-	}
-}
-
-func acquireAugBulkSortOrder(items int) (*augBulkSortScratch, []int) {
-	scratch, _ := augBulkSortPool.Get().(*augBulkSortScratch)
-	if scratch == nil {
-		scratch = new(augBulkSortScratch)
-	}
-	if cap(scratch.order) < items {
-		scratch.order = make([]int, items)
-	} else {
-		scratch.order = scratch.order[:items]
-	}
-	return scratch, scratch.order
-}
-
-func releaseAugBulkSortOrder(scratch *augBulkSortScratch) {
-	scratch.order = scratch.order[:0]
-	if cap(scratch.order) <= augBulkSortMaxRetainedItems {
-		augBulkSortPool.Put(scratch)
 	}
 }

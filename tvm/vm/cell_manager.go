@@ -285,7 +285,9 @@ func (m *CellManager) RegisterCellCreate() error {
 func (m *CellManager) beginParseWithGasTraceInto(cl *cell.Cell, sourceTrace *cell.Trace, dst *cell.Slice, alreadyLoaded bool) error {
 	gasTrace := m.Trace()
 	cellTrace := sourceTrace.WithoutTrace(gasTrace)
-	withGas := cell.CombineTraces(cellTrace, gasTrace)
+	// Retain the existing composition as a reuse candidate after fixing the
+	// notification order: usage listeners run before the gas listener.
+	withGas := cell.CombineTraces(cellTrace, gasTrace, sourceTrace)
 
 	if alreadyLoaded {
 		if err := cl.BeginParseIntoWithTrace(dst, cellTrace); err != nil {
@@ -351,8 +353,9 @@ func (m *CellManager) BeginParseSpecialNoCreateIntoWithTrace(cl *cell.Cell, sour
 func (m *CellManager) BeginParseAlreadyLoadedNoCreateIntoWithTrace(cl *cell.Cell, sourceTrace *cell.Trace, dst *cell.Slice) error {
 	gasTrace := m.Trace()
 	loadTrace := m.LoadTrace()
-	cellTrace := sourceTrace.WithoutTrace(gasTrace).WithoutTrace(loadTrace)
-	withLoad := cell.CombineTraces(cellTrace, loadTrace)
+	sourceTrace = sourceTrace.WithoutTrace(gasTrace)
+	cellTrace := sourceTrace.WithoutTrace(loadTrace)
+	withLoad := cell.CombineTraces(cellTrace, loadTrace, sourceTrace)
 
 	if err := cl.BeginParseIntoWithTrace(dst, cellTrace); err != nil {
 		return err

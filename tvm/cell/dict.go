@@ -99,13 +99,8 @@ func NewDictFromItems(keySz uint, items []DictBulkKV) (*Dictionary, error) {
 	}
 	items = unique
 
-	keyCells := make([]Cell, len(items))
-	for i := range items {
-		keyCells[i] = Cell{data: items[i].Key, bitsSz: uint16(keySz)}
-	}
-
 	arena := newDictBuildArena(2*len(items)-1, dictBulkArenaDataBytes(items, keySz))
-	root, err := d.buildFromSorted(items, keyCells, 0, arena)
+	root, err := d.buildFromSorted(items, 0, arena)
 	if err != nil {
 		return nil, err
 	}
@@ -115,17 +110,20 @@ func NewDictFromItems(keySz uint, items []DictBulkKV) (*Dictionary, error) {
 
 // buildFromSorted builds the subtree over items whose keys all share the
 // first pos bits and returns its finalized node cell.
-func (d *Dictionary) buildFromSorted(items []DictBulkKV, keyCells []Cell, pos uint, arena *dictBuildArena) (*Cell, error) {
+func (d *Dictionary) buildFromSorted(items []DictBulkKV, pos uint, arena *dictBuildArena) (*Cell, error) {
 	remaining := d.keySz - pos
+	// Only the endpoints of this sorted range are needed. The label is copied
+	// into the result, so these key views stay on this recursion frame.
+	firstCell := Cell{data: items[0].Key, bitsSz: uint16(d.keySz)}
+	first := Slice{cell: &firstCell, bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
 	if len(items) == 1 {
-		label := Slice{cell: &keyCells[0], bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
-		return d.storeLeafArena(arena, &label, items[0].Value, remaining)
+		return d.storeLeafArena(arena, &first, items[0].Value, remaining)
 	}
 
 	// with sorted distinct keys the common prefix of the whole run equals the
 	// common prefix of its first and last keys, and they diverge before the end
-	first := Slice{cell: &keyCells[0], bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
-	last := Slice{cell: &keyCells[len(items)-1], bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
+	lastCell := Cell{data: items[len(items)-1].Key, bitsSz: uint16(d.keySz)}
+	last := Slice{cell: &lastCell, bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
 	common, err := commonSlicePrefix(&first, &last, remaining)
 	if err != nil {
 		return nil, err
@@ -136,17 +134,17 @@ func (d *Dictionary) buildFromSorted(items []DictBulkKV, keyCells []Cell, pos ui
 		return items[i].Key[split/8]>>(7-split%8)&1 != 0
 	})
 
-	left, err := d.buildFromSorted(items[:mid], keyCells[:mid], split+1, arena)
+	left, err := d.buildFromSorted(items[:mid], split+1, arena)
 	if err != nil {
 		return nil, err
 	}
-	right, err := d.buildFromSorted(items[mid:], keyCells[mid:], split+1, arena)
+	right, err := d.buildFromSorted(items[mid:], split+1, arena)
 	if err != nil {
 		return nil, err
 	}
 
-	label := Slice{cell: &keyCells[0], bitStart: uint16(pos), bitEnd: uint16(split)}
-	return d.storeForkArena(arena, &label, left, right, remaining)
+	first.bitEnd = uint16(split)
+	return d.storeForkArena(arena, &first, left, right, remaining)
 }
 
 // compareDictBulkKeys compares the first keySz bits of two keys.

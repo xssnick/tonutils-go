@@ -63,6 +63,7 @@ type BroadcastReceiver struct {
 	twoStepState   atomic.Pointer[BroadcastTwoStepState]
 	twoStepConfig  atomic.Pointer[broadcastTwoStepRelayConfig]
 	twoStepRelay   atomic.Pointer[broadcastTwoStepRelayDispatcher]
+	ordinaryRelay  atomic.Pointer[broadcastTwoStepRelayDispatcher]
 	twoStepRelayMx sync.Mutex
 	handler        atomic.Pointer[broadcastHandler]
 	precheck       atomic.Pointer[broadcastPrecheckHandler]
@@ -122,10 +123,22 @@ func (r *BroadcastReceiver) Close() {
 		r.closed.Store(true)
 		r.active.Store(false)
 		relay := r.twoStepRelay.Load()
+		ordinary := r.ordinaryRelay.Load()
 		r.twoStepRelayMx.Unlock()
+
+		// Cancel both dispatchers before waiting for either worker pool.
+		if relay != nil {
+			relay.cancel()
+		}
+		if ordinary != nil {
+			ordinary.cancel()
+		}
 
 		if relay != nil {
 			relay.Close()
+		}
+		if ordinary != nil {
+			ordinary.Close()
 		}
 		close(r.cleanupStop)
 		<-r.cleanupDone
@@ -179,7 +192,6 @@ func (r *BroadcastReceiver) EnableBroadcastFECRelay(localID []byte, peerSet Broa
 		enabled: peerSet != nil,
 		localID: append([]byte(nil), localID...),
 		peerSet: peerSet,
-		state:   r.fecState,
 	})
 }
 
@@ -191,7 +203,6 @@ func (r *BroadcastReceiver) EnableBroadcastSimpleRelay(localID []byte, peerSet B
 	r.simpleRelay.Store(&broadcastSimpleRelayConfig{
 		localID: append([]byte(nil), localID...),
 		peerSet: peerSet,
-		state:   r.fecState,
 	})
 }
 
@@ -244,13 +255,11 @@ type broadcastFECRelayConfig struct {
 	enabled bool
 	localID []byte
 	peerSet BroadcastPeerSet
-	state   *BroadcastFECRelayState
 }
 
 type broadcastSimpleRelayConfig struct {
 	localID []byte
 	peerSet BroadcastPeerSet
-	state   *BroadcastFECRelayState
 }
 
 func (r *BroadcastReceiver) activeFECState() *BroadcastFECRelayState {
@@ -260,7 +269,7 @@ func (r *BroadcastReceiver) activeFECState() *BroadcastFECRelayState {
 func (r *BroadcastReceiver) broadcastFECRelayConfig() broadcastFECRelayConfig {
 	cfg := r.fecRelayConfig.Load()
 	if cfg == nil {
-		return broadcastFECRelayConfig{state: r.fecState}
+		return broadcastFECRelayConfig{}
 	}
 	return *cfg
 }

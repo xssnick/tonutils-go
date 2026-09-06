@@ -45,12 +45,7 @@ func (d *Dictionary) Multiset(updates []DictBulkKV) error {
 		}
 	}
 
-	keyCells := make([]Cell, len(updates))
-	for i := range updates {
-		keyCells[i] = Cell{data: updates[i].Key, bitsSz: uint16(d.keySz)}
-	}
-
-	root, err := d.multisetNode(d.tracedRoot(), updates, keyCells, 0, 0)
+	root, err := d.multisetNode(d.tracedRoot(), updates, 0, 0)
 	if err != nil {
 		return err
 	}
@@ -67,17 +62,17 @@ func (d *Dictionary) Multiset(updates []DictBulkKV) error {
 // bits and the first skip of them are known to match the path walked so far.
 // A non-zero skip appears when the old node's label outlives the batch's
 // common prefix and the node is pushed down under a new fork.
-func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []Cell, pos, skip uint) (*Cell, error) {
+func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, pos, skip uint) (*Cell, error) {
 	remaining := d.keySz - pos
 	if branch == nil {
-		return d.multisetBuild(items, keyCells, pos)
+		return d.multisetBuild(items, pos)
 	}
 	if len(items) == 0 {
 		// Carried over whole: not parsed, so not read.
 		return branch, nil
 	}
 
-	node, err := d.parseMultisetNode(branch, remaining+skip)
+	node, err := d.parseMultisetNode(branch, remaining+skip, &branch)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +88,21 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 	}
 	labelLen := node.labelLen - skip
 
-	batchLen, err := d.batchCommonPrefix(keyCells, pos, remaining)
-	if err != nil {
-		return nil, err
+	firstCell := Cell{data: items[0].Key, bitsSz: uint16(d.keySz)}
+	first := Slice{cell: &firstCell, bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
+	batchLen := remaining
+	if len(items) > 1 {
+		lastCell := Cell{data: items[len(items)-1].Key, bitsSz: uint16(d.keySz)}
+		last := Slice{cell: &lastCell, bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
+		batchLen, err = commonSlicePrefix(&first, &last, remaining)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	matched := uint(0)
 	if limit := min(labelLen, batchLen); limit > 0 {
-		labelHead, keyHead := label, d.keySuffix(keyCells, 0, pos)
-		if matched, err = commonSlicePrefix(&labelHead, &keyHead, limit); err != nil {
+		if matched, err = commonSlicePrefix(&label, &first, limit); err != nil {
 			return nil, err
 		}
 	}
@@ -117,7 +118,7 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 		if err != nil {
 			return nil, err
 		}
-		newSide, err := d.multisetBuild(items, keyCells, pos+matched+1)
+		newSide, err := d.multisetBuild(items, pos+matched+1)
 		if err != nil {
 			return nil, err
 		}
@@ -140,9 +141,14 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 		if err != nil {
 			return nil, err
 		}
-		updated, err := d.multisetNode(target, items, keyCells, pos+matched+1, 0)
+		updated, err := d.multisetNode(target, items, pos+matched+1, 0)
 		if err != nil {
 			return nil, err
+		}
+		if updated == target {
+			if reuse, err := d.canReuseMultisetNode(&node, branch, remaining, skip); err != nil || reuse {
+				return branch, err
+			}
 		}
 		left, right := kept, updated
 		if descend == 0 {
@@ -160,16 +166,14 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 		}
 		mid := splitBatchAt(items, pos+matched)
 		own, fresh := items[:mid], items[mid:]
-		ownKeys, freshKeys := keyCells[:mid], keyCells[mid:]
 		if side != 0 {
 			own, fresh = fresh, own
-			ownKeys, freshKeys = freshKeys, ownKeys
 		}
-		moved, err := d.multisetNode(branch, own, ownKeys, pos+matched+1, skip+matched+1)
+		moved, err := d.multisetNode(branch, own, pos+matched+1, skip+matched+1)
 		if err != nil {
 			return nil, err
 		}
-		built, err := d.multisetBuild(fresh, freshKeys, pos+matched+1)
+		built, err := d.multisetBuild(fresh, pos+matched+1)
 		if err != nil {
 			return nil, err
 		}
@@ -189,6 +193,11 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 		if items[0].Value == nil {
 			return nil, nil
 		}
+		if d.trace == nil && node.loader.trace == nil && multisetValueUnchanged(&node.loader, items[0].Value) {
+			if reuse, err := d.canReuseMultisetNode(&node, branch, remaining, skip); err != nil || reuse {
+				return branch, err
+			}
+		}
 		return d.storeLeaf(label.slice(0, matched), items[0].Value, remaining)
 	}
 
@@ -201,15 +210,46 @@ func (d *Dictionary) multisetNode(branch *Cell, items []DictBulkKV, keyCells []C
 	if err != nil {
 		return nil, err
 	}
-	left, err := d.multisetNode(leftRef, items[:mid], keyCells[:mid], pos+matched+1, 0)
+	left, err := d.multisetNode(leftRef, items[:mid], pos+matched+1, 0)
 	if err != nil {
 		return nil, err
 	}
-	right, err := d.multisetNode(rightRef, items[mid:], keyCells[mid:], pos+matched+1, 0)
+	right, err := d.multisetNode(rightRef, items[mid:], pos+matched+1, 0)
 	if err != nil {
 		return nil, err
+	}
+	if left == leftRef && right == rightRef {
+		if reuse, err := d.canReuseMultisetNode(&node, branch, remaining, skip); err != nil || reuse {
+			return branch, err
+		}
 	}
 	return d.joinMultisetChildren(&label, matched, left, right, remaining)
+}
+
+// Only complete, ordinary, untraced nodes can survive a replacement unchanged.
+// Traced writes still rebuild so creation events and errors retain their order;
+// virtual views and resolved special nodes must materialize as ordinary cells.
+// Even identical values canonicalize non-minimal labels on the updated path.
+func (d *Dictionary) canReuseMultisetNode(node *fixedDictNode, branch *Cell, remaining, skip uint) (bool, error) {
+	if skip != 0 || d.trace != nil || node.loader.trace != nil || node.cell != branch || branch.IsVirtualized() {
+		return false, nil
+	}
+	return node.hasCanonicalLabel(remaining)
+}
+
+func multisetValueUnchanged(stored *Slice, value *Builder) bool {
+	if stored.BitsLeft() != value.bitsSz || stored.RefsNum() != int(value.refsNum) {
+		return false
+	}
+	for i, ref := range value.rawRefs() {
+		// Equal hashes can hide different lazy loaders or trace metadata.
+		if stored.cell.refs[int(stored.refStart)+i] != ref {
+			return false
+		}
+	}
+	valueCell := Cell{data: value.data[:value.usedBytes()], bitsSz: uint16(value.bitsSz)}
+	valueSlice := Slice{cell: &valueCell, bitEnd: valueCell.bitsSz}
+	return stored.BitsEqual(&valueSlice)
 }
 
 // joinMultisetChildren rebuilds a node from the two subtrees the batch left
@@ -231,7 +271,7 @@ func (d *Dictionary) joinMultisetChildren(label *Slice, labelLen uint, left, rig
 	// not: its label becomes part of the merged edge. It gets the same
 	// treatment a descent gives a node, so a pruned branch here is reported as
 	// one instead of being read as a label.
-	survivorNode, err := d.parseMultisetNode(survivor, remaining-labelLen-1)
+	survivorNode, err := d.parseMultisetNode(survivor, remaining-labelLen-1, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load surviving %d ref: %w", edge, err)
 	}
@@ -258,10 +298,16 @@ func (d *Dictionary) joinMultisetChildren(label *Slice, labelLen uint, left, rig
 // resolved when the walk carries a resolver and reported otherwise, and the
 // node shape is validated, which is what the reference's chk_all label parse
 // does at the same points.
-func (d *Dictionary) parseMultisetNode(branch *Cell, remaining uint) (fixedDictNode, error) {
+func (d *Dictionary) parseMultisetNode(branch *Cell, remaining uint, loadedBranch **Cell) (fixedDictNode, error) {
 	node, err := parseFixedDictNodeWithTrace(branch, remaining, branch.Trace())
 	if err != nil {
 		return fixedDictNode{}, err
+	}
+	if loadedBranch != nil && branch.IsLazy() {
+		// Label realignment revisits this node with a longer consumed prefix.
+		// Keep the validated body, before special resolution, so those visits
+		// preserve their logical load/resolver events without repeating I/O.
+		*loadedBranch = node.cell.WithTrace(branch.Trace())
 	}
 	if err = node.resolveIfSpecial(remaining, branch.Trace(), nil); err != nil {
 		return fixedDictNode{}, err
@@ -278,7 +324,7 @@ func (d *Dictionary) parseMultisetNode(branch *Cell, remaining uint) (fixedDictN
 // multisetBuild builds a subtree from batch entries that reach no existing
 // node. Every entry has to carry a value there: a deletion that arrives here
 // names a key the dictionary does not hold.
-func (d *Dictionary) multisetBuild(items []DictBulkKV, keyCells []Cell, pos uint) (*Cell, error) {
+func (d *Dictionary) multisetBuild(items []DictBulkKV, pos uint) (*Cell, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -288,22 +334,7 @@ func (d *Dictionary) multisetBuild(items []DictBulkKV, keyCells []Cell, pos uint
 			return nil, fmt.Errorf("cannot delete key %x: %w", items[i].Key[:keyBytes], ErrNoSuchKeyInDict)
 		}
 	}
-	return d.buildFromSorted(items, keyCells, pos, nil)
-}
-
-// batchCommonPrefix returns how many key bits from pos the whole sorted batch
-// shares. Sorted distinct keys make the first and last entries decide it.
-func (d *Dictionary) batchCommonPrefix(keyCells []Cell, pos, remaining uint) (uint, error) {
-	if len(keyCells) == 1 {
-		return remaining, nil
-	}
-	first := d.keySuffix(keyCells, 0, pos)
-	last := d.keySuffix(keyCells, len(keyCells)-1, pos)
-	return commonSlicePrefix(&first, &last, remaining)
-}
-
-func (d *Dictionary) keySuffix(keyCells []Cell, i int, pos uint) Slice {
-	return Slice{cell: &keyCells[i], bitStart: uint16(pos), bitEnd: uint16(d.keySz)}
+	return d.buildFromSorted(items, pos, nil)
 }
 
 // splitBatchAt returns the index of the first entry whose key bit at is set,

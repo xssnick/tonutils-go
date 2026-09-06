@@ -2033,3 +2033,87 @@ func newTwoStepFECReceiveFixture(t *testing.T, seed byte) (*ADNLOverlayWrapper, 
 	o.EnableBroadcastTwoStep(bytes.Repeat([]byte{seed + 7}, 32), nil, state)
 	return o, state, parts, sourceADNL
 }
+
+// A fan-out released at quorum must still deliver to the peers it did not wait
+// for, even though the caller cancels its context the moment the call returns.
+// Before the stragglers were detached, exactly this cancelled them: on the test
+// stand eleven of fourteen committee members received a symbol from the source
+// and the other three had none to relay, which is what the second step of the
+// broadcast is built out of.
+func TestSendBroadcastTwoStepQuorumStragglersSurviveCallerCancel(t *testing.T) {
+	_, priv := keyPairFromSeed(97)
+	const peerCount = 9
+	release := make(chan struct{})
+	slowStarted := make(chan struct{}, 1)
+	var delivered atomic.Int32
+
+	peers := make([]BroadcastPeer, 0, peerCount)
+	for i := 0; i < peerCount; i++ {
+		peer := &mockBroadcastPeer{id: bytes.Repeat([]byte{byte(0x40 + i)}, 32)}
+		if i == peerCount-1 {
+			// The straggler: it has not finished when the quorum is reached.
+			peer.sendFunc = func(ctx context.Context, _ tl.Serializable) error {
+				select {
+				case slowStarted <- struct{}{}:
+				default:
+				}
+				select {
+				case <-release:
+					delivered.Add(1)
+
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		} else {
+			peer.sendFunc = func(context.Context, tl.Serializable) error {
+				delivered.Add(1)
+
+				return nil
+			}
+		}
+		peers = append(peers, peer)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result, err := SendBroadcastTwoStep(ctx, BroadcastTwoStepSendRequest{
+		Key:         priv,
+		Certificate: CertificateEmpty{},
+		LocalADNLID: bytes.Repeat([]byte{0x30}, 32),
+		Payload:     bytes.Repeat([]byte("payload"), 400),
+		PeerSet:     mockBroadcastPeerSet{peers: peers},
+	}, WithBroadcastTwoStepDate(112), WithBroadcastTwoStepQuorumMargin(1))
+	// What the caller does next, and the whole point of this test.
+	cancel()
+	if err != nil {
+		close(release)
+		t.Fatalf("fan-out failed: %v", err)
+	}
+	if result.Sent >= peerCount {
+		close(release)
+		t.Fatalf("sent = %d of %d: the fan-out waited for everyone and the quorum did nothing", result.Sent, peerCount)
+	}
+	if result.Pending != peerCount-len(result.Failed)-result.Sent {
+		close(release)
+		t.Fatalf("pending = %d, want %d unfinished recipients", result.Pending, peerCount-len(result.Failed)-result.Sent)
+	}
+
+	select {
+	case <-slowStarted:
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("the straggler was never called")
+	}
+	close(release)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if int(delivered.Load()) == peerCount {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("delivered to %d of %d peers: the straggler died with the caller's context",
+		delivered.Load(), peerCount)
+}

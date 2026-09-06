@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/tonutils-go/adnl/rldp"
@@ -15,6 +16,7 @@ const broadcastFECShortProbeInitialDelay = 25 * time.Millisecond
 const broadcastFECShortProbeMaxDelay = time.Second
 const broadcastFECSendErrorInitialDelay = 50 * time.Millisecond
 const broadcastFECSendErrorMaxDelay = 2 * time.Second
+const broadcastFECWorkerConcurrency = 16
 
 type BroadcastFECWorkerOption func(cfg *broadcastFECWorkerConfig)
 
@@ -50,6 +52,8 @@ type broadcastFECPeerWorker struct {
 
 	received  bool
 	completed bool
+	retired   bool
+	busy      atomic.Bool
 
 	nextSeqno        uint32
 	fastSeqnoTill    uint32
@@ -129,12 +133,39 @@ func NewBroadcastFECBroadcaster(sender *BroadcastFECSender, peerSet BroadcastPee
 }
 
 func (b *BroadcastFECBroadcaster) Run(ctx context.Context) error {
+	runCtx, cancel := context.WithCancel(ctx)
+	jobs := make(chan *broadcastFECPeerWorker, broadcastFECWorkerConcurrency)
+	errors := make(chan error, 1)
+	var workers sync.WaitGroup
+	for range broadcastFECWorkerConcurrency {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			for worker := range jobs {
+				err := worker.step(runCtx, b.sender, b.now())
+				worker.busy.Store(false)
+				if err != nil {
+					select {
+					case errors <- err:
+					default:
+					}
+					cancel()
+				}
+			}
+		}()
+	}
+	defer func() {
+		cancel()
+		close(jobs)
+		workers.Wait()
+		b.closeControls()
+	}()
+
 	ticker := time.NewTicker(b.tick)
 	defer ticker.Stop()
-	defer b.closeControls()
 
 	for {
-		if err := b.Tick(ctx); err != nil {
+		if err := b.tickWorkers(runCtx, jobs); err != nil {
 			return err
 		}
 
@@ -143,8 +174,13 @@ func (b *BroadcastFECBroadcaster) Run(ctx context.Context) error {
 		}
 
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-runCtx.Done():
+			select {
+			case err := <-errors:
+				return err
+			default:
+				return ctx.Err()
+			}
 		case <-ticker.C:
 		}
 	}
@@ -174,6 +210,13 @@ func (b *BroadcastFECBroadcaster) Done() bool {
 }
 
 func (b *BroadcastFECBroadcaster) Tick(ctx context.Context) error {
+	return b.tickWorkers(ctx, nil)
+}
+
+// Tick completes its selected sends synchronously. Run uses a bounded pool and
+// queues at most one step per peer, so a slow send cannot stall subsequent ticks
+// for other peers. The queue is nonblocking; a busy peer is revisited next tick.
+func (b *BroadcastFECBroadcaster) tickWorkers(ctx context.Context, jobs chan<- *broadcastFECPeerWorker) error {
 	b.tickMx.Lock()
 	defer b.tickMx.Unlock()
 
@@ -198,8 +241,21 @@ func (b *BroadcastFECBroadcaster) Tick(ctx context.Context) error {
 
 	for i := range workers {
 		worker := workers[(start+i)%len(workers)]
-		if err := worker.step(ctx, b.sender, b.now()); err != nil {
-			return err
+		if !worker.busy.CompareAndSwap(false, true) {
+			continue
+		}
+		if jobs != nil {
+			select {
+			case jobs <- worker:
+			default:
+				worker.busy.Store(false)
+			}
+		} else {
+			err := worker.step(ctx, b.sender, b.now())
+			worker.busy.Store(false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -269,6 +325,9 @@ func (b *BroadcastFECBroadcaster) ensureWorkers(peers []BroadcastPeer) []*broadc
 	b.mx.Unlock()
 
 	for _, worker := range stale {
+		worker.mx.Lock()
+		worker.retired = true
+		worker.mx.Unlock()
 		worker.closeControl()
 	}
 	for _, item := range workerPeers {
@@ -408,7 +467,10 @@ func (w *broadcastFECPeerWorker) step(ctx context.Context, sender *BroadcastFECS
 	w.mx.Lock()
 	defer w.mx.Unlock()
 
-	if w.completed || sender.Expired() {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if w.retired || w.completed || sender.Expired() {
 		return nil
 	}
 
@@ -542,13 +604,32 @@ func (w *broadcastFECPeerWorker) stepReceivedLocked(ctx context.Context, sender 
 
 func (w *broadcastFECPeerWorker) sendBatchLocked(ctx context.Context, sender *BroadcastFECSender, batch int, now time.Time) error {
 	for i := 0; i < batch; i++ {
-		part, err := sender.part(w.nextSeqno)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if w.retired || w.completed || w.received {
+			break
+		}
+		seqno := w.nextSeqno
+		w.mx.Unlock()
+		part, err := sender.part(seqno)
+		w.mx.Lock()
 		if err != nil {
-			return fmt.Errorf("failed to build part %d: %w", w.nextSeqno, err)
+			return fmt.Errorf("failed to build part %d: %w", seqno, err)
+		}
+		if err = ctx.Err(); err != nil {
+			return err
+		}
+		if w.retired || w.completed || w.received {
+			break
 		}
 
-		if err = SendPreparedBroadcast(ctx, w.peer, part.full, part.fullWire); err != nil {
-			return fmt.Errorf("failed to send part %d to peer %x: %w", w.nextSeqno, w.peer.ID(), err)
+		peer := w.peer
+		w.mx.Unlock()
+		err = SendPreparedBroadcast(ctx, peer, part.full, part.fullWire)
+		w.mx.Lock()
+		if err != nil {
+			return fmt.Errorf("failed to send part %d to peer %x: %w", seqno, peer.ID(), err)
 		}
 
 		if w.firstSentAt.IsZero() {
@@ -557,6 +638,9 @@ func (w *broadcastFECPeerWorker) sendBatchLocked(ctx context.Context, sender *Br
 		w.sendClock.OnSend(w.nextSeqno, now.UnixMilli())
 		w.sentFull++
 		w.nextSeqno++
+		if w.received {
+			w.observeDeliveredLocked(sender, now)
+		}
 	}
 	return nil
 }
@@ -575,12 +659,25 @@ func (w *broadcastFECPeerWorker) sendShortProbeLocked(ctx context.Context, sende
 		seqno = totalParts - 1
 	}
 
+	w.mx.Unlock()
 	part, err := sender.part(seqno)
+	w.mx.Lock()
 	if err != nil {
 		return fmt.Errorf("failed to build short probe %d: %w", seqno, err)
 	}
-	if err = SendPreparedBroadcast(ctx, w.peer, part.short, part.shortWire); err != nil {
-		return fmt.Errorf("failed to send short probe %d to peer %x: %w", seqno, w.peer.ID(), err)
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if w.retired || w.completed {
+		return nil
+	}
+
+	peer := w.peer
+	w.mx.Unlock()
+	err = SendPreparedBroadcast(ctx, peer, part.short, part.shortWire)
+	w.mx.Lock()
+	if err != nil {
+		return fmt.Errorf("failed to send short probe %d to peer %x: %w", seqno, peer.ID(), err)
 	}
 	return nil
 }
@@ -589,12 +686,12 @@ func (w *broadcastFECPeerWorker) observeDeliveredLocked(sender *BroadcastFECSend
 	if w.deliveredObserved {
 		return
 	}
-	w.deliveredObserved = true
 	w.rateCtrl.SetAppLimited(true)
 
 	if w.sentFull == 0 {
 		return
 	}
+	w.deliveredObserved = true
 
 	ms := now.UnixMilli()
 	if w.nextSeqno > 0 {

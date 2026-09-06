@@ -460,26 +460,25 @@ func serveConnStreams(ctx context.Context, conn *quicgo.Conn, admission *streamA
 			return
 		}
 
+		st, err := conn.AcceptStream(ctx)
+		if err != nil {
+			connection.releaseSlot()
+			return // connection closed
+		}
+
 		// A connection's first few concurrent streams never consult the shared pool,
 		// so no set of peers can starve another down to zero throughput.
-		lease := &streamAdmissionLease{connection: connection}
+		// Reserve shared slots only for accepted streams: an idle accept loop must
+		// not hold shared capacity after its earlier handlers have finished.
+		lease := &streamAdmissionLease{connection: connection, admission: admission}
 		if admission != nil && connection.activeStreams() > guaranteed {
 			if !admission.acquireSlot(ctx.Done()) {
+				st.CancelRead(1)
+				st.CancelWrite(1)
 				connection.releaseSlot()
 				return
 			}
-			lease.admission = admission
 			lease.globalSlot = true
-		} else if admission != nil {
-			// Still charge bytes globally even when the slot was guaranteed.
-			lease.admission = admission
-		}
-
-		st, err := conn.AcceptStream(ctx)
-		if err != nil {
-			lease.release()
-			connection.releaseSlot()
-			return // connection closed
 		}
 
 		go func() {
@@ -528,14 +527,8 @@ func serveAdmittedStream(
 // An idle deadline rather than one absolute budget: a peer that grants no
 // flow-control credit is still cut off, a slow one that keeps draining is not.
 func writeAnswerWithIdleDeadline(st *quicgo.Stream, answer []byte, limits Limits) error {
-	w := &idleDeadlineWriter{
-		st: st,
-		d: newIdleDeadline(
-			st.SetWriteDeadline,
-			limits.StreamWriteTimeout(),
-			limits.StreamTotalTimeout,
-		),
-	}
+	w := &idleDeadlineWriter{st: st}
+	w.d.init(st.SetWriteDeadline, limits.StreamWriteTimeout(), limits.StreamTotalTimeout)
 	defer func() { _ = st.SetWriteDeadline(time.Time{}) }()
 	return writeBoxedObjectVia(w, st, idQuicAnswer, answer)
 }
@@ -1066,14 +1059,15 @@ type idleDeadline struct {
 	hardStop time.Time
 }
 
-func newIdleDeadline(set func(time.Time) error, idle, total time.Duration) *idleDeadline {
-	d := &idleDeadline{set: set, idle: idle}
+func (d *idleDeadline) init(set func(time.Time) error, idle, total time.Duration) {
+	d.set = set
+	d.idle = idle
+
 	now := time.Now()
 	if total > 0 {
 		d.hardStop = now.Add(total)
 	}
 	d.arm(now)
-	return d
 }
 
 func (d *idleDeadline) arm(now time.Time) {
@@ -1095,7 +1089,7 @@ func (d *idleDeadline) progressed() {
 
 type idleDeadlineWriter struct {
 	st *quicgo.Stream
-	d  *idleDeadline
+	d  idleDeadline
 }
 
 func (w *idleDeadlineWriter) Write(p []byte) (int, error) {
@@ -1108,7 +1102,7 @@ func (w *idleDeadlineWriter) Write(p []byte) (int, error) {
 
 type idleDeadlineReader struct {
 	st *quicgo.Stream
-	d  *idleDeadline
+	d  idleDeadline
 }
 
 func (r *idleDeadlineReader) Read(p []byte) (int, error) {
@@ -1125,14 +1119,8 @@ func (r *idleDeadlineReader) Read(p []byte) (int, error) {
 // puts no timeout on inbound streams at all (quic-server.h), so an idle bound is
 // still stricter than C++.
 func readIncomingBoxedObject(st *quicgo.Stream, maxSize int64, limits Limits, lease *streamAdmissionLease) (uint32, []byte, error) {
-	r := &idleDeadlineReader{
-		st: st,
-		d: newIdleDeadline(
-			st.SetReadDeadline,
-			limits.StreamReadTimeout,
-			limits.StreamTotalTimeout,
-		),
-	}
+	r := &idleDeadlineReader{st: st}
+	r.d.init(st.SetReadDeadline, limits.StreamReadTimeout, limits.StreamTotalTimeout)
 	id, payload, err := readBoxedObjectAdmitted(r, maxSize, lease)
 	if err == nil {
 		_ = st.SetReadDeadline(time.Time{})
@@ -1198,14 +1186,12 @@ func readBoxedObjectAdmitted(r io.Reader, maxSize int64, lease *streamAdmissionL
 	if pad > 0 {
 		// The padding must arrive, but its content is not inspected - matching
 		// tl.fromBytes and td::TlParser::fetch_string.
-		var padding [3]byte
-		if _, err := io.ReadFull(r, padding[:int(pad)]); err != nil {
+		if _, err := io.ReadFull(r, header[:int(pad)]); err != nil {
 			return 0, nil, err
 		}
 	}
 
-	var extra [1]byte
-	n, err := r.Read(extra[:])
+	n, err := r.Read(header[:1])
 	if n > 0 {
 		return 0, nil, errors.New("quic: trailing bytes after boxed object")
 	}

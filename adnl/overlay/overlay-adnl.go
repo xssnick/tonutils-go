@@ -622,18 +622,16 @@ func (a *ADNLOverlayWrapper) sendFECControlMessage(msg tl.Serializable) error {
 	return nil
 }
 
-func (a *ADNLOverlayWrapper) relaySimpleBroadcast(ctx context.Context, sourcePeerID []byte, msg *Broadcast) error {
+func (a *ADNLOverlayWrapper) relaySimpleBroadcast(sourcePeerID []byte, msg *Broadcast) error {
 	relayCfg := a.broadcastSimpleRelayConfig()
 	if relayCfg.peerSet == nil {
 		return nil
 	}
 
+	peers := relayCfg.peerSet.Peers()
+	ops := make([]broadcastFECRelayOp, 0, len(peers))
 	var prepared *PreparedBroadcastMessage
-	var prepareErr error
-	preparedAttempted := false
-	var sendErr error
-	var sent, failed uint64
-	for _, peer := range relayCfg.peerSet.Peers() {
+	for _, peer := range peers {
 		if peer == nil {
 			continue
 		}
@@ -641,41 +639,20 @@ func (a *ADNLOverlayWrapper) relaySimpleBroadcast(ctx context.Context, sourcePee
 		if len(peerID) == 0 || bytes.Equal(peerID, sourcePeerID) || bytes.Equal(peerID, relayCfg.localID) {
 			continue
 		}
-
-		usesPrepared := false
-		switch peer.(type) {
-		case PreparedBroadcastMessagePeer, PreparedBroadcastPeer:
-			usesPrepared = true
-		}
-		if usesPrepared && !preparedAttempted {
-			prepared, prepareErr = PrepareBroadcastMessage(msg)
-			preparedAttempted = true
-		}
-
-		var err error
-		if usesPrepared {
-			err = prepareErr
-			if err == nil {
-				err = SendPreparedBroadcast(ctx, peer, msg, prepared)
+		if prepared == nil {
+			var err error
+			prepared, err = PrepareBroadcastMessage(msg)
+			if err != nil {
+				return err
 			}
-		} else {
-			err = peer.SendCustomMessage(ctx, msg)
 		}
-		if err != nil {
-			failed++
-			if sendErr == nil {
-				sendErr = fmt.Errorf("failed to relay broadcast to peer %x: %w", peerID, err)
-			}
-			continue
-		}
-		sent++
+		ops = append(ops, broadcastFECRelayOp{peer: peer, msg: msg, wire: prepared})
 	}
-	relayCfg.state.addRelayStats(false, sent, failed)
-	return sendErr
+	return a.enqueueBroadcastRelayOps(false, ops)
 }
 
-func (a *ADNLOverlayWrapper) checkBroadcastSource(source any, certificate any, dataSize uint32, isFEC bool) (CertCheckResult, []byte, error) {
-	srcID, err := tl.Hash(source)
+func (a *ADNLOverlayWrapper) checkBroadcastSource(source keys.PublicKeyED25519, certificate any, dataSize uint32, isFEC bool) (CertCheckResult, []byte, error) {
+	srcID, err := tl.Hash(&source)
 	if err != nil {
 		return CertCheckResultForbidden, nil, fmt.Errorf("source key id serialize failed: %w", err)
 	}
@@ -796,7 +773,7 @@ func (a *ADNLOverlayWrapper) processBroadcast(t *Broadcast, sourcePeerID []byte)
 		}
 	}()
 
-	checkRes, srcID, err := a.checkBroadcastSource(t.Source, t.Certificate, uint32(len(t.Data)), false)
+	checkRes, srcID, err := a.checkBroadcastSource(sourceKey, t.Certificate, uint32(len(t.Data)), false)
 	if err != nil {
 		return err
 	}
@@ -866,7 +843,7 @@ func (a *ADNLOverlayWrapper) processBroadcast(t *Broadcast, sourcePeerID []byte)
 	if !a.IsActive() {
 		return nil
 	}
-	return a.relaySimpleBroadcast(context.Background(), sourcePeerID, t)
+	return a.relaySimpleBroadcast(sourcePeerID, t)
 }
 
 func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
@@ -997,7 +974,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		break
 	}
 
-	checkRes, srcID, err := a.checkBroadcastSource(t.Source, t.Certificate, t.DataSize, true)
+	checkRes, srcID, err := a.checkBroadcastSource(sourceKey, t.Certificate, t.DataSize, true)
 	if err != nil {
 		return err
 	}
@@ -1195,11 +1172,11 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	}
 
 	if relayCfg.enabled && (stream.trusted || stream.checked) {
-		relayOps = stream.relayPartOpsLocked(t.Seqno, relayPeers, relayCfg.localID, true)
+		relayOps = stream.relayPartOpsLocked(nil, t.Seqno, relayPeers, relayCfg.localID, true)
 	}
 	stream.mx.Unlock()
 
-	relayErr := sendBroadcastFECRelayOps(context.Background(), relayCfg.state, relayOps)
+	relayErr := a.enqueueBroadcastRelayOps(true, relayOps)
 
 	if finished {
 		if completed {
@@ -1275,7 +1252,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 		stream.finishAdmissionLocked(disposition)
 		stream.mx.Unlock()
 		if relayCfg.enabled {
-			if err = sendBroadcastFECRelayOps(context.Background(), relayCfg.state, drainOps); err != nil && relayErr == nil {
+			if err = a.enqueueBroadcastRelayOps(true, drainOps); err != nil && relayErr == nil {
 				relayErr = err
 			}
 		}
@@ -1399,7 +1376,7 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		if !bytes.Equal(calcBroadcastFECPartDataHash(partData), t.PartDataHash) {
 			return fmt.Errorf("wrong part data hash")
 		}
-		checkRes, _, err := a.checkBroadcastSource(t.Source, t.Certificate, fec.DataSize, true)
+		checkRes, _, err := a.checkBroadcastSource(sourceKey, t.Certificate, fec.DataSize, true)
 		if err != nil {
 			return err
 		}
@@ -1455,11 +1432,11 @@ func (a *ADNLOverlayWrapper) processFECBroadcastShort(t *BroadcastFECShort) erro
 		stream.addReceivedPart(seqno, t.PartDataHash)
 		var relayOps []broadcastFECRelayOp
 		if relayCfg.enabled && (trusted || stream.checked) {
-			relayOps = stream.relayPartOpsLocked(seqno, relayPeers, relayCfg.localID, true)
+			relayOps = stream.relayPartOpsLocked(nil, seqno, relayPeers, relayCfg.localID, true)
 		}
 		stream.mx.Unlock()
 
-		relayErr := sendBroadcastFECRelayOps(context.Background(), relayCfg.state, relayOps)
+		relayErr := a.enqueueBroadcastRelayOps(true, relayOps)
 		if completed {
 			if err = a.sendFECControlMessage(FECCompleted{Hash: t.BroadcastHash}); err != nil {
 				return err

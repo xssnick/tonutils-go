@@ -256,6 +256,9 @@ type merkleProofPruneCacheEntry struct {
 
 type merkleProofPruneBuildState struct {
 	shouldPrune merkleProofPruneFunc
+	// readSet selects kept cells and supplies their loaded bodies in one lookup.
+	// Other proof builders keep their independent prune and resolver callbacks.
+	readSet *ReadSet
 	// wantApplied makes the same walk also assemble the destination root as
 	// applying the update would rebuild it: every pruned boundary becomes the
 	// source subtree the callback handed back, and every cell above one is
@@ -335,26 +338,35 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 		return built, applied, nil
 	}
 
-	if s.shouldPrune != nil {
-		source, pruned, err := s.shouldPrune(c, merkleDepth, hash)
+	var loaded, source *Cell
+	var pruned bool
+	if s.readSet != nil {
+		var read bool
+		loaded, read = s.readSet.Contains(hash)
+		pruned = !read
+	} else if s.shouldPrune != nil {
+		var err error
+		source, pruned, err = s.shouldPrune(c, merkleDepth, hash)
 		if err != nil {
 			return nil, nil, err
 		}
-		if pruned {
-			built, err := s.prunedBranch(c, merkleDepth+1)
-			if err != nil {
-				return nil, nil, err
-			}
-			s.shareBoundary(c, key, built)
-			s.cacheBuilt(key, built, source)
-			return built, source, nil
+	}
+	if pruned {
+		built, err := s.prunedBranch(c, merkleDepth+1)
+		if err != nil {
+			return nil, nil, err
 		}
+		s.shareBoundary(c, key, built)
+		s.cacheBuilt(key, built, source)
+		return built, source, nil
 	}
 
-	loaded := c
-	if s.resolveLoaded != nil {
-		if recorded := s.resolveLoaded(hash); recorded != nil {
-			loaded = recorded
+	if loaded == nil {
+		loaded = c
+		if s.resolveLoaded != nil {
+			if recorded := s.resolveLoaded(hash); recorded != nil {
+				loaded = recorded
+			}
 		}
 	}
 	if loaded.IsLazy() || loaded == c {
@@ -422,26 +434,35 @@ func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*C
 		return built, applied, nil
 	}
 
-	if s.shouldPrune != nil {
-		source, pruned, err := s.shouldPrune(c, merkleDepth, hash)
+	var loaded, source *Cell
+	var pruned bool
+	if s.readSet != nil {
+		var read bool
+		loaded, read = s.readSet.Contains(hash)
+		pruned = !read
+	} else if s.shouldPrune != nil {
+		var err error
+		source, pruned, err = s.shouldPrune(c, merkleDepth, hash)
 		if err != nil {
 			return nil, nil, err
 		}
-		if pruned {
-			built, err := s.prunedBranch(c, merkleDepth+1)
-			if err != nil {
-				return nil, nil, err
-			}
-			s.shareBoundary(c, key, built)
-			s.cacheBuilt(key, built, source)
-			return built, source, nil
+	}
+	if pruned {
+		built, err := s.prunedBranch(c, merkleDepth+1)
+		if err != nil {
+			return nil, nil, err
 		}
+		s.shareBoundary(c, key, built)
+		s.cacheBuilt(key, built, source)
+		return built, source, nil
 	}
 
-	loaded := c
-	if s.resolveLoaded != nil {
-		if recorded := s.resolveLoaded(hash); recorded != nil {
-			loaded = recorded
+	if loaded == nil {
+		loaded = c
+		if s.resolveLoaded != nil {
+			if recorded := s.resolveLoaded(hash); recorded != nil {
+				loaded = recorded
+			}
 		}
 	}
 	if loaded.IsLazy() || loaded == c {
@@ -606,6 +627,7 @@ func (s *merkleProofPruneBuildState) parallelTask(workers, hint int) *merkleProo
 	}
 	task.state = merkleProofPruneBuildState{
 		shouldPrune:         s.shouldPrune,
+		readSet:             s.readSet,
 		wantApplied:         s.wantApplied,
 		resolveLoaded:       s.resolveLoaded,
 		memoHint:            hint,

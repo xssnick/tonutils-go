@@ -211,7 +211,7 @@ func TestBroadcastFECRelaySharesPreparedPartAcrossPeers(t *testing.T) {
 
 	left := &recordingPreparedBroadcastPeer{id: bytes.Repeat([]byte{0x21}, 32)}
 	right := &recordingPreparedBroadcastPeer{id: bytes.Repeat([]byte{0x22}, 32)}
-	ops := stream.relayPartOpsLocked(0, []BroadcastPeer{left, right}, bytes.Repeat([]byte{0x23}, 32), true)
+	ops := stream.relayPartOpsLocked(nil, 0, []BroadcastPeer{left, right}, bytes.Repeat([]byte{0x23}, 32), true)
 	if err = sendBroadcastFECRelayOps(t.Context(), nil, ops); err != nil {
 		t.Fatalf("relay: %v", err)
 	}

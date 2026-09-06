@@ -182,6 +182,11 @@ func (w *dictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *Tra
 		return fmt.Errorf("invalid dictionary diff alignment")
 	}
 
+	// Alignment may revisit this root while consuming its label. Keep the
+	// validated resident cell, with the path trace still carried separately,
+	// so those logical loads do not resolve the same lazy boundary again.
+	old, new = oldNode.cell, newNode.cell
+
 	oldLabel := oldNode.labelSlice()
 	newLabel := newNode.labelSlice()
 	oldEffective := oldLabel

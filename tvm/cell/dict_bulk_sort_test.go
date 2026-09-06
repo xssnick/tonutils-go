@@ -154,13 +154,8 @@ func TestBulkBuildFallsBackWhenArenaIsSpent(t *testing.T) {
 	} {
 		sorted := append([]DictBulkKV(nil), items...)
 		sortDictBulkItems(sorted, 256)
-		keyCells := make([]Cell, len(sorted))
-		for i := range sorted {
-			keyCells[i] = Cell{data: sorted[i].Key, bitsSz: 256}
-		}
-
 		d := NewDict(256)
-		root, err := d.buildFromSorted(sorted, keyCells, 0, arena)
+		root, err := d.buildFromSorted(sorted, 0, arena)
 		if err != nil {
 			t.Fatalf("build with a spent arena: %v", err)
 		}

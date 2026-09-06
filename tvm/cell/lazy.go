@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"unsafe"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
@@ -161,16 +162,59 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 }
 
 func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
-	meta := c.meta
-	if meta == nil || meta.lazyLoader == nil {
-		return nil, ErrLazyLoaderNotSet
-	}
-
-	loaded, err := meta.lazyLoader(c.rawCell().HashKey())
+	loaded, err := loadLazyPrunedRefData(c)
 	if err != nil {
 		return nil, err
 	}
 	return resolveLoadedLazyRefWithTrace(c, loaded, trace)
+}
+
+// loadLazyPrunedRefData reads the represented cell before attaching the
+// caller's virtual level or trace, so operation-local caches can share raw data.
+func loadLazyPrunedRefData(c *Cell) (*Cell, error) {
+	raw := c.rawCell()
+	meta := raw.meta
+	if meta == nil {
+		return nil, ErrLazyLoaderNotSet
+	}
+	if meta.lazyFlags&cellLazyBOC != 0 {
+		// Only bocLazyCellMeta allocations carry this tag; ordinary metadata
+		// and virtual wrappers never pass through this prefix conversion.
+		boc := (*bocLazyCellMeta)(unsafe.Pointer(meta))
+		return boc.loader.loadDataCell(int(boc.index))
+	}
+	if meta.lazyLoader == nil {
+		return nil, ErrLazyLoaderNotSet
+	}
+	return meta.lazyLoader(raw.HashKey())
+}
+
+// loadLazyPrunedRefCached shares raw cell bodies within one traversal while
+// validating each boundary and attaching its own virtual level and trace.
+func loadLazyPrunedRefCached(c *Cell, cache *cellLoadCache) (*Cell, error) {
+	if !c.hasLazyLoader() {
+		return nil, ErrLazyLoaderNotSet
+	}
+
+	hash := c.rawCell().HashKey()
+	data := cache.lookup(hash)
+	missing := data == nil
+	if data == nil {
+		var err error
+		data, err = loadLazyPrunedRefData(c)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Equal hashes must not hide malformed depths or a different view.
+	loaded, err := resolveLoadedLazyRefWithTrace(c, data, c.Trace())
+	if err != nil {
+		return nil, err
+	}
+	if missing {
+		cache.store(hash, data.rawCell())
+	}
+	return loaded, nil
 }
 
 // resolveLoadedLazyRefWithTrace binds an already loaded cell to a lazy
@@ -187,7 +231,7 @@ func resolveLoadedLazyRefWithTrace(c, loaded *Cell, trace *Trace) (*Cell, error)
 	}
 	raw := c.rawCell()
 	loaded = loaded.rawCell()
-	if !meta.skipLazyRefValidation {
+	if meta.lazyFlags&cellLazySkipValidation == 0 {
 		if err := validateLoadedLazyRef(raw, loaded); err != nil {
 			return nil, err
 		}
@@ -234,7 +278,8 @@ func (c *Cell) PrewarmRecursive(depth int) (*Cell, error) {
 		return nil, ErrNegative
 	}
 
-	return c.prewarmRecursive(depth, depth == 0, map[prewarmRecursiveKey]*Cell{})
+	var loaded cellLoadCache
+	return c.prewarmRecursive(depth, depth == 0, map[prewarmRecursiveKey]*Cell{}, &loaded)
 }
 
 type prewarmRecursiveKey struct {
@@ -243,14 +288,18 @@ type prewarmRecursiveKey struct {
 	unlimited bool
 }
 
-func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecursiveKey]*Cell) (*Cell, error) {
+func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecursiveKey]*Cell, loadedCells *cellLoadCache) (*Cell, error) {
 	if c == nil {
 		return nil, nil
 	}
 
-	loaded, err := c.load()
-	if err != nil {
-		return nil, err
+	loaded := c
+	var err error
+	if c.IsLazy() {
+		loaded, err = loadLazyPrunedRefCached(c, loadedCells)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	hash := loaded.HashKey()
@@ -290,7 +339,7 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 		if err != nil {
 			return nil, err
 		}
-		refs[i], err = ref.prewarmRecursive(nextDepth, unlimited, cache)
+		refs[i], err = ref.prewarmRecursive(nextDepth, unlimited, cache, loadedCells)
 		if err != nil {
 			return nil, err
 		}
@@ -310,7 +359,7 @@ func materializeLoadedCellWithRefs(c *Cell, refs []*Cell) (*Cell, error) {
 	out.clearVirtualization()
 	if out.meta != nil {
 		out.meta.lazyLoader = nil
-		out.meta.skipLazyRefValidation = false
+		out.meta.lazyFlags = 0
 		out.clearMetaIfEmpty()
 	}
 	if err := out.refreshLevelMaskForRefs(); err != nil {
@@ -327,4 +376,9 @@ func (c *Cell) cellLazyLoader() LazyCellLoader {
 		return nil
 	}
 	return c.meta.lazyLoader
+}
+
+func (c *Cell) hasLazyLoader() bool {
+	meta := c.rawCell().meta
+	return meta != nil && (meta.lazyLoader != nil || meta.lazyFlags&cellLazyBOC != 0)
 }

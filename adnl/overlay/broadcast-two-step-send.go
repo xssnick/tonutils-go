@@ -487,6 +487,26 @@ func sendBroadcastTwoStepParallel(
 	quorum int,
 	message func(int) (preparedTwoStepBroadcastMessage, error),
 ) []broadcastTwoStepPeerResult {
+	// A fan-out released at quorum outlives the call that started it, so the
+	// stragglers get a context the caller's cancellation cannot reach — only
+	// its deadline. The caller cancels as soon as this returns (see the
+	// candidate sender in the validator), and a peer whose send dies there
+	// never receives its symbol at all: it then has none to relay, and the
+	// second step of this broadcast is made of exactly those relays. Measured
+	// on the test stand before this was detached: eleven of fourteen committee
+	// members were reached by the source, the other three had to reconstruct
+	// the candidate from relays alone, and the certificates for a leader's
+	// window came in progressively later until the committee skipped its tail.
+	sendCtx := ctx
+	var release context.CancelFunc
+	if quorum > 0 && quorum < len(peers) {
+		if deadline, ok := ctx.Deadline(); ok {
+			sendCtx, release = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		} else {
+			sendCtx, release = context.WithCancel(context.WithoutCancel(ctx))
+		}
+	}
+
 	// Buffered for every peer: a fan-out that returns at quorum leaves its
 	// stragglers running, and they have to be able to finish with nobody
 	// reading. Results are collected in completion order; the only consumer
@@ -499,21 +519,25 @@ func sendBroadcastTwoStepParallel(
 		slots = make(chan struct{}, concurrency)
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(len(peers))
 	for index, peer := range peers {
 		if slots != nil {
 			slots <- struct{}{}
 		}
 
 		go func(index int, peer BroadcastPeer) {
+			defer wg.Done()
+
 			peerID := append([]byte(nil), peer.ID()...)
 			msg, err := message(index)
 			if err == nil {
 				if peerSendTimeout > 0 {
-					peerCtx, cancel := context.WithTimeout(ctx, peerSendTimeout)
+					peerCtx, cancel := context.WithTimeout(sendCtx, peerSendTimeout)
 					err = SendPreparedBroadcast(peerCtx, peer, msg.message, msg.body)
 					cancel()
 				} else {
-					err = SendPreparedBroadcast(ctx, peer, msg.message, msg.body)
+					err = SendPreparedBroadcast(sendCtx, peer, msg.message, msg.body)
 				}
 			}
 
@@ -522,6 +546,14 @@ func sendBroadcastTwoStepParallel(
 			}
 			done <- broadcastTwoStepPeerResult{peerID: peerID, err: err}
 		}(index, peer)
+	}
+	if release != nil {
+		// Held until the last straggler is done, so the detached context is
+		// released rather than left to its deadline.
+		go func() {
+			wg.Wait()
+			release()
+		}()
 	}
 
 	results := make([]broadcastTwoStepPeerResult, 0, len(peers))

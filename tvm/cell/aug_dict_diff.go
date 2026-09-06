@@ -282,6 +282,10 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 		return fmt.Errorf("invalid dictionary diff alignment")
 	}
 
+	// Realigning labels may revisit a root. Retain its validated resident
+	// cell, with the original path trace still supplied to each logical parse.
+	old, new = oldNode.cell, newNode.cell
+
 	oldLabel := oldNode.labelSlice()
 	newLabel := newNode.labelSlice()
 	oldEffective := oldLabel
@@ -343,8 +347,9 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 			return w.emit(oldValue, true, newValue, true)
 		}
 
+		var loadedChildren [2]*Cell
 		if w.checkNew {
-			if err = w.checker.fork(newNode, remaining-common, w.newAug); err != nil {
+			if err = w.checker.fork(newNode, remaining-common, w.newAug, &loadedChildren); err != nil {
 				return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 			}
 		}
@@ -360,6 +365,9 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 			newChildren[child], newChildTraces[child], err = newNode.refAndTrace(child)
 			if err != nil {
 				return fmt.Errorf("failed to load new dictionary child: %w", err)
+			}
+			if loadedChildren[child] != nil {
+				newChildren[child] = loadedChildren[child]
 			}
 		}
 		if w.parallelism > 1 && depth+common+1 >= w.frontierBits {
@@ -403,8 +411,9 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 		return w.node(oldRight, oldRightTrace, new, newTrace, nextRemaining, 0, skipNew+common+1)
 	}
 
+	var loadedChildren [2]*Cell
 	if w.checkNew {
-		if err = w.checker.fork(newNode, remaining-common, w.newAug); err != nil {
+		if err = w.checker.fork(newNode, remaining-common, w.newAug, &loadedChildren); err != nil {
 			return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 		}
 	}
@@ -415,6 +424,9 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 	newRight, newRightTrace, err := newNode.refAndTrace(1)
 	if err != nil {
 		return fmt.Errorf("failed to load new dictionary right child: %w", err)
+	}
+	if loadedChildren[0] != nil {
+		newLeft, newRight = loadedChildren[0], loadedChildren[1]
 	}
 
 	nextRemaining := remaining - common - 1
@@ -504,8 +516,9 @@ func (w *augDictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, ol
 		return w.emit(Slice{}, false, value, true)
 	}
 
+	var loadedChildren [2]*Cell
 	if !oldOnly && w.checkNew {
-		if err = w.checker.fork(node, remaining-node.labelLen, w.newAug); err != nil {
+		if err = w.checker.fork(node, remaining-node.labelLen, w.newAug, &loadedChildren); err != nil {
 			return fmt.Errorf("invalid new dictionary fork augmentation: %w", err)
 		}
 	}
@@ -516,6 +529,9 @@ func (w *augDictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, ol
 		ref, childTrace, err := node.refAndTrace(child)
 		if err != nil {
 			return fmt.Errorf("failed to load dictionary child: %w", err)
+		}
+		if loadedChildren[child] != nil {
+			ref = loadedChildren[child]
 		}
 		err = w.oneSide(ref, childTrace, nextRemaining, oldOnly)
 		if err != nil {
@@ -570,7 +586,7 @@ func (c *augmentedNodeChecker) leaf(node fixedDictNode, aug Augmentation) error 
 	return nil
 }
 
-func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augmentation) error {
+func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augmentation, loadedChildren *[2]*Cell) error {
 	left, leftTrace, err := c.child(node, 0)
 	if err != nil {
 		return err
@@ -587,6 +603,11 @@ func (c *augmentedNodeChecker) fork(node fixedDictNode, remaining uint, aug Augm
 	c.right, err = extractAugmentedNodeExtraViewWithTraceScratch(right, rightTrace, childRemaining, aug.SkipExtra, &c.scratch)
 	if err != nil {
 		return err
+	}
+	if loadedChildren != nil && (left.IsLazy() || right.IsLazy()) {
+		// Only lazy children need a handoff to avoid another storage lookup.
+		// Capture before the augmentation callback consumes its borrowed views.
+		*loadedChildren = [2]*Cell{c.left.cell, c.right.cell}
 	}
 
 	stored := node.loader

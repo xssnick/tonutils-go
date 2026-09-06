@@ -141,7 +141,7 @@ func replayAugDiffNodeTo(node *augDiffReplayNode, trace *Trace, aug Augmentation
 		if err = checker.leaf(checked, aug); err != nil {
 			return fmt.Errorf("invalid changed leaf augmentation: %w", err)
 		}
-	} else if err = checker.fork(checked, node.remaining-checked.labelLen, aug); err != nil {
+	} else if err = checker.fork(checked, node.remaining-checked.labelLen, aug, nil); err != nil {
 		return fmt.Errorf("invalid changed fork augmentation: %w", err)
 	}
 
@@ -190,7 +190,7 @@ func replayAugDiffNode(node *augDiffReplayNode, trace *Trace, aug Augmentation, 
 		if err = checker.leaf(checked, aug); err != nil {
 			return fmt.Errorf("invalid changed leaf augmentation: %w", err)
 		}
-	} else if err = checker.fork(checked, node.remaining-checked.labelLen, aug); err != nil {
+	} else if err = checker.fork(checked, node.remaining-checked.labelLen, aug, nil); err != nil {
 		return fmt.Errorf("invalid changed fork augmentation: %w", err)
 	}
 

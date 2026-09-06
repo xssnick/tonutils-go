@@ -3,7 +3,6 @@ package overlay
 import (
 	"bytes"
 	"container/list"
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -557,16 +556,19 @@ func (s *fecBroadcastStream) addRelayPart(seqno uint32, full *BroadcastFEC, broa
 	return nil
 }
 
-func (s *fecBroadcastStream) relayPartOpsLocked(seqno uint32, peers []BroadcastPeer, localID []byte, erase bool) []broadcastFECRelayOp {
+func (s *fecBroadcastStream) relayPartOpsLocked(ops []broadcastFECRelayOp, seqno uint32, peers []BroadcastPeer, localID []byte, erase bool) []broadcastFECRelayOp {
 	part, ok := s.parts[seqno]
 	if !ok {
-		return nil
+		return ops
 	}
 	if erase {
 		delete(s.parts, seqno)
 	}
 
-	ops := make([]broadcastFECRelayOp, 0, len(peers))
+	if ops == nil {
+		ops = make([]broadcastFECRelayOp, 0, len(peers))
+	}
+
 	for _, peer := range peers {
 		if peer == nil {
 			continue
@@ -607,26 +609,7 @@ func (s *fecBroadcastStream) drainRelayPartOpsLocked(peers []BroadcastPeer, loca
 
 	ops := make([]broadcastFECRelayOp, 0, len(s.parts)*len(peers))
 	for seqno := range s.parts {
-		ops = append(ops, s.relayPartOpsLocked(seqno, peers, localID, true)...)
+		ops = s.relayPartOpsLocked(ops, seqno, peers, localID, true)
 	}
 	return ops
-}
-
-func sendBroadcastFECRelayOps(ctx context.Context, state *BroadcastFECRelayState, ops []broadcastFECRelayOp) error {
-	var sendErr error
-	var sent, failed uint64
-	for _, op := range ops {
-		if err := SendPreparedBroadcast(ctx, op.peer, op.msg, op.wire); err != nil {
-			failed++
-			if sendErr == nil {
-				sendErr = fmt.Errorf("failed to relay FEC part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
-			}
-			continue
-		}
-		sent++
-	}
-	if state != nil {
-		state.addRelayStats(true, sent, failed)
-	}
-	return sendErr
 }

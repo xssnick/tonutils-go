@@ -19,16 +19,14 @@ func (rs *ReadSet) Proof() (*Cell, error) {
 		return nil, fmt.Errorf("failed to build read set proof: level is not 0")
 	}
 
-	body, err := buildMerkleProofBodyByPruneFuncResolved(rs.source, func(
-		_ *Cell,
-		_ int,
-		hash Hash,
-	) (*Cell, bool, error) {
-		_, read := rs.Contains(hash)
-		return nil, !read, nil
+	state := merkleProofPruneBuildState{
+		readSet: rs,
+		arena:   &proofCellArena{},
 		// The proof keeps exactly the recorded cells, so the record's own size
 		// is not an estimate of the memo's population — it is the population.
-	}, rs.recordedCell, 0, rs.Size())
+		memoHint: rs.Size(),
+	}
+	body, _, err := state.build(rs.source, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build read set proof: %w", err)
 	}
@@ -67,17 +65,14 @@ func (rs *ReadSet) ProofOf(root *Cell) (*Cell, error) {
 		return nil, fmt.Errorf("failed to build read set proof: level is not 0")
 	}
 
-	body, err := buildMerkleProofBodyByPruneFuncResolved(source, func(
-		_ *Cell,
-		_ int,
-		hash Hash,
-	) (*Cell, bool, error) {
-		_, read := rs.Contains(hash)
-		return nil, !read, nil
+	state := merkleProofPruneBuildState{
+		readSet: rs,
+		arena:   &proofCellArena{},
 		// No estimate here, unlike Proof: this walk covers one subtree of the
 		// source, so the record's size says nothing about how much of it the
 		// walk will reach and would size the memo for the whole set.
-	}, rs.recordedCell, 0, 0)
+	}
+	body, _, err := state.build(source, 0)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build read set proof: %w", err)
 	}

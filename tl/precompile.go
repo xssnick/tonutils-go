@@ -274,6 +274,11 @@ type structInfo struct {
 	// fixedSize distinguishes an empty fixed struct from a variable-sized one.
 	fixedWireSize uint64
 	fixedSize     bool
+	// The suffix can be reserved using only fixed sizes and actual byte/string
+	// lengths, without running manual serializers or inspecting wire counters.
+	appendSizeStart      int
+	appendFixedSize      int
+	appendVariableFields []*fieldInfo
 }
 
 type fieldInfo struct {
@@ -397,7 +402,15 @@ func initialSerializeCapacity(v Serializable, boxed bool) int {
 	}
 
 	si := _structInfoTableByType[tp]
-	if si == nil || !si.fixedSize {
+	if si == nil {
+		return DefaultSerializeBufferSize
+	}
+	if si.appendSizeStart == 0 && len(si.appendVariableFields) > 0 {
+		// appendPrecompiled reserves the complete object after obtaining its
+		// address, so do not allocate a temporary default-sized buffer first.
+		return 0
+	}
+	if !si.fixedSize {
 		return DefaultSerializeBufferSize
 	}
 
@@ -524,6 +537,13 @@ func appendPrecompiled(dst []byte, ptr unsafe.Pointer, t *structInfo, boxed bool
 	}
 
 	original := dst
+	if t.appendSizeStart == 0 && len(t.appendVariableFields) > 0 {
+		var err error
+		if dst, err = growAppendStruct(dst, ptr, t, boxed); err != nil {
+			return original, err
+		}
+	}
+
 	if boxed {
 		if t.id == nil {
 			panic("boxed while id not defined")
@@ -853,6 +873,67 @@ func precomputeMinimumWireSizes() {
 	for _, si := range infos {
 		si.fixedWireSize, si.fixedSize = calculateFixedWireSize(si, map[*structInfo]bool{}, fixedSizeMemo)
 	}
+
+	for _, si := range infos {
+		si.appendSizeStart = len(si.fields)
+		si.appendFixedSize = 0
+		si.appendVariableFields = si.appendVariableFields[:0]
+		if si.manualSerialize {
+			continue
+		}
+
+		for i := len(si.fields) - 1; i >= 0; i-- {
+			field := si.fields[i]
+			if field.hasFlags {
+				break
+			}
+			if field.typ == _ExecuteTypeBytes || field.typ == _ExecuteTypeString {
+				si.appendVariableFields = append(si.appendVariableFields, field)
+			} else {
+				size, fixed := calculateFixedFieldWireSize(field, map[*structInfo]bool{}, fixedSizeMemo)
+				if !fixed || size > uint64(int(^uint(0)>>1)-si.appendFixedSize) {
+					break
+				}
+				si.appendFixedSize += int(size)
+			}
+			si.appendSizeStart = i
+		}
+	}
+}
+
+func growAppendStruct(dst []byte, base unsafe.Pointer, si *structInfo, boxed bool) ([]byte, error) {
+	maxInt := int(^uint(0) >> 1)
+	total := si.appendFixedSize
+	if boxed {
+		if total > maxInt-4 {
+			return nil, fmt.Errorf("TL struct encoded size overflows int")
+		}
+		total += 4
+	}
+
+	for _, field := range si.appendVariableFields {
+		ptr := unsafe.Add(base, field.offset)
+		var dataLen int
+		if field.typ == _ExecuteTypeBytes {
+			dataLen = len(*(*[]byte)(ptr))
+		} else {
+			dataLen = len(*(*string)(ptr))
+		}
+
+		size, err := tlBytesEncodedSize(dataLen)
+		if err != nil {
+			return nil, fmt.Errorf("failed to reserve field %s: %w", field.String(), err)
+		}
+		if total > maxInt-size {
+			return nil, fmt.Errorf("TL struct encoded size overflows int")
+		}
+		total += size
+	}
+
+	if len(dst) > maxInt-total {
+		return nil, fmt.Errorf("TL struct encoded size overflows destination length")
+	}
+	return growAppend(dst, total), nil
 }
 
 func fixedBytesResult(data []byte, noCopy bool) []byte {
@@ -1040,7 +1121,8 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 				ptr = nw
 			} else if structFlags&_StructFlagsInterface != 0 {
 				if asBytes {
-					var list = make([]Serializable, 0, 2)
+					var first Serializable
+					var list []Serializable
 					// array of types
 					for len(source) > 0 {
 						if source, info, err = parseBoxedType(source); err != nil {
@@ -1055,18 +1137,23 @@ func executeParse(buf []byte, base unsafe.Pointer, si *structInfo, noCopy bool) 
 						if source, err = parsePrecompiled(e.UnsafePointer(), info, false, source, noCopy); err != nil {
 							return nil, err
 						}
-						list = append(list, e.Elem().Interface())
+						value := e.Elem().Interface()
+						if first == nil {
+							first = value
+						} else if list == nil {
+							list = []Serializable{first, value}
+						} else {
+							list = append(list, value)
+						}
 					}
 
-					switch len(list) {
-					case 1:
-						*(*Serializable)(ptr) = list[0]
-					case 0:
+					switch {
+					case first == nil:
 						return nil, fmt.Errorf("empty bytes slice cannot be parse as struct interface")
+					case list == nil:
+						*(*Serializable)(ptr) = first
 					default:
-						var val Serializable
-						val = list
-						*(*Serializable)(ptr) = val
+						*(*Serializable)(ptr) = list
 					}
 				} else {
 					if source, info, err = parseBoxedType(source); err != nil {
@@ -1673,7 +1760,14 @@ func executeAppend(dst []byte, base unsafe.Pointer, si *structInfo) ([]byte, err
 	defer runtime.KeepAlive((*byte)(base))
 
 	var flags uint32
-	for _, field := range si.fields {
+	for i, field := range si.fields {
+		if i > 0 && i == si.appendSizeStart && len(si.appendVariableFields) > 0 {
+			var err error
+			if dst, err = growAppendStruct(dst, base, si, false); err != nil {
+				return nil, err
+			}
+		}
+
 		if field.hasFlags && (1<<field.flag)&flags == 0 {
 			// skip serialization if flag is not set
 			continue

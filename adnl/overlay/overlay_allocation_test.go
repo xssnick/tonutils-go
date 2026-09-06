@@ -2,10 +2,11 @@ package overlay
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -101,10 +102,11 @@ func TestRelaySimpleBroadcastUsesPreparedAndLegacyPaths(t *testing.T) {
 	)
 	wrapper := &ADNLOverlayWrapper{BroadcastReceiver: receiver}
 
-	if err := wrapper.relaySimpleBroadcast(context.Background(), nil, message); err != nil {
+	if err := wrapper.relaySimpleBroadcast(nil, message); err != nil {
 		t.Fatal(err)
 	}
 
+	waitOrdinaryBroadcastRelay(t, receiver)
 	legacyCalls, bodies := preparedPeer.snapshot()
 	if legacyCalls != 0 || len(bodies) != 1 {
 		t.Fatalf("prepared peer got %d legacy calls and %d bodies", legacyCalls, len(bodies))
@@ -116,7 +118,7 @@ func TestRelaySimpleBroadcastUsesPreparedAndLegacyPaths(t *testing.T) {
 	if !bytes.Equal(bodies[0], wantBody) {
 		t.Fatal("prepared peer got a non-canonical body")
 	}
-	if len(legacyPeer.sent) != 1 || legacyPeer.sent[0] != message {
+	if len(legacyPeer.sent) != 1 || !reflect.DeepEqual(legacyPeer.sent[0], message) {
 		t.Fatalf("legacy peer got %#v", legacyPeer.sent)
 	}
 	if stats := state.Stats(); stats.SimpleRelaySentTotal != 2 || stats.SimpleRelayFailedTotal != 0 {
@@ -231,7 +233,7 @@ func TestRLDPOverlayRegistryKeepsArbitraryIDCompatibility(t *testing.T) {
 	}
 }
 
-func BenchmarkBroadcastSimpleRelayFanoutSerialization(b *testing.B) {
+func BenchmarkBroadcastSimpleRelayFanoutQueue(b *testing.B) {
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x6A}, ed25519.SeedSize))
 	message := &Broadcast{
 		Source:      ed25519Public(privateKey),
@@ -251,10 +253,10 @@ func BenchmarkBroadcastSimpleRelayFanoutSerialization(b *testing.B) {
 		b.Run(name, func(b *testing.B) {
 			peers := make([]BroadcastPeer, 5)
 			for i := range peers {
-				legacy := benchmarkLegacyBroadcastPeer{id: bytes.Repeat([]byte{byte(i + 1)}, 32)}
+				legacy := benchmarkRelayLegacyPeer{id: bytes.Repeat([]byte{byte(i + 1)}, 32)}
 				peers[i] = legacy
 				if prepared {
-					peers[i] = benchmarkPreparedBroadcastPeer{benchmarkLegacyBroadcastPeer: legacy}
+					peers[i] = benchmarkRelayPreparedPeer{benchmarkRelayLegacyPeer: legacy}
 				}
 			}
 
@@ -263,10 +265,15 @@ func BenchmarkBroadcastSimpleRelayFanoutSerialization(b *testing.B) {
 			receiver.EnableBroadcastSimpleRelay(bytes.Repeat([]byte{0x71}, 32), StaticBroadcastPeerSet(peers))
 			wrapper := &ADNLOverlayWrapper{BroadcastReceiver: receiver}
 
+			relay := receiver.ensureBroadcastRelayDispatcher()
+			b.Cleanup(relay.Close)
 			b.ReportAllocs()
 			for b.Loop() {
-				if err := wrapper.relaySimpleBroadcast(context.Background(), nil, message); err != nil {
+				if err := wrapper.relaySimpleBroadcast(nil, message); err != nil {
 					b.Fatal(err)
+				}
+				for relay.activeBytes.Load() != 0 {
+					runtime.Gosched()
 				}
 			}
 		})

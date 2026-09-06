@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+
+	"golang.org/x/sys/cpu"
 )
 
 // readSetShards keeps concurrent recorders off each other's cache lines. A
@@ -66,6 +68,9 @@ const referencedMaxPresizedCells = 1 << 20
 // returns itself as its own child trace, so descending a reference allocates
 // nothing at all.
 type ReadSet struct {
+	// Keep shard writes away from the lifecycle flags every recorder reads.
+	shards [readSetShards]readSetShard
+
 	source *Cell
 	trace  *Trace
 
@@ -78,10 +83,6 @@ type ReadSet struct {
 	// retained cell is a plain descent again, sharing rather than copying.
 	sealed atomic.Bool
 
-	// deferred, when armed, freezes the table: writes buffer here and fold in
-	// at FlushDeferredRecording. See BeginDeferredRecording.
-	deferred atomic.Pointer[readSetDeferred]
-
 	// detached stops the recorder without dropping what it recorded. It is the
 	// half of Seal that a producer needs at the instant its reading is over but
 	// its record is still being consulted: the collated proof is selected from
@@ -93,7 +94,9 @@ type ReadSet struct {
 	// Seal implies it. Nothing clears either one.
 	detached atomic.Bool
 
-	shards [readSetShards]readSetShard
+	// deferred, when armed, freezes the table: writes buffer here and fold in
+	// at FlushDeferredRecording. See BeginDeferredRecording.
+	deferred atomic.Pointer[readSetDeferred]
 
 	// onRecord observes the first read of every cell. The collated-size estimators
 	// are fed from here; it may run on several goroutines.
@@ -121,11 +124,6 @@ type ReadSet struct {
 	// ignore counts nested IgnoreReads scopes. It is atomic because it is consulted
 	// on every parse, on the same path the lock-free probe exists to keep cheap.
 	ignore atomic.Int32
-
-	// recorded counts first reads. It exists so a Prunable caller can tell whether
-	// the referenced frontier below is still current without touching a lock; it is
-	// bumped only on a genuine insert, never on the repeat probe.
-	recorded atomic.Int64
 
 	// referenced is the set of cells that were never read but are referenced by one
 	// that was: the boundaries a state update may prune onto, and the unchanged
@@ -165,6 +163,12 @@ type ReadSet struct {
 	// Seal exists — and a wrong estimate costs only the growth it failed to
 	// avoid.
 	expected int
+
+	// recorded counts first reads. It exists so a Prunable caller can tell whether
+	// the referenced frontier is still current without touching a lock; it is
+	// bumped only on a genuine insert, never on the repeat probe. Keep it away
+	// from the lifecycle flags and callbacks read by the recording path.
+	recorded atomic.Int64
 }
 
 // readSetShard is an open-addressed table rather than a map[Hash]*Cell: the key is
@@ -184,6 +188,9 @@ type readSetShard struct {
 	mu    sync.Mutex
 	table atomic.Pointer[readSetTable]
 	used  int
+
+	// A full pad separates mutable fields even when the shard is unaligned.
+	_ cpu.CacheLinePad
 }
 
 // readSetTable is one generation of a shard's storage. hashes and cells are written
@@ -430,7 +437,8 @@ func (rs *ReadSet) Detach() {
 // write path tests this rather than sealed: a detached set records nothing, and
 // the difference between the two states is only whether the record survives.
 func (rs *ReadSet) Inert() bool {
-	return rs != nil && (rs.detached.Load() || rs.sealed.Load())
+	// Seal sets detached first, so both closed states share this bit.
+	return rs != nil && rs.detached.Load()
 }
 
 // Seal closes the recorder. Every write path becomes a no-op, ChildTrace stops
@@ -449,9 +457,7 @@ func (rs *ReadSet) Seal() {
 	if rs == nil {
 		return
 	}
-	// Detached first, so a concurrent writer that observes neither flag and then
-	// one of them cannot observe the table being dropped while still believing it
-	// may record.
+	// Stop recording and trace propagation before releasing retained cells.
 	rs.Detach()
 	if rs.sealed.Swap(true) {
 		return
@@ -536,20 +542,14 @@ func (rs *ReadSet) FlushDeferredRecording() {
 	for hash, c := range deferred.billed {
 		shard := &rs.shards[hash[0]&(readSetShards-1)]
 		shard.mu.Lock()
-		_, added := shard.insertLocked(hash, c, true)
+		shard.insertLocked(hash, c, true, &rs.recorded)
 		shard.mu.Unlock()
-		if added {
-			rs.recorded.Add(1)
-		}
 	}
 	for hash, c := range deferred.unbilled {
 		shard := &rs.shards[hash[0]&(readSetShards-1)]
 		shard.mu.Lock()
-		_, added := shard.insertLocked(hash, c, false)
+		shard.insertLocked(hash, c, false, &rs.recorded)
 		shard.mu.Unlock()
-		if added {
-			rs.recorded.Add(1)
-		}
 	}
 }
 
@@ -603,11 +603,8 @@ func (rs *ReadSet) recordCell(c *Cell) bool {
 		return deferred.deferRecord(hash, c, true)
 	}
 	shard.mu.Lock()
-	bill, added := shard.insertLocked(hash, c, true)
+	bill, _ := shard.insertLocked(hash, c, true, &rs.recorded)
 	shard.mu.Unlock()
-	if added {
-		rs.recorded.Add(1)
-	}
 	return bill
 }
 
@@ -682,9 +679,9 @@ func (rs *ReadSet) RecordUnbilled(c *Cell) {
 		deferred.deferRecord(hash, c, false)
 		return
 	}
-	if _, added := shard.insert(hash, c, false); added {
-		rs.recorded.Add(1)
-	}
+	shard.mu.Lock()
+	shard.insertLocked(hash, c, false, &rs.recorded)
+	shard.mu.Unlock()
 }
 
 // RecordRecursive adds a cell and everything reachable from it. The execution
@@ -700,22 +697,38 @@ func (rs *ReadSet) RecordRecursive(c *Cell) error {
 	if rs == nil || c == nil {
 		return nil
 	}
-	return rs.recordRecursive(c, make(map[Hash]struct{}), 0)
+	var visited cellLoadCache
+	return rs.recordRecursive(c, &visited, 0)
 }
 
-func (rs *ReadSet) recordRecursive(c *Cell, visited map[Hash]struct{}, depth int) error {
+func (rs *ReadSet) recordRecursive(c *Cell, visited *cellLoadCache, depth int) error {
 	if depth > maxDepth {
 		return fmt.Errorf("read set recursion exceeded the cell depth limit")
 	}
-	loaded, err := c.load()
-	if err != nil {
-		return err
+	loaded := c
+	if c.IsLazy() {
+		// Reuse bodies from this walk or earlier reads, but still validate the
+		// arriving boundary and traverse descendants not visited by this walk.
+		hash := c.HashKey()
+		cached := visited.lookup(hash)
+		if cached == nil {
+			cached = rs.recordedCell(hash)
+		}
+		var err error
+		if cached != nil && c.hasLazyLoader() && c.rawCell().HashKey() == cached.rawCell().HashKey() {
+			loaded, err = resolveLoadedLazyRefWithTrace(c, cached, c.Trace())
+		} else {
+			loaded, err = c.load()
+		}
+		if err != nil {
+			return err
+		}
 	}
 	hash := loaded.HashKey()
-	if _, seen := visited[hash]; seen {
+	if visited.lookup(hash) != nil {
 		return nil
 	}
-	visited[hash] = struct{}{}
+	visited.store(hash, loaded)
 	rs.record(loaded)
 
 	refView := newCellRefView(loaded)
@@ -724,7 +737,7 @@ func (rs *ReadSet) recordRecursive(c *Cell, visited map[Hash]struct{}, depth int
 		if refErr != nil {
 			return refErr
 		}
-		if err = rs.recordRecursive(ref, visited, depth+1); err != nil {
+		if err := rs.recordRecursive(ref, visited, depth+1); err != nil {
 			return err
 		}
 	}
@@ -957,18 +970,13 @@ func referencedTableFor(upTo int64, expected int) (slots, entries int) {
 
 // Size returns how many distinct cells were read. It is the proof's cell count, and
 // the proof builders use it to size their tables.
+// During concurrent writes, it may include an entry whose publication is still
+// in progress; the count is exact once those writes have completed.
 func (rs *ReadSet) Size() int {
-	if rs == nil {
+	if rs == nil || rs.sealed.Load() {
 		return 0
 	}
-	total := 0
-	for i := range rs.shards {
-		shard := &rs.shards[i]
-		shard.mu.Lock()
-		total += shard.used
-		shard.mu.Unlock()
-	}
-	return total
+	return int(rs.recorded.Load())
 }
 
 // Hashes returns the hashes of the cells that were read. It must be called after
@@ -1032,20 +1040,18 @@ func (s *readSetShard) insert(hash Hash, c *Cell, billed bool) (bill bool, added
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.insertLocked(hash, c, billed)
+	return s.insertLocked(hash, c, billed, nil)
 }
 
 // insertLocked is the authoritative insert after the caller has acquired this
 // shard. Both insert and recordCell probe before locking, so the locked lookup
 // below resolves a concurrent insert and an unbilled-to-billed promotion.
-func (s *readSetShard) insertLocked(hash Hash, c *Cell, billed bool) (bill bool, added bool) {
+func (s *readSetShard) insertLocked(hash Hash, c *Cell, billed bool, recorded *atomic.Int64) (bill bool, added bool) {
 	fingerprint := readSetFingerprint(hash)
 	table := s.table.Load()
 	if table == nil {
 		table = newReadSetTable(readSetInitialSlots, readSetInitialSlots/2)
 		s.table.Store(table)
-	} else if s.used >= len(table.hashes) || s.used*2 >= len(table.slots) {
-		table = s.growLocked(table)
 	}
 
 	// The lock-free probe above ran before the mutex was taken, so another
@@ -1072,6 +1078,17 @@ func (s *readSetShard) insertLocked(hash Hash, c *Cell, billed bool) (bill bool,
 		pos = (pos + 1) & mask
 	}
 
+	// A duplicate or billing promotion needs no extra capacity. Grow only
+	// after the locked lookup has established that this hash is new.
+	if s.used >= len(table.hashes) || s.used*2 >= len(table.slots) {
+		table = s.growLocked(table)
+		mask = len(table.slots) - 1
+		pos = int(fingerprint) & mask
+		for table.slots[pos].Load() != 0 {
+			pos = (pos + 1) & mask
+		}
+	}
+
 	idx := s.used
 	table.hashes[idx] = hash
 	table.cells[idx] = c
@@ -1079,8 +1096,13 @@ func (s *readSetShard) insertLocked(hash Hash, c *Cell, billed bool) (bill bool,
 	if !billed {
 		slot |= readSetUnbilledBit
 	}
+	s.used = idx + 1
+	if recorded != nil {
+		// A duplicate can return as soon as it observes the slot. Publish the
+		// count first so Size already includes that completed read.
+		recorded.Add(1)
+	}
 	table.slots[pos].Store(slot)
-	s.used++
 	return billed, true
 }
 

@@ -243,7 +243,7 @@ func TestBroadcastFECRelaySkipsArbitraryImmediatePeerID(t *testing.T) {
 		},
 	}
 
-	ops := stream.relayPartOpsLocked(1, []BroadcastPeer{
+	ops := stream.relayPartOpsLocked(nil, 1, []BroadcastPeer{
 		&mockBroadcastPeer{id: immediateID},
 		&mockBroadcastPeer{id: otherID},
 	}, nil, false)

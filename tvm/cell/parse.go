@@ -66,6 +66,11 @@ type BOCParseOptions struct {
 	// DisableLazyCache disables lazy BoC materialized-cell caching, even when
 	// the BoC carries cache bits for shared cells.
 	DisableLazyCache bool
+	// CacheAllLazyCells caches every materialized lazy cell, including cells
+	// whose BoC cache bit is unset. It avoids repeated decoding on recurring
+	// lookups at the cost of retaining the visited cells. DisableLazyCache
+	// takes precedence when both options are set.
+	CacheAllLazyCells bool
 	// MaxCells limits how many cells may be decoded from this BoC payload.
 	// Zero or a negative value uses the package-level MaxBOCCells limit.
 	MaxCells int

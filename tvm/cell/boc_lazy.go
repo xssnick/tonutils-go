@@ -12,7 +12,6 @@ import (
 
 type bocPayloadCellInfo struct {
 	bodyOffset int
-	refsOffset int
 
 	bitsSz     uint16
 	dsc1       byte
@@ -34,6 +33,7 @@ type lazyBOCLoader struct {
 	computedMeta  atomic.Pointer[lazyBOCComputedMeta]
 	materialized  atomic.Uint32
 	trustedHashes bool
+	cacheAll      bool
 	cache         []atomic.Pointer[Cell]
 }
 
@@ -53,6 +53,7 @@ func parseLazyBOC(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOC
 		cells:         make([]bocPayloadCellInfo, cellsNum),
 		refSzBytes:    refSzBytes,
 		trustedHashes: options.TrustedHashes,
+		cacheAll:      options.CacheAllLazyCells,
 	}
 	if !options.DisableLazyCache {
 		loader.cache = make([]atomic.Pointer[Cell], cellsNum)
@@ -300,7 +301,6 @@ func parseBOCPayloadCellInfo(payload []byte, begin, end, refSzBytes int, indexed
 		return bocPayloadCellInfo{}, 0, errors.New("failed to parse cell refs, corrupted data")
 	}
 
-	info.refsOffset = offset
 	offset += refsNum * refSzBytes
 	if indexed && offset != end {
 		return bocPayloadCellInfo{}, 0, errors.New("invalid indexed cell boundary")
@@ -326,7 +326,7 @@ func (l *lazyBOCLoader) loadDataCell(idx int) (*Cell, error) {
 		return nil, err
 	}
 
-	if l.cache == nil || l.cells[idx].cacheState&bocCacheRefIndexBit == 0 {
+	if l.cache == nil || (!l.cacheAll && l.cells[idx].cacheState&bocCacheRefIndexBit == 0) {
 		return cell, nil
 	}
 
@@ -354,13 +354,19 @@ func (l *lazyBOCLoader) deserializeDataCell(meta *lazyBOCComputedMeta, idx int) 
 	// slab space: it is a slice into the deserializer's shared payload.
 	var c *Cell
 	var refCells []Cell
-	var refMetas []cellMeta
+	var refMetas []bocLazyCellMeta
 	var refPruned [][lazySlabPrunedCap]byte
 	switch {
 	case refCnt == 0:
 		c = &Cell{}
-	case refCnt <= 2:
+	case refCnt == 1:
+		slab := &bocLazySlab1{}
+		c, refCells, refMetas, refPruned = &slab.root, slab.refs[:], slab.metas[:], slab.pruned[:]
+	case refCnt == 2:
 		slab := &bocLazySlab2{}
+		c, refCells, refMetas, refPruned = &slab.root, slab.refs[:], slab.metas[:], slab.pruned[:]
+	case refCnt == 3:
+		slab := &bocLazySlab3{}
 		c, refCells, refMetas, refPruned = &slab.root, slab.refs[:], slab.metas[:], slab.pruned[:]
 	default:
 		slab := &bocLazySlab4{}
@@ -396,11 +402,10 @@ func (l *lazyBOCLoader) deserializeDataCell(meta *lazyBOCComputedMeta, idx int) 
 	return c, nil
 }
 
-// loadRefCellInto builds the lazy placeholder for one reference into
-// slab-provided memory: the two branches mirror createLazyCellWithMeta, with
-// initSlabRef standing in for createLazyPrunedRef. A child the cache already
-// materialized is returned as-is and its slot stays unused.
-func (l *lazyBOCLoader) loadRefCellInto(meta *lazyBOCComputedMeta, idx int, dst *Cell, dstMeta *cellMeta, buf []byte) (*Cell, error) {
+// loadRefCellInto builds a lazy placeholder and its direct resolver into
+// slab-provided memory. A child the cache already materialized is returned
+// as-is and its slot stays unused.
+func (l *lazyBOCLoader) loadRefCellInto(meta *lazyBOCComputedMeta, idx int, dst *Cell, dstMeta *bocLazyCellMeta, buf []byte) (*Cell, error) {
 	if idx < 0 || idx >= len(l.cells) {
 		return nil, errors.New("invalid index, out of scope")
 	}
@@ -413,37 +418,38 @@ func (l *lazyBOCLoader) loadRefCellInto(meta *lazyBOCComputedMeta, idx int, dst 
 	info := l.cells[idx]
 	levelMask := info.levelMask()
 	hashesCount := levelMask.getHashesCount()
-	loader := func(Hash) (*Cell, error) {
-		return l.loadDataCell(idx)
+	dstMeta.loader = l
+	dstMeta.index = uint32(idx)
+	dstMeta.lazyFlags = cellLazyBOC
+	if l.trustedHashes {
+		dstMeta.lazyFlags |= cellLazySkipValidation
 	}
 
 	if l.trustStoredMeta(info) {
 		var depths [4]uint16
 		info.fillStoredDepths(l.payload, depths[:])
 
-		if err := initSlabRef(dst, dstMeta, buf, LazyRef{
+		if err := initSlabRef(dst, &dstMeta.cellMeta, buf, LazyRef{
 			LevelMask: levelMask,
 			Hashes:    info.hashes(l.payload),
 			Depths:    depths[:hashesCount],
-		}, loader); err != nil {
+		}, nil); err != nil {
 			return nil, err
 		}
-		dstMeta.skipLazyRefValidation = true
+		dst.meta = &dstMeta.cellMeta
 		return dst, nil
 	}
 
 	metaOffset := int(meta.offsets[idx])
 	hashesOffset := metaOffset * hashSize
-	if err := initSlabRef(dst, dstMeta, buf, LazyRef{
+	if err := initSlabRef(dst, &dstMeta.cellMeta, buf, LazyRef{
 		LevelMask: levelMask,
 		Hashes:    meta.hashes[hashesOffset : hashesOffset+hashesCount*hashSize],
 		Depths:    meta.depths[metaOffset : metaOffset+hashesCount],
-	}, loader); err != nil {
+	}, nil); err != nil {
 		return nil, err
 	}
-	if l.trustedHashes {
-		dstMeta.skipLazyRefValidation = true
-	}
+	dst.meta = &dstMeta.cellMeta
 	return dst, nil
 }
 
@@ -461,44 +467,8 @@ func (l *lazyBOCLoader) createLazyCellWithMeta(meta *lazyBOCComputedMeta, idx in
 		}
 	}
 
-	info := l.cells[idx]
-	levelMask := info.levelMask()
-	hashesCount := levelMask.getHashesCount()
-
-	if l.trustStoredMeta(info) {
-		var depths [4]uint16
-		info.fillStoredDepths(l.payload, depths[:])
-
-		c, err := createLazyPrunedRef(LazyRef{
-			LevelMask: levelMask,
-			Hashes:    info.hashes(l.payload),
-			Depths:    depths[:hashesCount],
-		}, func(Hash) (*Cell, error) {
-			return l.loadDataCell(idx)
-		})
-		if err != nil {
-			return nil, err
-		}
-		c.meta.skipLazyRefValidation = true
-		return c, nil
-	}
-
-	metaOffset := int(meta.offsets[idx])
-	hashesOffset := metaOffset * hashSize
-	c, err := createLazyPrunedRef(LazyRef{
-		LevelMask: levelMask,
-		Hashes:    meta.hashes[hashesOffset : hashesOffset+hashesCount*hashSize],
-		Depths:    meta.depths[metaOffset : metaOffset+hashesCount],
-	}, func(Hash) (*Cell, error) {
-		return l.loadDataCell(idx)
-	})
-	if err != nil {
-		return nil, err
-	}
-	if l.trustedHashes {
-		c.meta.skipLazyRefValidation = true
-	}
-	return c, nil
+	x := new(bocLazyRef)
+	return l.loadRefCellInto(meta, idx, &x.cell, &x.meta, x.pruned[:])
 }
 
 func (l *lazyBOCLoader) computeCellMeta(meta *lazyBOCComputedMeta, idx int) error {
@@ -747,11 +717,12 @@ func (l *lazyBOCLoader) newPayloadCell(idx int) *Cell {
 }
 
 func (info bocPayloadCellInfo) body(payload []byte) []byte {
-	return payload[info.bodyOffset:info.refsOffset:info.refsOffset]
+	end := info.bodyOffset + cellBodyBytesSize(info.dsc2)
+	return payload[info.bodyOffset:end:end]
 }
 
 func (info bocPayloadCellInfo) refIndex(payload []byte, ref, refSzBytes int) int {
-	offset := info.refsOffset + ref*refSzBytes
+	offset := info.bodyOffset + cellBodyBytesSize(info.dsc2) + ref*refSzBytes
 	return dynIntFromPayloadSize(refSzBytes, payload[offset:offset+refSzBytes])
 }
 

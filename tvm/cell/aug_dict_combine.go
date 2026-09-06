@@ -523,11 +523,14 @@ func (n *augmentedCombineNode) visibleLabelValue(start, length uint) Slice {
 }
 
 func (n *augmentedCombineNode) consumeVisibleLabelBits(bits uint) augmentedRootView {
-	return augmentedRootView{
-		cell:  n.view.cell,
-		keySz: n.view.keySz,
-		skip:  n.view.skip + bits,
+	view := n.view
+	if view.cell.IsLazy() {
+		// Preserve the lazy root's resolved payload and path only when its
+		// label survives into another merge step.
+		view.cell = n.payload.cell.WithTrace(n.payload.trace)
 	}
+	view.skip += bits
+	return view
 }
 
 func (n *augmentedCombineNode) leftChildView(keySz uint) augmentedRootView {

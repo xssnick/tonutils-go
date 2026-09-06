@@ -1122,6 +1122,19 @@ func (c *Slice) ToCell() (*Cell, error) {
 		}
 		return c.cell.WithTrace(nil), nil
 	}
+	if fullCell && !c.forceCopyOnToCell && !c.cell.IsSpecial() && !c.cell.IsVirtualized() {
+		// Attaching child traces does not change the cell's contents. Keep its
+		// immutable payload and hashes; creation still notifies the active
+		// trace, and the new cell owns its reference slots and metadata.
+		cl := c.cell.copy()
+		for i := 0; i < cl.refsCount(); i++ {
+			cl.refs[i] = c.withChildTrace(cl.refs[i], i)
+		}
+		if err := c.trace.NotifyCreate(); err != nil {
+			return nil, err
+		}
+		return cl, nil
+	}
 
 	cl := newCellWithData(int((left + 7) / 8))
 	if err := c.PreloadSliceInto(cl.data, left); err != nil {

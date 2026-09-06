@@ -67,12 +67,12 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		c.encKey[(len(c.decKey)-1)-i] = c.decKey[i]
 	}
 
-	theirID, err := tl.Hash(keys.PublicKeyED25519{c.adnl.peerKey})
+	theirID, err := tl.Hash(&keys.PublicKeyED25519{c.adnl.peerKey})
 	if err != nil {
 		return err
 	}
 
-	ourID, err := tl.Hash(keys.PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
+	ourID, err := tl.Hash(&keys.PublicKeyED25519{c.adnl.ourKey.Public().(ed25519.PublicKey)})
 	if err != nil {
 		return err
 	}
@@ -84,12 +84,12 @@ func (c *Channel) setup(theirKey ed25519.PublicKey) (err error) {
 		c.encKey = c.decKey
 	}
 
-	c.id, err = tl.Hash(keys.PublicKeyAES{Key: c.decKey})
+	c.id, err = tl.Hash(&keys.PublicKeyAES{Key: c.decKey})
 	if err != nil {
 		return err
 	}
 
-	c.idEnc, err = tl.Hash(keys.PublicKeyAES{Key: c.encKey})
+	c.idEnc, err = tl.Hash(&keys.PublicKeyAES{Key: c.encKey})
 	if err != nil {
 		return err
 	}

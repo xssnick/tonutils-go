@@ -82,7 +82,6 @@ func (d *AugmentedDictionary) SetManyByBytes(entries []AugmentedBytesEntry, para
 
 	items := make([]augBulkItem, len(entries))
 	keyCells := make([]Cell, len(entries))
-	values := make([]Builder, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		if err = initFixedDictBytesKeySlice(entry.Key, d.keySz, &keyCells[i], &items[i].key); err != nil {
@@ -91,8 +90,7 @@ func (d *AugmentedDictionary) SetManyByBytes(entries []AugmentedBytesEntry, para
 		if entry.Value == nil {
 			return fmt.Errorf("value is nil at entry %d", i)
 		}
-		entry.Value.ToBuilderInto(&values[i])
-		items[i].value = &values[i]
+		items[i].value = entry.Value
 		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
 	}
 	_, err = d.setManyItems(items, nil, workers, false)
@@ -119,7 +117,6 @@ func (d *AugmentedDictionary) SetManyByUint(entries []AugmentedUintEntry, parall
 	items := make([]augBulkItem, len(entries))
 	keyBuilders := make([]Builder, len(entries))
 	keyCells := make([]Cell, len(entries))
-	values := make([]Builder, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		if err = initFixedDictUintKeySlice(
@@ -130,8 +127,7 @@ func (d *AugmentedDictionary) SetManyByUint(entries []AugmentedUintEntry, parall
 		if entry.Value == nil {
 			return fmt.Errorf("value is nil at entry %d", i)
 		}
-		entry.Value.ToBuilderInto(&values[i])
-		items[i].value = &values[i]
+		items[i].value = entry.Value
 		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
 	}
 	_, err = d.setManyItems(items, nil, workers, false)
@@ -236,7 +232,6 @@ func (d *AugmentedDictionary) setManyEntries(
 		return nil, err
 	}
 	items := make([]augBulkItem, len(entries))
-	values := make([]Builder, len(entries))
 	for i := range entries {
 		entry := &entries[i]
 		if entry.Key == nil || entry.Key.BitsSize() != d.keySz {
@@ -248,8 +243,7 @@ func (d *AugmentedDictionary) setManyEntries(
 		if err := entry.Key.BeginParseInto(&items[i].key); err != nil {
 			return nil, fmt.Errorf("failed to load key at entry %d: %w", i, err)
 		}
-		entry.Value.ToBuilderInto(&values[i])
-		items[i].value = &values[i]
+		items[i].value = entry.Value
 		items[i].mode = normalizedAugmentedEntryMode(entry.Mode)
 	}
 	return d.setManyItems(items, resolver, parallelism, captureDiff)
@@ -482,7 +476,7 @@ func newAugBulkArena(items []augBulkItem, keySz uint) *dictBuildArena {
 	bits := uint64(len(items)) * uint64(keySz)
 	for i := range items {
 		if items[i].value != nil {
-			bits += uint64(items[i].value.BitsUsed())
+			bits += uint64(items[i].value.BitsSize())
 		}
 	}
 	nodes := augBulkArenaNodesPerKey * len(items)
@@ -565,7 +559,7 @@ type augBulkItem struct {
 	// key is the not yet consumed suffix. Every item in a batch carries the
 	// same number of remaining bits, which is the recursion's keyOffset.
 	key   Slice
-	value *Builder
+	value *Cell
 	mode  DictSetMode
 }
 
@@ -1036,7 +1030,7 @@ func (d *AugmentedDictionary) storeManyLeaf(
 	keyOffset uint,
 	state *augmentedMutationState,
 ) (*Cell, Slice, *augDiffReplayNode, error) {
-	leaf, extra, err := d.storeLeafWithExtra(label, item.value, keyOffset, state)
+	leaf, extra, err := d.storeSetLeafWithExtra(label, nil, item.value, keyOffset, state)
 	if err != nil || !state.captureDiff {
 		return leaf, extra, nil, err
 	}

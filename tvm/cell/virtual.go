@@ -63,11 +63,13 @@ func (c *Cell) Virtualize(effectiveLevel uint8) *Cell {
 	copy(vc.refs[:], raw.rawRefs())
 	vc.setLevelMask(rawLevelMask.Apply(int(effectiveLevel)))
 	x.m = cellMeta{
-		viewOf:                raw,
-		lazyLoader:            raw.cellLazyLoader(),
-		trace:                 trace,
-		viewLevel:             effectiveLevel + 1,
-		skipLazyRefValidation: raw.meta != nil && raw.meta.skipLazyRefValidation,
+		viewOf:     raw,
+		lazyLoader: raw.cellLazyLoader(),
+		trace:      trace,
+		viewLevel:  effectiveLevel + 1,
+	}
+	if raw.meta != nil {
+		x.m.lazyFlags = raw.meta.lazyFlags & cellLazySkipValidation
 	}
 	vc.meta = &x.m
 	return vc
