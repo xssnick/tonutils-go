@@ -118,7 +118,8 @@ type BBRv2Controller struct {
 	pacingRate   atomic.Int64
 	deliveryRate atomic.Int64
 
-	appLimited atomic.Bool
+	appLimited      atomic.Bool
+	appLimitedUntil atomic.Int64 // unix ms, samples measured before it were shaped by the peer, not the path
 
 	dbgLast atomic.Int64
 
@@ -240,6 +241,8 @@ func (c *BBRv2Controller) OnNewSendBurst() {
 	if c.appLimited.Swap(false) {
 		c.fullBW.Store(0)
 		c.fullBWCount.Store(0)
+		// what goes out now is still sized by the peer's request, and its acks land within a couple of RTTs
+		c.appLimitedUntil.Store(nowMs() + 2*max64(c.minRTT.Load(), 1))
 	}
 	c.markActive()
 }
@@ -433,7 +436,10 @@ func (c *BBRv2Controller) updateBtlBw(sample int64, now int64) {
 		return
 	}
 
-	if !c.appLimited.Load() {
+	// the flag marks the current state, the grace window covers acks for data sent right after it was set
+	appLimited := c.appLimited.Load() || now < c.appLimitedUntil.Load()
+
+	if !appLimited {
 		cur := c.btlbw.Load()
 		if sample > cur {
 			c.btlbw.Store(sample)
@@ -451,6 +457,13 @@ func (c *BBRv2Controller) updateBtlBw(sample int64, now int64) {
 				c.btlbw.Store(max64(cur, sample))
 			}
 		}
+	}
+
+	// an app-limited window carries no information about the path, so it must not age the max either;
+	// the window still moves, otherwise it banks up and fires once the peer starts asking again
+	if appLimited {
+		c.lastBtlBwDecay.Store(now)
+		return
 	}
 
 	// Soft decay of an overly old max (emulates a time window)
