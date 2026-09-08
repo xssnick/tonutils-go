@@ -355,6 +355,113 @@ func TestBBR_InflightAllowance(t *testing.T) {
 	}
 }
 
+func appLimitedOpts() BBRv2Options {
+	return BBRv2Options{
+		MinRate:            256 << 10,
+		InitialRate:        8 << 20,
+		DefaultRTTMs:       50,
+		MinSampleMs:        10,
+		BtlBwWindowSec:     10,
+		ProbeBwCycleMs:     200,
+		ProbeRTTDurationMs: 150,
+		MinRTTExpiryMs:     10_000,
+		HighLoss:           0.05,
+		Beta:               0.85,
+	}
+}
+
+func TestBBR_AppLimitedDoesNotDecayBtlBw(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	// peer keeps asking for small chunks: every sample sits far below the learned bandwidth
+	agedOverWindows := func(appLimited bool) int64 {
+		bbr, _ := newBBR(t, opts.InitialRate, opts)
+		bbr.ObserveRTT(opts.DefaultRTTMs)
+		bbr.btlbw.Store(learned)
+		bbr.SetAppLimited(appLimited)
+
+		now := nowMs()
+		for i := 0; i < 20; i++ {
+			now += winMs + 1
+			bbr.lastBtlBwDecay.Store(now - winMs - 1)
+			bbr.updateBtlBw(64<<10, now)
+		}
+
+		return bbr.btlbw.Load()
+	}
+
+	if aged := agedOverWindows(false); aged >= learned {
+		t.Fatalf("expected idle windows to age btlbw: got=%d learned=%d", aged, int64(learned))
+	}
+
+	if held := agedOverWindows(true); held != learned {
+		t.Fatalf("app-limited windows must not age btlbw: got=%d want=%d", held, int64(learned))
+	}
+}
+
+func TestBBR_AppLimitedDoesNotBankDecay(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.btlbw.Store(learned)
+
+	now := nowMs()
+	bbr.lastBtlBwDecay.Store(now)
+	bbr.SetAppLimited(true)
+	for i := 0; i < 5; i++ {
+		now += winMs
+		bbr.updateBtlBw(64<<10, now)
+	}
+
+	// the peer starts asking again: a decay window must not have piled up while it was quiet
+	bbr.SetAppLimited(false)
+	now += 10
+	bbr.updateBtlBw(64<<10, now)
+
+	if got := bbr.btlbw.Load(); got != learned {
+		t.Fatalf("decay fired right after an app-limited stretch: got=%d want=%d", got, int64(learned))
+	}
+}
+
+func TestBBR_AcksRightAfterAppLimitedStayAppLimited(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.btlbw.Store(learned)
+	bbr.SetAppLimited(true)
+
+	// the peer asks again: the flag drops before anything is acked, but those acks still measure the request size
+	bbr.OnNewSendBurst()
+	if bbr.appLimited.Load() {
+		t.Fatal("OnNewSendBurst must clear the flag")
+	}
+
+	now := nowMs()
+	bbr.lastBtlBwDecay.Store(now - winMs - 1)
+	bbr.updateBtlBw(64<<10, now)
+
+	if got := bbr.btlbw.Load(); got != learned {
+		t.Fatalf("ack right after an app-limited stretch aged btlbw: got=%d want=%d", got, int64(learned))
+	}
+
+	// past the grace window the same sample is a real measurement again
+	later := now + 2*opts.DefaultRTTMs + 1
+	bbr.lastBtlBwDecay.Store(later - winMs - 1)
+	bbr.updateBtlBw(64<<10, later)
+
+	if got := bbr.btlbw.Load(); got >= learned {
+		t.Fatalf("sample past the grace window must age btlbw: got=%d", got)
+	}
+}
+
 func approxI64(a, b, tol int64) bool {
 	d := a - b
 	if d < 0 {

@@ -1251,13 +1251,9 @@ func (r *RLDP) recoverySender() {
 				rrHead = 0
 			}
 
-			left := r.rateLimit.GetTokensLeft()
-
-			if len(transfersToProcess) == 0 && left > max64(8<<20, left/2) {
-				r.rateCtrl.SetAppLimited(true)
-			} else {
-				r.rateCtrl.SetAppLimited(false)
-			}
+			// app-limited only with no transfer at all: an active one waiting on its recovery timer
+			// or on acks is limited by the path, and flagging it would block the bandwidth estimate
+			r.rateCtrl.SetAppLimited(!active)
 
 			for i := range transfersToProcess {
 				transfersToProcess[i] = nil

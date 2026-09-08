@@ -263,6 +263,52 @@ func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
 	}
 }
 
+func TestRLDP_RecoverySenderDetectsAppLimited(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+
+	// nothing to send at all: the peer is the limit
+	cli.activateRecoveryLoop()
+
+	waitUntil(t, 2*time.Second, func() bool {
+		return cli.rateCtrl.appLimited.Load()
+	}, "recovery sender did not flag an idle peer as app-limited")
+
+	// an active transfer that only waits on its recovery timer is limited by the path, not by the peer
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x03}, 32),
+		timeoutAt: time.Now().Add(time.Minute).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	if ok, err := transfer.prepareNextPart(); err != nil || !ok {
+		t.Fatalf("prepare part: ok=%v err=%v", ok, err)
+	}
+
+	part := transfer.getCurrentPart()
+	part.recoveryReady.Store(true)
+	part.lastRecoverAt = time.Now().UnixMilli()
+	part.nextRecoverDelay = time.Minute.Milliseconds()
+
+	cli.mx.Lock()
+	cli.activeTransfers[string(transfer.id)] = transfer
+	cli.mx.Unlock()
+	cli.activateRecoveryLoop()
+
+	waitUntil(t, 2*time.Second, func() bool {
+		return !cli.rateCtrl.appLimited.Load()
+	}, "recovery sender flagged a transfer waiting on its recovery timer as app-limited")
+}
+
 func TestRLDP_handleMessage(t *testing.T) {
 	tId := make([]byte, 32)
 	_, err := rand.Read(tId)
