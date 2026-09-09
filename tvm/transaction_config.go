@@ -63,11 +63,13 @@ type PreparedBlockchainConfig struct {
 	globalID    int32
 	hasGlobalID bool
 
-	specialAccounts map[preparedAddr256]struct{}
-	// specialAccountOrder is the same set as a sequence: the fundamental smart
-	// contracts of param 31 in dictionary order, with the configuration contract
-	// of param 0 appended last and only when param 31 does not already list it.
-	// The masterchain collator executes tick/tock in exactly this order, so the
+	// fundamentalAccounts is parameter 31 alone; the actual configuration
+	// contract is supplied separately by each block context.
+	fundamentalAccounts map[preparedAddr256]struct{}
+	// specialAccountOrder lists the fundamental smart contracts of param 31 in
+	// dictionary order, with the inferred configuration contract of param 0
+	// appended last and only when param 31 does not already list it.
+	// Dictionary-only collators use this order for tick/tock, so the
 	// order is consensus data and not a presentation detail.
 	specialAccountOrder [][32]byte
 	// configAddr is param 0 when it is present and exactly 256 bits wide.
@@ -241,7 +243,9 @@ func (c *PreparedBlockchainConfig) ConfigAddress() (addr [32]byte, ok bool) {
 
 // SpecialAccounts returns the fundamental smart contracts of config param 31 in
 // dictionary order, with the configuration contract of param 0 appended last and
-// only when param 31 does not already list it.
+// only when param 31 does not already list it. This reflects the dictionary;
+// BlockOptions.ConfigAddress changes execution classification without changing
+// this list.
 //
 // The order is part of the returned value: a masterchain collator runs tick and
 // tock in it, which decides logical time assignment and therefore block bytes.
@@ -254,8 +258,9 @@ func (c *PreparedBlockchainConfig) SpecialAccounts() [][32]byte {
 // IsSpecialAccount reports membership of the set SpecialAccounts enumerates, by
 // raw masterchain account id.
 func (c *PreparedBlockchainConfig) IsSpecialAccount(addr [32]byte) bool {
-	_, ok := c.specialAccounts[preparedAddr256(addr)]
-	return ok
+	key := preparedAddr256(addr)
+	_, fundamental := c.fundamentalAccounts[key]
+	return fundamental || c.configAddr != nil && key == *c.configAddr
 }
 
 func (c *PreparedBlockchainConfig) globalVersion() uint32 {
@@ -344,13 +349,12 @@ func (c *PreparedBlockchainConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 }
 
 func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) error {
-	c.specialAccounts = map[preparedAddr256]struct{}{}
+	c.fundamentalAccounts = map[preparedAddr256]struct{}{}
 	var configAddr *preparedAddr256
 	if addr, err := bc.GetConfigAddress(); err == nil && len(addr) == 32 {
 		stored := preparedAddr256(addr)
 		configAddr = &stored
 		c.configAddr = &stored
-		c.specialAccounts[stored] = struct{}{}
 	}
 
 	fundamental, err := bc.GetFundamentalSmartContractAddresses()
@@ -377,7 +381,7 @@ func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfi
 			return fmt.Errorf("invalid fundamental smart contract entry %d", i)
 		}
 		stored := preparedAddr256(addr)
-		c.specialAccounts[stored] = struct{}{}
+		c.fundamentalAccounts[stored] = struct{}{}
 		order = append(order, stored)
 		listed = listed || configAddr != nil && stored == *configAddr
 	}
@@ -520,18 +524,6 @@ func (c *PreparedBlockchainConfig) workchainDescr(workchain int32) (descr *tlb.W
 	}
 	descr, found = c.workchains[workchain]
 	return descr, found, true
-}
-
-func (c *PreparedBlockchainConfig) isSpecialAccount(addr *address.Address) bool {
-	if len(c.specialAccounts) == 0 || !transactionIsMasterchain(addr) {
-		return false
-	}
-	addrData := addr.Data()
-	if len(addrData) != 32 {
-		return false
-	}
-	_, ok := c.specialAccounts[preparedAddr256(addrData)]
-	return ok
 }
 
 func (c *PreparedBlockchainConfig) isBlackHoleAccount(addr *address.Address) bool {

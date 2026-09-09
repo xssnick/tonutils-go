@@ -35,6 +35,11 @@ type BlockOptions struct {
 	// Libraries are block-level library collections available to every
 	// transaction of the block (e.g. the masterchain libraries dict).
 	Libraries []*cell.Cell
+	// ConfigAddress is the actual configuration contract from the masterchain
+	// state's ConfigParams.config_addr. Parameter 0 may be absent or name a
+	// proposed replacement that was not installed. Nil retains parameter-0
+	// inference for callers that only have the config dictionary.
+	ConfigAddress *[32]byte
 }
 
 // BlockContext is the per-block execution context: the prepared config plus
@@ -42,13 +47,15 @@ type BlockOptions struct {
 // immutable after construction and safe to share between concurrently
 // executing account lanes.
 type BlockContext struct {
-	cfg        *PreparedBlockchainConfig
-	now        uint32
-	blockLT    int64
-	blockLTU64 uint64
-	randSeed   []byte
-	prevBlocks tuple.Tuple
-	libraries  []*cell.Cell
+	cfg           *PreparedBlockchainConfig
+	now           uint32
+	blockLT       int64
+	blockLTU64    uint64
+	randSeed      []byte
+	prevBlocks    tuple.Tuple
+	libraries     []*cell.Cell
+	configAddr    preparedAddr256
+	hasConfigAddr bool
 	// unpackedConfig is the prebuilt c7 unpacked config value: either a
 	// tuple.Tuple or nil when no source params exist.
 	unpackedConfig any
@@ -83,8 +90,28 @@ func (c *PreparedBlockchainConfig) NewBlockContext(opts BlockOptions) (*BlockCon
 		prevBlocks: opts.PrevBlocks,
 		libraries:  append([]*cell.Cell(nil), opts.Libraries...),
 	}
+	if opts.ConfigAddress != nil {
+		out.configAddr = preparedAddr256(*opts.ConfigAddress)
+		out.hasConfigAddr = true
+	} else if c.configAddr != nil {
+		out.configAddr = *c.configAddr
+		out.hasConfigAddr = true
+	}
 	out.unpackedConfig = buildUnpackedConfig(c, now, opts.GlobalID)
 	return out, nil
+}
+
+func (b *BlockContext) isSpecialAccount(addr *address.Address) bool {
+	if !transactionIsMasterchain(addr) {
+		return false
+	}
+	data := addr.Data()
+	if len(data) != 32 {
+		return false
+	}
+	key := preparedAddr256(data)
+	_, fundamental := b.cfg.fundamentalAccounts[key]
+	return fundamental || b.hasConfigAddr && key == b.configAddr
 }
 
 // Config returns the prepared per-epoch config this context was built from.

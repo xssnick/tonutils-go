@@ -273,11 +273,9 @@ func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfi
 	}
 	env.precompiledGasUsage = usage
 
-	precompiledGas, ok, err := transactionPrecompiledGasUsage(usage)
-	if err != nil || !ok {
-		return gas, nil
-	}
-	if precompiledGas > gas.Limit {
+	// Configured usage is uint64: values above MaxInt64 must skip compute
+	// before the final signed gas accounting can narrow them.
+	if usage.Cmp(big.NewInt(gas.Limit)) > 0 {
 		return gas, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	}
 	return transactionPrecompiledFallbackGas(gas, transactionPrecompiledFallbackLimit(blockchainCfg, addr, isSpecial)), nil

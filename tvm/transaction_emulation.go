@@ -551,7 +551,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	if err = transactionValidateInboundExternalMessage(msg.cell, &msg.msg, blockchainCfg); err != nil {
 		return nil, err
 	}
-	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
+	isSpecial := block.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
@@ -826,7 +826,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	}
 
 	now := block.now
-	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
+	isSpecial := block.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
 	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)

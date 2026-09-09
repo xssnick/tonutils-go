@@ -6,7 +6,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -139,20 +138,16 @@ func TestPreparedBlockchainConfigSpecialAccountOrder(t *testing.T) {
 				}
 			}
 
-			// The order must enumerate exactly the set isSpecialAccount answers
-			// for, or the executor and the collator disagree about which accounts
-			// receive the special gas allowance.
+			// The public accessors must agree about membership inferred from
+			// the dictionary, regardless of per-block address overrides.
 			for _, addr := range got {
 				if !prepared.IsSpecialAccount(addr) {
 					t.Fatalf("enumerated account %x is not a member of the set", addr)
 				}
-				if !prepared.isSpecialAccount(address.NewAddress(0, 0xff, addr[:])) {
-					t.Fatalf("enumerated account %x is not special to the executor", addr)
-				}
 			}
-			if len(prepared.specialAccounts) != len(got) {
-				t.Fatalf("set holds %d accounts, order enumerates %d",
-					len(prepared.specialAccounts), len(got))
+			if len(prepared.fundamentalAccounts) != len(fundamentals) {
+				t.Fatalf("fundamental set holds %d accounts, want %d",
+					len(prepared.fundamentalAccounts), len(fundamentals))
 			}
 
 			addr, ok := prepared.ConfigAddress()
@@ -234,7 +229,7 @@ func TestPreparedBlockchainConfigConfigAddressRejectsShortParam(t *testing.T) {
 	if _, ok := prepared.ConfigAddress(); ok {
 		t.Fatal("a 128-bit param 0 was reported as a configuration contract address")
 	}
-	if len(prepared.SpecialAccounts()) != 0 || len(prepared.specialAccounts) != 0 {
+	if len(prepared.SpecialAccounts()) != 0 || len(prepared.fundamentalAccounts) != 0 {
 		t.Fatalf("a malformed param 0 produced special accounts: %x", prepared.SpecialAccounts())
 	}
 }

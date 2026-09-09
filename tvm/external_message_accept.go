@@ -44,7 +44,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 		return nil, err
 	}
 
-	isSpecial := blockchainCfg.isSpecialAccount(runtimeAcc.addr)
+	isSpecial := block.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))

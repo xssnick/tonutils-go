@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -112,7 +111,7 @@ func TestPrepareBlockchainConfigLoadsLazyFundamentalAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !config.isSpecialAccount(address.NewAddress(0, 0xff, make([]byte, 32))) {
+	if !config.IsSpecialAccount([32]byte{}) {
 		t.Fatal("fundamental account behind a lazy config branch was not loaded")
 	}
 }
