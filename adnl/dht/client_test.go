@@ -646,6 +646,64 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	}
 }
 
+func TestClient_collectNearestNodesFallsBackPastFailedShortlist(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	var findNodeCalls [6]int32
+	gateway := &MockGateway{}
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				idx := int(addr[0] - '0')
+				atomic.AddInt32(&findNodeCalls[idx], 1)
+				if addr != "5" {
+					return fmt.Errorf("node is unavailable")
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	})
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       2,
+		a:       2,
+	}
+	for i := byte(1); i <= 5; i++ {
+		buckets[0].addNode(&dhtNode{
+			adnlId: nodeID(i),
+			client: dhtCli,
+			addr:   fmt.Sprintf("%d", i),
+		}, true)
+	}
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 1 || nodes[0].id() != hex.EncodeToString(nodeID(5)) {
+		t.Fatalf("expected lookup to fall back to the fifth node, got %d nodes", len(nodes))
+	}
+	if atomic.LoadInt32(&findNodeCalls[5]) != 1 {
+		t.Fatalf("expected fallback node to be queried once, got calls=%v", findNodeCalls)
+	}
+}
+
 func TestClient_collectNearestNodesPromotesSuccessfulBackup(t *testing.T) {
 	keyID := make([]byte, 32)
 	nodeID := make([]byte, 32)

@@ -641,6 +641,7 @@ type nearestNodeState uint8
 
 const (
 	nearestNodePending nearestNodeState = iota
+	nearestNodeDeferred
 	nearestNodeInFlight
 	nearestNodeDone
 )
@@ -692,7 +693,7 @@ func (s *nearestNodeSearch) Add(node *dhtNode) bool {
 	s.items = append(s.items, item)
 	s.byID[id] = item
 	s.sortItems()
-	s.trimPending()
+	s.rebalancePending()
 	return true
 }
 
@@ -729,7 +730,7 @@ func (s *nearestNodeSearch) Retry(node *dhtNode) {
 	item.state = nearestNodePending
 	item.retry = true
 	s.sortItems()
-	s.trimPending()
+	s.rebalancePending()
 }
 
 func (s *nearestNodeSearch) Finish(node *dhtNode, success bool) {
@@ -738,6 +739,7 @@ func (s *nearestNodeSearch) Finish(node *dhtNode, success bool) {
 		return
 	}
 	item.state = nearestNodeDone
+	s.rebalancePending()
 	if !success || item.result {
 		return
 	}
@@ -801,15 +803,17 @@ func (s *nearestNodeSearch) sortResults() {
 	sortNearestNodeItems(s.keyID, s.results)
 }
 
-func (s *nearestNodeSearch) trimPending() {
+func (s *nearestNodeSearch) rebalancePending() {
 	pending := 0
 	for _, item := range s.items {
-		if item.state != nearestNodePending {
+		if item.state != nearestNodePending && item.state != nearestNodeDeferred {
 			continue
 		}
-		pending++
-		if pending > s.maxPending {
-			item.state = nearestNodeDone
+		if pending < s.maxPending {
+			item.state = nearestNodePending
+			pending++
+		} else {
+			item.state = nearestNodeDeferred
 		}
 	}
 }
