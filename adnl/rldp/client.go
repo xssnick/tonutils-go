@@ -37,7 +37,15 @@ var Logger = func(a ...any) {}
 // non-final inbound parts with a different FEC data size.
 var PartSize = uint32(2_000_000)
 
-const maxInitialFastSymbols = 32
+const (
+	maxInitialFastSymbols         = 32
+	maxInitialFastSymbolsBulk     = 256
+	maxInitialFastSymbolsSmallMax = 32 * 1024
+	bulkPartSize                  = 2_000_000
+	bulkSymbolSize                = 768
+	badNetworkSmallSymbolSize    = 256
+	badNetworkSmallExtraSymbols  = 2
+)
 
 var MultiFECMode = false // TODO: activate after some versions
 var RoundRobinFECLimit = 50 * DefaultSymbolSize
@@ -1599,9 +1607,20 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 
 	partIndex := t.nextPartIndex
 
+	partSize := PartSize
+	symbolSize := DefaultSymbolSize
+	if t.totalSize > maxInitialFastSymbolsSmallMax {
+		if partSize < bulkPartSize {
+			partSize = bulkPartSize
+		}
+		if symbolSize < bulkSymbolSize {
+			symbolSize = bulkSymbolSize
+		}
+	}
+
 	payload := t.data
-	if len(payload) > int(PartSize) {
-		payload = payload[:PartSize]
+	if len(payload) > int(partSize) {
+		payload = payload[:partSize]
 	}
 
 	if len(payload) == 0 {
@@ -1610,7 +1629,7 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 	remaining := t.data[len(payload):]
 
 	// ceil, reference C++ nodes drop parts with symbols count not matching data and symbol sizes
-	cnt := uint32((uint64(len(payload)) + uint64(DefaultSymbolSize) - 1) / uint64(DefaultSymbolSize))
+	cnt := uint32((uint64(len(payload)) + uint64(symbolSize) - 1) / uint64(symbolSize))
 
 	var err error
 	var enc fecEncoder
@@ -1618,25 +1637,25 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 
 	//goland:noinspection GoBoolExpressions
 	if MultiFECMode && len(payload) < int(RoundRobinFECLimit) {
-		enc, err = roundrobin.NewEncoder(payload, DefaultSymbolSize)
+		enc, err = roundrobin.NewEncoder(payload, symbolSize)
 		if err != nil {
 			return false, fmt.Errorf("failed to create rr object encoder: %w", err)
 		}
 
 		fec = FECRoundRobin{
 			DataSize:     uint32(len(payload)),
-			SymbolSize:   DefaultSymbolSize,
+			SymbolSize:   symbolSize,
 			SymbolsCount: cnt,
 		}
 	} else {
-		enc, err = raptorq.NewRaptorQ(DefaultSymbolSize).CreateEncoder(payload)
+		enc, err = raptorq.NewRaptorQ(symbolSize).CreateEncoder(payload)
 		if err != nil {
 			return false, fmt.Errorf("failed to create raptorq object encoder: %w", err)
 		}
 
 		fec = FECRaptorQ{
 			DataSize:     uint32(len(payload)),
-			SymbolSize:   DefaultSymbolSize,
+			SymbolSize:   symbolSize,
 			SymbolsCount: cnt,
 		}
 	}
@@ -1651,6 +1670,11 @@ func (t *activeTransfer) prepareNextPart() (bool, error) {
 		nextRecoverDelay: 4,
 		fastSeqnoTill:    cnt + cnt/33 + 1, // +3%
 		transfer:         t,
+	}
+	if t.totalSize <= maxInitialFastSymbolsSmallMax && symbolSize <= badNetworkSmallSymbolSize {
+		if minFast := cnt + badNetworkSmallExtraSymbols; part.fastSeqnoTill < minFast {
+			part.fastSeqnoTill = minFast
+		}
 	}
 
 	pt := uint32(1) << uint32(math.Ceil(math.Log2(float64(part.fecSymbolsCount)*3+50)))
@@ -1689,8 +1713,12 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 
 	seqno := uint32(0)
 	batchLimit := int(part.fastSeqnoTill)
-	if batchLimit > maxInitialFastSymbols {
-		batchLimit = maxInitialFastSymbols
+	initialCap := maxInitialFastSymbols
+	if transfer.totalSize > maxInitialFastSymbolsSmallMax {
+		initialCap = maxInitialFastSymbolsBulk
+	}
+	if batchLimit > initialCap {
+		batchLimit = initialCap
 	}
 	batch := r.rateLimit.ConsumePackets(batchLimit, int(part.fecSymbolSize))
 	now := time.Now().UnixMilli()
