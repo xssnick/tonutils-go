@@ -83,8 +83,9 @@ type preparedSourceStep struct {
 //   - memo >= 0: a rebuildable node; all steps with an equal {hash@max,
 //     merkleDepth} share the slot, which is what buildMerkleUpdateCell's ready
 //     table does and what keeps shared destination subtrees shared.
-//   - neither: hand the update's own cell back (pruned non-boundary, or
-//     childless).
+//
+// Destination leaves also have a memo slot: they own their data rather than
+// keeping the update's parse arena alive through the resulting state.
 //
 // next is the index just past this step's subtree, so a memo hit can skip the
 // subtree the pointer-and-Merkle-depth traversal recorded under it.
@@ -218,15 +219,14 @@ func (p *PreparedMerkleUpdate) ApplyTo(from *Cell) (*Cell, error) {
 	if consumed != len(p.src) {
 		return nil, errPreparedPlanCorrupt
 	}
-	arena := merkleUpdateApplyArena{}
-	root, consumed, err := p.replayDest(0, slots, make([]*Cell, p.memos), &arena)
+	root, consumed, err := p.replayDest(0, slots, make([]merkleUpdateAppliedCell, p.memos))
 	if err != nil {
 		return nil, err
 	}
 	if consumed != len(p.dst) {
 		return nil, errPreparedPlanCorrupt
 	}
-	return root, nil
+	return root.cell, nil
 }
 
 // replaySource is merkleUpdateSourceIndex.walkProof driven by the recorded
@@ -288,67 +288,71 @@ func (p *PreparedMerkleUpdate) replaySource(original *Cell, i int, slots []*Cell
 // Boundary substitution reads a slot instead of a Hash-keyed map, and the
 // rebuild memo is a slice indexed by the slot the plan assigned per
 // {hash@max, merkleDepth} — the same identity the ready map used.
-func (p *PreparedMerkleUpdate) replayDest(i int, slots, memo []*Cell, arena *merkleUpdateApplyArena) (*Cell, int, error) {
+func (p *PreparedMerkleUpdate) replayDest(
+	i int,
+	slots []*Cell,
+	memo []merkleUpdateAppliedCell,
+) (merkleUpdateAppliedCell, int, error) {
 	step := &p.dst[i]
 
 	if step.boundary {
 		if step.boundarySlot < 0 || int(step.boundarySlot) >= len(slots) {
-			return nil, 0, errPreparedPlanCorrupt
+			return merkleUpdateAppliedCell{}, 0, errPreparedPlanCorrupt
 		}
 		ref := slots[step.boundarySlot]
 		if ref == nil {
 			// Unreachable after a successful verdict: dfsTo rejected every
 			// destination boundary the source walk did not reach, and both
 			// walks key on the same hashes.
-			return nil, 0, merkleUpdateUnknownPrunedBranchError{hash: step.cell.HashKeyAt(int(step.merkleDepth))}
+			return merkleUpdateAppliedCell{}, 0, merkleUpdateUnknownPrunedBranchError{hash: step.cell.HashKeyAt(int(step.merkleDepth))}
 		}
 		// Verify the complete boundary identity before reusing the source cell.
 		// The parent side normalizes by its own level, the update side by the
 		// recorded merkleDepth; that asymmetry is the check.
 		if err := compareMerkleBoundaryCells(ref, ref.Level(), step.cell, int(step.merkleDepth)); err != nil {
-			return nil, 0, fmt.Errorf("invalid pruned branch in merkle update: %w", err)
+			return merkleUpdateAppliedCell{}, 0, fmt.Errorf("invalid pruned branch in merkle update: %w", err)
 		}
-		return ref, int(step.next), nil
+		return merkleUpdateAppliedCell{cell: ref, substituted: ref != step.cell}, int(step.next), nil
 	}
 	if step.memo < 0 {
-		return step.cell, int(step.next), nil
+		return merkleUpdateAppliedCell{}, 0, errPreparedPlanCorrupt
 	}
-	if ready := memo[step.memo]; ready != nil {
+	if ready := memo[step.memo]; ready.cell != nil {
 		return ready, int(step.next), nil
 	}
+	if step.refs == 0 && !step.deferred {
+		owned := merkleUpdateAppliedCell{cell: step.cell.copyLeafWithOwnedData()}
+		memo[step.memo] = owned
+		return owned, int(step.next), nil
+	}
 	if step.deferred {
-		return nil, 0, errPreparedPlanCorrupt
+		return merkleUpdateAppliedCell{}, 0, errPreparedPlanCorrupt
 	}
 
 	var refsBuf [4]*Cell
 	refs := refsBuf[:step.refs]
 	child := i + 1
-	changed := false
+	substituted := false
 	for k := range refs {
-		recorded := p.dst[child].cell
-		rebuilt, next, err := p.replayDest(child, slots, memo, arena)
+		rebuilt, next, err := p.replayDest(child, slots, memo)
 		if err != nil {
-			return nil, 0, err
+			return merkleUpdateAppliedCell{}, 0, err
 		}
-		refs[k] = rebuilt
-		changed = changed || rebuilt != recorded
+		refs[k] = rebuilt.cell
+		substituted = substituted || rebuilt.substituted
 		child = next
 	}
 	if child != int(step.next) {
-		return nil, 0, errPreparedPlanCorrupt
+		return merkleUpdateAppliedCell{}, 0, errPreparedPlanCorrupt
 	}
-	if !changed {
-		memo[step.memo] = step.cell
-		return step.cell, int(step.next), nil
-	}
-
 	refView := newCellRefView(step.cell)
-	rebuilt, _, err := cloneMerkleUpdateCellWithRefs(&refView, refs, arena)
+	rebuilt, err := cloneMerkleUpdateCellWithRefs(&refView, refs, substituted)
 	if err != nil {
-		return nil, 0, err
+		return merkleUpdateAppliedCell{}, 0, err
 	}
-	memo[step.memo] = rebuilt
-	return rebuilt, int(step.next), nil
+	result := merkleUpdateAppliedCell{cell: rebuilt, substituted: substituted}
+	memo[step.memo] = result
+	return result, int(step.next), nil
 }
 
 // ---- plan recorders, driven from the walks in merkle_update.go ----
@@ -422,7 +426,8 @@ func (p *merkleUpdateDestPlan) addPassthrough(c *Cell, merkleDepth int) {
 	if p == nil {
 		return
 	}
-	p.leaf(c, merkleDepth, -1, false)
+	step := p.addRebuild(c, merkleDepth, 0, false)
+	p.close(step)
 }
 
 func (p *merkleUpdateDestPlan) leaf(c *Cell, merkleDepth int, boundarySlot int32, boundary bool) {

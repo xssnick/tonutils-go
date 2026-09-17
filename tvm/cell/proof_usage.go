@@ -378,7 +378,12 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {
-		built := loaded.WithoutTrace()
+		var built *Cell
+		if s.wantApplied {
+			built = loaded.copyLeafWithOwnedData()
+		} else {
+			built = loaded.WithoutTrace()
+		}
 		s.cacheBuilt(key, built, built)
 		return built, built, nil
 	}
@@ -404,16 +409,20 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 		substituted = substituted || applied != next
 	}
 
-	arena := s.arena
 	if s.wantApplied && !substituted {
-		arena = nil
+		built, err := cloneAppliedCellWithRefs(loaded, refView, refs)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.cacheBuilt(key, built, built)
+		return built, built, nil
 	}
-	built, err := cloneProofCellWithRefs(loaded, refView, refs, arena)
+	built, err := cloneProofCellWithRefs(loaded, refView, refs, s.arena)
 	if err != nil {
 		return nil, nil, err
 	}
 	applied := built
-	if s.wantApplied && substituted {
+	if s.wantApplied {
 		applied, err = cloneAppliedCellWithRefs(loaded, refView, appliedRefs)
 		if err != nil {
 			return nil, nil, err
@@ -474,7 +483,12 @@ func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*C
 
 	refCnt := loaded.refsCount()
 	if refCnt == 0 {
-		built := loaded.WithoutTrace()
+		var built *Cell
+		if s.wantApplied {
+			built = loaded.copyLeafWithOwnedData()
+		} else {
+			built = loaded.WithoutTrace()
+		}
 		s.cacheBuilt(key, built, built)
 		return built, built, nil
 	}
@@ -553,18 +567,22 @@ func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*C
 	}
 
 	// With nothing substituted below it this same cell is also the applied
-	// cell, which the caller keeps as part of the new state root; that outlives
-	// the proof, so it must not hold a slab of proof cells with it.
-	arena := s.arena
+	// cell, which the caller keeps as part of the new state root. Its cell and
+	// payload must both be owned independently of the proof and destination.
 	if s.wantApplied && !substituted {
-		arena = nil
+		built, err := cloneAppliedCellWithRefs(loaded, refView, refs)
+		if err != nil {
+			return nil, nil, err
+		}
+		s.cacheBuilt(key, built, built)
+		return built, built, nil
 	}
-	built, err := cloneProofCellWithRefs(loaded, refView, refs, arena)
+	built, err := cloneProofCellWithRefs(loaded, refView, refs, s.arena)
 	if err != nil {
 		return nil, nil, err
 	}
 	applied := built
-	if s.wantApplied && substituted {
+	if s.wantApplied {
 		applied, err = cloneAppliedCellWithRefs(loaded, refView, appliedRefs)
 		if err != nil {
 			return nil, nil, err
@@ -644,28 +662,28 @@ func (s *merkleProofPruneBuildState) parallelTask(workers, hint int) *merkleProo
 	return task
 }
 
-// cloneAppliedCellWithRefs rebuilds an applied cell around substituted children.
-// Its bits are the ones the caller assembled and every child carries the hash
-// the destination child had, so level 0 is the only significant level and its
-// hash and depth are the source cell's.
+// cloneAppliedCellWithRefs owns one destination cell and its payload independently
+// of the candidate/proof arenas. Only source boundaries are shared with the old
+// state. Every replacement child carries the destination child's level-0 hash,
+// so an ordinary unvirtualized cell can retain its level-0 hash and depth.
 func cloneAppliedCellWithRefs(src *Cell, view cellRefView, refs []*Cell) (*Cell, error) {
-	if src.IsSpecial() || view.virtual {
-		rebuilt, _, err := view.cloneWithRefs(refs, nil)
-		return rebuilt, err
+	cloned := src.copyWithOwnedData()
+	cloned.clearVirtualization()
+	if cloned.meta != nil {
+		// The destination was loaded before entering this helper. Its rebuilt
+		// refs are either owned children or the old state's own boundaries;
+		// no loader from the temporary destination is needed by the result.
+		cloned.meta.lazyLoader = nil
+		cloned.meta.lazyFlags = 0
+		cloned.clearMetaIfEmpty()
 	}
-
-	cloned := new(Cell)
-	*cloned = *src
-	cloned.meta = nil
 	for i, ref := range refs {
 		cloned.setRef(i, ref)
 	}
 	if err := cloned.refreshLevelMaskForRefs(); err != nil {
 		return nil, err
 	}
-	if cloned.getLevelMask().getHashIndex() != 0 {
-		// Not reachable while the applied tree stays at level 0; recompute
-		// rather than trust the invariant.
+	if src.IsSpecial() || view.virtual || cloned.getLevelMask().getHashIndex() != 0 {
 		if err := cloned.calculateHashes(); err != nil {
 			return nil, err
 		}

@@ -303,38 +303,14 @@ type merkleUpdateSourceIndexHints struct {
 }
 
 type merkleUpdateApplier struct {
-	ready merkleUpdateVisitTable[*Cell]
-	arena merkleUpdateApplyArena
+	ready merkleUpdateVisitTable[merkleUpdateAppliedCell]
 }
 
-type merkleUpdateArenaCell struct {
-	cell   Cell
-	meta   cellMeta
-	hashes [3]Hash
-}
-
-// merkleUpdateApplyArena is owned by one returned output DAG. It is deliberately
-// allocated per Apply call and never pooled: pointers into its slabs become the
-// published result and must remain stable for that result's whole lifetime.
-type merkleUpdateApplyArena struct {
-	free     []merkleUpdateArenaCell
-	slabSize int
-}
-
-func (a *merkleUpdateApplyArena) take() *merkleUpdateArenaCell {
-	if len(a.free) == 0 {
-		switch {
-		case a.slabSize == 0:
-			a.slabSize = 8
-		case a.slabSize < 64:
-			a.slabSize *= 2
-		}
-		a.free = make([]merkleUpdateArenaCell, a.slabSize)
-	}
-
-	out := &a.free[0]
-	a.free = a.free[1:]
-	return out
+// substituted distinguishes real boundary replacement from ownership-only
+// copies. Only the former made the original apply recompute ancestor hashes.
+type merkleUpdateAppliedCell struct {
+	cell        *Cell
+	substituted bool
 }
 
 type merkleUpdateUnknownPrunedBranchError struct {
@@ -492,8 +468,9 @@ func (e merkleUpdateUnknownPrunedBranchError) Error() string {
 // buildMerkleUpdateRoot rebuilds the destination root, substituting the source
 // subtree for every pruned boundary the update reaches.
 func buildMerkleUpdateRoot(updateTo *Cell, known merkleUpdateHashTable[*Cell]) (*Cell, error) {
-	applier := merkleUpdateApplier{ready: newMerkleUpdateVisitTable[*Cell](len(known.entries))}
-	return buildMerkleUpdateCell(updateTo, 0, &known, &applier)
+	applier := merkleUpdateApplier{ready: newMerkleUpdateVisitTable[merkleUpdateAppliedCell](len(known.entries))}
+	result, err := buildMerkleUpdateCell(updateTo, 0, &known, &applier)
+	return result.cell, err
 }
 
 func CombineMerkleUpdate(ab, bc *Cell) (*Cell, error) {
@@ -731,138 +708,99 @@ func (s *merkleUpdateSourceIndex) walkProof(original, source *Cell, merkleDepth 
 	return nil
 }
 
-func buildMerkleUpdateCell(cell *Cell, merkleDepth int, known *merkleUpdateHashTable[*Cell], reuse *merkleUpdateApplier) (*Cell, error) {
+func buildMerkleUpdateCell(
+	cell *Cell,
+	merkleDepth int,
+	known *merkleUpdateHashTable[*Cell],
+	reuse *merkleUpdateApplier,
+) (merkleUpdateAppliedCell, error) {
 	if cell == nil {
-		return nil, fmt.Errorf("merkle update contains nil reference")
+		return merkleUpdateAppliedCell{}, fmt.Errorf("merkle update contains nil reference")
 	}
 
 	if hash, ok := merkleUpdatePrunedBoundaryHash(cell, merkleDepth); ok {
 		ref, found := known.lookup(hash)
 		if !found || ref == nil {
-			return nil, merkleUpdateUnknownPrunedBranchError{hash: hash}
+			return merkleUpdateAppliedCell{}, merkleUpdateUnknownPrunedBranchError{hash: hash}
 		}
 		// Verify the complete boundary identity before reusing the source cell.
 		if err := compareMerkleBoundaryCells(ref, ref.Level(), cell, merkleDepth); err != nil {
-			return nil, fmt.Errorf("invalid pruned branch in merkle update: %w", err)
+			return merkleUpdateAppliedCell{}, fmt.Errorf("invalid pruned branch in merkle update: %w", err)
 		}
-		return ref, nil
+		return merkleUpdateAppliedCell{cell: ref, substituted: ref != cell}, nil
 	}
-	if cell.GetType() == PrunedCellType {
-		return cell, nil
+	key := merkleUpdateSeenKey(cell, merkleDepth)
+	if ready, ok := reuse.ready.lookup(key); ok {
+		return ready, nil
 	}
 
 	refsCount := cell.refsCount()
 	if refsCount == 0 {
-		return cell, nil
-	}
-
-	key := merkleUpdateSeenKey(cell, merkleDepth)
-	if ready, ok := reuse.ready.lookup(key); ok {
-		return ready, nil
+		owned := merkleUpdateAppliedCell{cell: cell.copyLeafWithOwnedData()}
+		reuse.ready.store(key, owned)
+		return owned, nil
 	}
 
 	var refsBuf [4]*Cell
 	refs := refsBuf[:refsCount]
 	refView := newCellRefView(cell)
 	childDepth := merkleChildDepth(cell, merkleDepth)
-	changed := false
+	substituted := false
 	for i := 0; i < len(refs); i++ {
 		ref, err := refView.boundaryRef(i)
 		if err != nil {
-			return nil, fmt.Errorf("failed to peek destination ref %d: %w", i, err)
+			return merkleUpdateAppliedCell{}, fmt.Errorf("failed to peek destination ref %d: %w", i, err)
 		}
 		ref, err = ref.load()
 		if err != nil {
-			return nil, fmt.Errorf("failed to load destination ref %d: %w", i, err)
+			return merkleUpdateAppliedCell{}, fmt.Errorf("failed to load destination ref %d: %w", i, err)
 		}
 		rebuilt, err := buildMerkleUpdateCell(ref, childDepth, known, reuse)
 		if err != nil {
-			return nil, err
+			return merkleUpdateAppliedCell{}, err
 		}
-		refs[i] = rebuilt
-		changed = changed || rebuilt != ref
+		refs[i] = rebuilt.cell
+		substituted = substituted || rebuilt.substituted
 	}
-	if !changed {
-		reuse.ready.store(key, cell)
-		return cell, nil
-	}
-	rebuilt, _, err := cloneMerkleUpdateCellWithRefs(&refView, refs, &reuse.arena)
+	rebuilt, err := cloneMerkleUpdateCellWithRefs(&refView, refs, substituted)
 	if err != nil {
-		return nil, err
+		return merkleUpdateAppliedCell{}, err
 	}
-	reuse.ready.store(key, rebuilt)
-	return rebuilt, nil
+	result := merkleUpdateAppliedCell{cell: rebuilt, substituted: substituted}
+	reuse.ready.store(key, result)
+	return result, nil
 }
 
-// cloneMerkleUpdateCellWithRefs mirrors cellRefView.cloneWithRefs but places
-// the Cell and all mutable metadata it may need in the output-owned arena.
-// Source data bytes are immutable and remain shared, just as Cell.copy does.
-func cloneMerkleUpdateCellWithRefs(view *cellRefView, refs []*Cell, arena *merkleUpdateApplyArena) (*Cell, bool, error) {
+// cloneMerkleUpdateCellWithRefs owns destination cells and payload independently
+// of the update. Only pruned boundaries may keep cells from the actual parent.
+// Even a small output slab would keep its other cells' old-state references
+// alive, accumulating obsolete generations behind one surviving leaf.
+func cloneMerkleUpdateCellWithRefs(view *cellRefView, refs []*Cell, substituted bool) (*Cell, error) {
 	refCnt := int(view.refCnt)
 	if len(refs) != refCnt {
-		return nil, false, fmt.Errorf("unexpected refs count: got %d want %d", len(refs), refCnt)
+		return nil, fmt.Errorf("unexpected refs count: got %d want %d", len(refs), refCnt)
 	}
 
-	materialize := view.virtual
-	changed := materialize
-	for i, ref := range refs {
-		oldRef, err := view.boundaryRef(i)
-		if err != nil {
-			return nil, false, err
-		}
-		if ref != oldRef {
-			changed = true
-		}
-	}
-	if !changed {
-		return view.cell, false, nil
-	}
-
-	storage := arena.take()
-	cloned := &storage.cell
-	*cloned = *view.cell
-	if sourceMeta := view.cell.meta; sourceMeta != nil {
-		storage.meta = *sourceMeta
-		storage.meta.trace = nil
-		if sourceMeta.extraHashes != nil {
-			storage.hashes = *sourceMeta.extraHashes
-			storage.meta.extraHashes = &storage.hashes
-		}
-		cloned.meta = &storage.meta
-		cloned.clearMetaIfEmpty()
-	} else {
-		cloned.meta = nil
-	}
-	if materialize {
+	cloned := view.cell.copyWithOwnedData()
+	if view.virtual {
 		cloned.clearVirtualization()
 	}
 	for i, ref := range refs {
 		cloned.setRef(i, ref)
 	}
+	if !substituted && !view.virtual {
+		// New addresses alone do not change the cell representation. Keep the
+		// exact cached hashes the original no-substitution path returned.
+		return cloned, nil
+	}
 
 	if err := cloned.refreshLevelMaskForRefs(); err != nil {
-		return nil, false, err
-	}
-	// calculateHashes needs an extra-hash array only for a multi-hash cell.
-	// Seed that storage from the same slab so ensureMeta cannot allocate it on
-	// the heap independently of the returned cell.
-	levelMask := cloned.getLevelMask()
-	typ := cloned.resolveType()
-	hashCount := levelMask.getHashIndex() + 1
-	if typ == PrunedCellType {
-		hashCount = 1
-	}
-	if hashCount > 1 {
-		if cloned.meta == nil {
-			storage.meta = cellMeta{}
-			cloned.meta = &storage.meta
-		}
-		cloned.meta.extraHashes = &storage.hashes
+		return nil, err
 	}
 	if err := cloned.calculateHashes(); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return cloned, true, nil
+	return cloned, nil
 }
 
 func merkleUpdateSourceTreeRef(refs *cellRefView, shapeRef *Cell, i int) (*Cell, error) {
@@ -953,8 +891,8 @@ func (v *merkleUpdateValidator) dfsTo(cell *Cell, merkleDepth int) error {
 	childDepth := merkleChildDepth(cell, merkleDepth)
 	refsNum := cell.refsCount()
 	if refsNum == 0 {
-		// buildMerkleUpdateCell hands a childless destination cell straight
-		// back, without memoizing it, so the plan records the same.
+		// Leaves own their payload too, and share the same rebuild memo as
+		// internal destination nodes.
 		v.plan.addPassthrough(cell, merkleDepth)
 		return nil
 	}

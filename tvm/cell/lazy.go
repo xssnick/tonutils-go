@@ -353,7 +353,9 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 }
 
 func materializeLoadedCellWithRefs(c *Cell, refs []*Cell) (*Cell, error) {
-	out := c.copy()
+	// Loaded payloads can share an allocation with lazy refs and their loader.
+	// Materializing must sever that ownership as well as the visible refs.
+	out := c.copyWithOwnedData()
 	out.setRefs(refs)
 	out.setLazy(false)
 	out.clearVirtualization()
