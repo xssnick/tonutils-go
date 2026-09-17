@@ -9,7 +9,7 @@ import (
 )
 
 // validateBuiltTransactionCell validates the final transaction structure.
-// Message bodies and cells referenced by StateInit are intentionally opaque.
+// Message bodies, StateInit code/data and library payloads remain opaque.
 func validateBuiltTransactionCell(root, inMsg *cell.Cell, outMsgs []OutMessage) error {
 	var slice cell.Slice
 	if err := root.BeginParseIntoWithoutTrace(&slice); err != nil {
@@ -367,11 +367,36 @@ func transactionValidateStateInit(loader *cell.Slice) error {
 			if err = loader.SkipBits(2); err != nil {
 				return err
 			}
-		default:
+		case 2, 3:
 			if _, err = loader.LoadRefCell(); err != nil {
 				return err
 			}
+		case 4:
+			root, err := loader.LoadRefCell()
+			if err != nil {
+				return err
+			}
+			// The library dictionary is typed, unlike code/data. Validate it
+			// before any action executes or checks the message source address.
+			if err = transactionValidateStateInitLibraries(root.AsDict(256)); err != nil {
+				return err
+			}
 		}
+	}
+	return nil
+}
+
+func transactionValidateStateInitLibraries(libraries *cell.Dictionary) error {
+	valid, err := libraries.ValidateCheck(func(value *cell.Slice, _ *cell.Cell) (bool, error) {
+		// SimpleLib is exactly public:Bool root:^Cell. The root is opaque;
+		// its hash is not constrained by the dictionary key in the TL-B schema.
+		return value.BitsLeft() == 1 && value.RefsNum() == 1, nil
+	}, false)
+	if err != nil {
+		return err
+	}
+	if !valid {
+		return errors.New("invalid StateInit library entry")
 	}
 	return nil
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *PreparedBlockchainConfig, addr *address.Address, balance, msgBalance *big.Int, msgType tlb.MsgType, isSpecial bool) vm.Gas {
+func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *PreparedBlockchainConfig, addr *address.Address, balance, msgBalance *big.Int, msgType tlb.MsgType, isSpecial, historicalMessageGas bool) vm.Gas {
 	if transactionGasConfigured(gasOverride) {
 		return gasOverride
 	}
@@ -28,6 +28,21 @@ func transactionMessageGas(gasOverride vm.Gas, now uint32, blockchainCfg *Prepar
 	// instead of using a default profile.
 	prices := blockchainCfg.gasPricesFor(transactionIsMasterchain(addr))
 	if prices != nil {
+		if historicalMessageGas {
+			gasMax := prices.SpecialGasLimit
+			if !isSpecial {
+				gasMax = transactionGasBoughtForAccount(blockchainCfg, prices, balance, addr, now)
+			}
+			gasCredit := uint64(0)
+			if msgType == tlb.MsgTypeExternalIn {
+				gasCredit = min(prices.GasCredit, gasMax)
+			}
+			// Historical ordinary transactions buy their initial gas from the
+			// message independently of the balance left after storage fees.
+			// Preserve the real maximum: ACCEPT and SETGASLIMIT still use it.
+			gasLimit := transactionGasBoughtFor(prices, msgBalance)
+			return transactionGasFromLimits(gasMax, gasLimit, gasCredit)
+		}
 		if isSpecial {
 			gasLimit := prices.SpecialGasLimit
 			gasCredit := uint64(0)
@@ -610,7 +625,7 @@ func transactionComputeImportFee(cfg *PreparedBlockchainConfig, addr *address.Ad
 	return transactionComputeForwardFeeWithPrices(prices, usage.cells, usage.bits), nil
 }
 
-func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactionRuntimeAccount, now uint32) (*big.Int, error) {
+func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactionRuntimeAccount, now uint32, historical bool) (*big.Int, error) {
 	if now < acc.storageInfo.LastPaid {
 		return nil, fmt.Errorf("transaction unix time %d is before account last_paid %d", now, acc.storageInfo.LastPaid)
 	}
@@ -632,7 +647,7 @@ func transactionComputeStorageFee(cfg *PreparedBlockchainConfig, acc *transactio
 		return total, nil
 	}
 
-	fee, err := cfg.computeStorageFee(transactionIsMasterchain(acc.addr), acc.storageInfo.LastPaid, now, usage.BitsUsed.Uint64(), usage.CellsUsed.Uint64())
+	fee, err := cfg.computeStorageFee(transactionIsMasterchain(acc.addr), acc.storageInfo.LastPaid, now, usage.BitsUsed.Uint64(), usage.CellsUsed.Uint64(), historical)
 	if err != nil {
 		return nil, err
 	}

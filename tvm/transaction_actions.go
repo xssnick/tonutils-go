@@ -99,7 +99,7 @@ type transactionActionLoadResult struct {
 	bounce         bool
 }
 
-func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance) (*transactionActionApplyResult, error) {
+func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance, historicalNoActionStateLimits bool) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
 	// balance, actionFees, actionFine and msgBalanceRemaining are filled in by
@@ -127,6 +127,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	}
 
 	globalVersion := cfg.globalVersion()
+	checkStateLimits := !historicalNoActionStateLimits || globalVersion > 3
 	loadedActions, err := transactionLoadActions(actionsRoot, globalVersion)
 	if err != nil {
 		return nil, err
@@ -170,6 +171,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	specActions := uint16(0)
 	nextCode := acc.code
 	nextLibraries := acc.libraries
+	deleteAccount := false
 	remainingBalance, err := transactionCurrencyFromParts(balanceAfterGas, extraCurrencies)
 	if err != nil {
 		return nil, err
@@ -214,15 +216,17 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	}
 
 	failAction := func(resultCode int32, idx int, bounceOnFail bool, noFunds bool, valid bool) {
-		stateLimitExceeded, stateLimitErr := transactionAccountStateExceedsLimitsWithHint(acc, acc.code, acc.data, nextLibraries, cfg, true, &res.loadedCells)
-		if stateLimitErr != nil {
-			err = stateLimitErr
-			return
-		}
-		if stateLimitExceeded {
-			resultCode = 50
-			bounceOnFail = true
-			nextLibraries = acc.libraries
+		if checkStateLimits {
+			stateLimitExceeded, stateLimitErr := transactionAccountStateExceedsLimitsWithHint(acc, acc.code, acc.data, nextLibraries, cfg, true, &res.loadedCells)
+			if stateLimitErr != nil {
+				err = stateLimitErr
+				return
+			}
+			if stateLimitExceeded {
+				resultCode = 50
+				bounceOnFail = true
+				nextLibraries = acc.libraries
+			}
 		}
 
 		actionPhase.ResultCode = resultCode
@@ -330,7 +334,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 				if !remainingEmpty {
 					return nil, errTransactionActionPhaseFatal
 				}
-				out.deleteAccount = reservedEmpty
+				deleteAccount = reservedEmpty
 			}
 		case tlb.ActionSetCode:
 			specActions++
@@ -376,9 +380,12 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 
 	remainingBalance.add(reservedBalance)
 
-	stateLimitExceeded, err := transactionAccountStateExceedsLimitsWithHint(acc, nextCode, res.Data, nextLibraries, cfg, true, &res.loadedCells)
-	if err != nil {
-		return nil, err
+	var stateLimitExceeded bool
+	if checkStateLimits {
+		stateLimitExceeded, err = transactionAccountStateExceedsLimitsWithHint(acc, nextCode, res.Data, nextLibraries, cfg, true, &res.loadedCells)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if stateLimitExceeded {
 		actionPhase.Valid = true
@@ -430,7 +437,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	actionPhase.TotalActions = uint16(len(actions))
 	actionPhase.SpecActions = specActions
 	actionPhase.MessagesCreated = uint16(len(outMsgs))
-	if out.deleteAccount {
+	if deleteAccount {
 		actionPhase.StatusChange = tlb.AccStatusChange{Type: tlb.AccStatusChangeDeleted}
 	}
 	actionPhase.TotalFwdFees = transactionCoinsPtr(totalFwdFees)
@@ -444,6 +451,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 		return nil, err
 	}
 	out.outMsgs = outMsgs
+	out.deleteAccount = deleteAccount
 	out.nextCode = nextCode
 	out.nextLibraries = nextLibraries
 	out.extraCurrencies = extraDict
@@ -605,8 +613,8 @@ func transactionLoadMalformedAction(out *transactionActionLoadResult, actions []
 
 // transactionOutboundActionMessageStructureValid mirrors the scheme-level
 // validation the reference performs on every out_msg during action list
-// preprocessing (t_OutListNode.validate_ref); canonicality of Grams fields and
-// StateInit library checks stay in the per-action processing.
+// preprocessing (t_OutListNode.validate_ref), including StateInit library structure.
+// Canonicality of Grams fields stays in the per-action processing.
 func transactionOutboundActionMessageStructureValid(msgCell *cell.Cell) bool {
 	if _, err := transactionValidateRelaxedActionMessageCurrencies(msgCell); err != nil {
 		return false

@@ -2152,7 +2152,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *
 		data:    data,
 		balance: new(big.Int).Set(balance),
 	}
-	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra))
+	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra), false)
 	if err != nil {
 		t.Fatal(err)
 	}

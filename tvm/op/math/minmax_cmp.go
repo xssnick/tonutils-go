@@ -104,7 +104,7 @@ func compareOp(name string, prefix helpers.BitPrefix, mode int, quiet bool) *hel
 				return err
 			}
 			if x == nil || y == nil {
-				return pushNaNOrOverflow(state, quiet)
+				return pushNaNComparisonResult(state, x, quiet)
 			}
 			return pushSmallInt(state, compareModeValue(mode, x.Cmp(y)))
 		},

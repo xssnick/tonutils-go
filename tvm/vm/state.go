@@ -212,6 +212,7 @@ type State struct {
 	// from its allocator class.
 	maxLibraryLoads             uint32
 	maxDataDepth                uint16
+	Historical                  HistoricalConfig
 	hasMaxLibraryLoads          bool
 	libraryLookupSandboxed      bool
 	StopOnAccept                bool
@@ -360,6 +361,7 @@ func (s *State) prepareChildForRun(child *State) error {
 		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
 	child.GlobalVersion = s.GlobalVersion
+	child.Historical = s.Historical
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.TraceHook = s.TraceHook
 	child.SignatureCheckAlwaysSucceed = s.SignatureCheckAlwaysSucceed

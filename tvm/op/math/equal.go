@@ -26,7 +26,7 @@ func EQUAL() *helpers.SimpleOP {
 				return err
 			}
 
-			return pushCompareResult(state, i0, i1, func(x, y *big.Int) bool {
+			return pushCompareResult(state, i1, i0, func(x, y *big.Int) bool {
 				return x.Cmp(y) == 0
 			})
 		},

@@ -346,6 +346,8 @@ type ExecutionConfig struct {
 	Libraries                   []*cell.Cell
 	SignatureCheckAlwaysSucceed bool
 	Config                      *PreparedBlockchainConfig
+	// Historical explicitly selects historical VM rules for archive replay.
+	Historical vm.HistoricalConfig
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -526,6 +528,9 @@ func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.
 	if cfg.Config == nil {
 		return nil, errConfigRootRequired
 	}
+	if err := cfg.Historical.Validate(int(cfg.Config.GlobalVersion())); err != nil {
+		return nil, err
+	}
 
 	libraries := cfg.Libraries
 	if cfg.AccountRoot != nil {
@@ -564,6 +569,7 @@ func finishExecutionResult(res *ExecutionResult, err error) (*ExecutionResult, e
 }
 
 type executeOptions struct {
+	historical                  vm.HistoricalConfig
 	stopOnAccept                bool
 	proof                       *cell.MerkleProofBuilder
 	traceHook                   vm.TraceHook
@@ -582,6 +588,7 @@ type executeOptions struct {
 
 func executeOptionsFromConfig(cfg ExecutionConfig) executeOptions {
 	return executeOptions{
+		historical:                  cfg.Historical,
 		signatureCheckAlwaysSucceed: cfg.SignatureCheckAlwaysSucceed,
 		maxVMDataDepth:              vm.MaxDataDepth,
 	}
@@ -623,6 +630,7 @@ func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options exe
 	initialData := state.Reg.D[0]
 	initialActions := state.Reg.D[1]
 
+	state.Historical = options.historical
 	state.StopOnAccept = options.stopOnAccept
 	state.OnCellLoad = options.onCellLoad
 	state.TraceHook = options.traceHook
@@ -887,8 +895,10 @@ func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) e
 	if state.CurrentCode.RefsNum() > 0 {
 		state.Steps++
 
-		if err := state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
-			return err
+		if state.GlobalVersion != 0 || state.Historical.GasSchedule == vm.GasScheduleModern {
+			if err := state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
+				return err
+			}
 		}
 
 		var cc cell.Slice
@@ -902,8 +912,10 @@ func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) e
 
 	state.Steps++
 	state.TraceOpcode("implicit RET")
-	if err := state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
-		return err
+	if state.GlobalVersion != 0 || state.Historical.GasSchedule == vm.GasScheduleModern {
+		if err := state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
+			return err
+		}
 	}
 
 	return state.Return()
@@ -957,6 +969,22 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 
 func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err error) {
 	entry := matchOpcode(dispatch, state.CurrentCode)
+	if state.GlobalVersion == 0 && (state.Historical.NoPRNG || state.Historical.NoBLKDROP2) {
+		// These opcodes were absent from early tables. Reject before decoding
+		// so an unknown instruction leaves the code cursor and stack intact.
+		// Pad truncated prefixes the same way as the opcode lookup above.
+		bits := min(state.CurrentCode.BitsLeft(), uint(16))
+		prefix := state.CurrentCode.MustPreloadUInt(bits) << (16 - bits)
+		if state.Historical.NoBLKDROP2 && prefix>>8 == 0x6c {
+			entry = nil
+		}
+		if state.Historical.NoPRNG {
+			switch prefix {
+			case 0xf810, 0xf811, 0xf814, 0xf815:
+				entry = nil
+			}
+		}
+	}
 	if entry == nil {
 		if err = state.ConsumeGas(vm.InstructionBaseGasPrice); err != nil {
 			return err

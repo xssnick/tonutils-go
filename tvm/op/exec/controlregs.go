@@ -188,6 +188,22 @@ var popCtrOp = newControlRegisterOp(popCtrBitPrefix, popCtrPrefixes, "POP", func
 	if err != nil {
 		return err
 	}
+
+	if i == 3 && state.GlobalVersion == 0 && state.Historical.PopC3Cell {
+		if cl, ok := val.(*cell.Cell); ok && cl != nil {
+			// The temporary 2019 POP c3 hook loaded and blessed a cell inside
+			// this instruction, without separate CTOS/BLESS gas or steps.
+			code, err := state.Cells.BeginParse(cl)
+			if err != nil {
+				return err
+			}
+			val = &vm.OrdinaryContinuation{
+				Data: vm.ControlData{NumArgs: vm.ControlDataAllArgs, CP: state.CP},
+				Code: code,
+			}
+		}
+	}
+
 	return setControlRegister(state, i, val)
 })
 

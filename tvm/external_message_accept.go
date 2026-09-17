@@ -23,6 +23,9 @@ func (tvm *TVM) CheckExternalMessageAccepted(block *BlockContext, acc *PreparedA
 	if msg.msg.MsgType != tlb.MsgTypeExternalIn {
 		return false, errors.New("accept check requires an inbound external message")
 	}
+	if err := opts.validateHistorical(int(block.cfg.GlobalVersion())); err != nil {
+		return false, err
+	}
 
 	result, err := tvm.checkExternalMessageAccepted(block, acc, msg, &opts)
 	if err != nil {
@@ -48,7 +51,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 	runtimeAcc.isSpecial = isSpecial
 
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
-	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
+	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now, opts.HistoricalStorageFee)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +64,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 		}
 	}
 
-	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
+	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits, opts.HistoricalMessageGas)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +83,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else {
-		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial)
+		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial, opts.HistoricalMessageGas)
 		if gas.Limit == 0 && gas.Credit == 0 {
 			skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 		} else {
@@ -89,7 +92,7 @@ func (tvm *TVM) checkExternalMessageAccepted(block *BlockContext, acc *PreparedA
 				addressSuspended = blockchainCfg.isAddressSuspended(now, runtimeAcc.addr)
 			}
 
-			computeAcc, _, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg)
+			computeAcc, _, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg, opts.HistoricalExternalStateInit, opts.HistoricalPublicLibraryDeploy)
 			if err != nil {
 				return nil, err
 			}

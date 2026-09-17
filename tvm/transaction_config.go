@@ -581,7 +581,7 @@ func (c *PreparedBlockchainConfig) currentStoragePricesSlice(now uint32) *cell.S
 
 // computeStorageFee accrues the storage fee over [lastPaid, now) across all
 // active storage-price windows, mirroring tlb.BlockchainConfig.ComputeStorageFee.
-func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) (*big.Int, error) {
+func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64, historical bool) (*big.Int, error) {
 	if now <= lastPaid || lastPaid == 0 {
 		return big.NewInt(0), nil
 	}
@@ -605,6 +605,7 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 
 	var fixed fee.U128
 	var wide *big.Int // set once a window leaves the fixed-width range, see transactionStorageFeeRawU128
+	legacy := historicalStoragePayment{size: 1}
 	for ; i < len(entries) && upto < now; i++ {
 		validUntil := now
 		if i < len(entries)-1 && entries[i+1].price.ValidSince < validUntil {
@@ -616,6 +617,13 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 
 		delta := uint64(validUntil - upto)
 		upto = validUntil
+
+		if historical {
+			if err := legacy.addWindow(entries[i].price, masterchain, delta, bits, cells); err != nil {
+				return nil, err
+			}
+			continue
+		}
 
 		if wide == nil {
 			part, fits := transactionStorageFeeRawU128(entries[i].price, masterchain, delta, bits, cells)
@@ -637,6 +645,9 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 		wide.Add(wide, part)
 	}
 
+	if historical {
+		return legacy.fee(), nil
+	}
 	if wide == nil {
 		return fixed.CeilShr(16).Big(), nil
 	}

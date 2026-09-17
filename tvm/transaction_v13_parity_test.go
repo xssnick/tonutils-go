@@ -137,7 +137,7 @@ func TestTransactionV13ActiveAccountUsesInboundStateInitLibraries(t *testing.T) 
 		data:   cell.BeginCell().EndCell(),
 	}
 
-	next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusActive, false, &msg, false, emptyPreparedTestConfig())
+	next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusActive, false, &msg, false, emptyPreparedTestConfig(), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestTransactionV13RejectsDeployStateInitPublicLibrariesInMasterchain(t *tes
 		status: tlb.AccountStatusUninit,
 	}
 
-	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13))
+	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,8 @@ func TestTransactionV15RejectsDeployStateInitLibraries(t *testing.T) {
 				&msg,
 				false,
 				transactionTestConfigWithGlobalVersion(t, tt.version),
-			)
+				false,
+				false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -262,7 +263,7 @@ func TestTransactionV13RejectsDeployStateInitFixedPrefixAboveLimit(t *testing.T)
 		status: tlb.AccountStatusUninit,
 	}
 
-	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13))
+	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +407,7 @@ func TestTransactionV13NonCanonicalRelaxedCurrencyIsNotSkippedByIgnoreErrors(t *
 		balance: big.NewInt(1000),
 	}
 
-	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +444,7 @@ func TestTransactionV13DeleteAccountRequiresNoReservedBalance(t *testing.T) {
 		balance: big.NewInt(1000),
 	}
 
-	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatal(err)
 	}

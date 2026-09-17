@@ -2803,7 +2803,7 @@ func FuzzTransactionVersionedInboundIHRFeeCredit(f *testing.F) {
 				storageInfo: tlb.StorageInfo{
 					StorageExtra: tlb.StorageExtraNone{},
 				},
-			}, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), transactionStorageDueLimits{})
+			}, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), transactionStorageDueLimits{}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2845,7 +2845,7 @@ func FuzzTransactionVersionedGasLimitBoundaries(f *testing.F) {
 			}
 
 			cfg := transactionFuzzGasConfig(t, version, specialGasCell)
-			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), msgBalance, tlb.MsgTypeInternal, true)
+			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), msgBalance, tlb.MsgTypeInternal, true, false)
 			if gas.Max != transactionGasInt(specialPrices.SpecialGasLimit) || gas.Limit != want || gas.Remaining != want {
 				t.Fatalf("special v%d gas = %+v, want max=%d limit=%d", version, gas, specialPrices.SpecialGasLimit, want)
 			}
@@ -3194,7 +3194,7 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 					Actions:   actions,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), extra))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), extra), false)
 			if err != nil {
 				t.Fatalf("apply actions v%d failed: %v", version, err)
 			}
@@ -3283,7 +3283,7 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, version),
 			tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(10_000_000), extra))
+		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(10_000_000), extra), false)
 		if err != nil {
 			t.Fatalf("apply actions v%d failed: %v", version, err)
 		}
@@ -3380,7 +3380,7 @@ func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
 			data:    data,
 			balance: big.NewInt(2_000_000),
 		}
-		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(2_000_000), extra))
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(2_000_000), extra), false)
 		if err != nil {
 			t.Fatalf("apply actions v%d %s failed: %v", version, context, err)
 		}
@@ -4611,7 +4611,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 				addr:      msg.AsExternalIn().DstAddr,
 				status:    status,
 				stateHash: stateHash,
-			}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+			}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -4646,7 +4646,7 @@ func FuzzTransactionVersionedComputeStateInitBoundaries(f *testing.F) {
 		_, usedState, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
 			addr:   msg.AsInternal().DstAddr,
 			status: status,
-		}, status, false, msg, suspended, transactionTestConfigWithGlobalVersion(t, version))
+		}, status, false, msg, suspended, transactionTestConfigWithGlobalVersion(t, version), false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4707,7 +4707,7 @@ func FuzzTransactionVersionedStateInitDepthPersistence(f *testing.F) {
 		next, usedState, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
 			addr:   msg.AsInternal().DstAddr,
 			status: status,
-		}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+		}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -4804,7 +4804,7 @@ func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 			acc.code = nil
 		}
 
-		_, usedState, skip, err := transactionPrepareComputeAccount(acc, status, true, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+		_, usedState, skip, err := transactionPrepareComputeAccount(acc, status, true, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 		if err != nil {
 			t.Fatalf("v%d deleted compute account failed: %v", version, err)
 		}
@@ -4812,7 +4812,7 @@ func FuzzTransactionVersionedNoStateSkipReasonBoundaries(f *testing.F) {
 		checkTransactionComputeBoundaryResult(t, version, usedState, skip, false, wantSkip)
 
 		if status == tlb.AccountStatusActive {
-			_, usedState, skip, err = transactionPrepareComputeAccount(acc, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+			_, usedState, skip, err = transactionPrepareComputeAccount(acc, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 			if err != nil {
 				t.Fatalf("v%d active compute account failed: %v", version, err)
 			}
@@ -4846,6 +4846,8 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 	f.Add(byte(0), byte(0), byte(0), false)
 	f.Add(byte(1), byte(2), byte(2), true)
 	f.Add(byte(7), byte(3), byte(1), false)
+	f.Add(byte(7), byte(2), byte(0), true)
+	f.Add(byte(8), byte(2), byte(0), true)
 	f.Add(byte(13), byte(4), byte(2), true)
 	f.Add(byte(vmcore.MaxSupportedGlobalVersion), byte(4), byte(2), true)
 
@@ -4892,12 +4894,6 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 
 		wantValid := rawLibCase%5 == 0 || rawLibCase%5 == 4
 		err := transactionValidateMessageStateInitLibs(msg)
-		if rawMsgKind%3 == 2 {
-			if err != nil {
-				t.Fatalf("v%d external-out validator error = %v, want nil", version, err)
-			}
-			return
-		}
 		if wantValid && err != nil {
 			t.Fatalf("v%d valid library entry failed: %v", version, err)
 		}
@@ -4934,13 +4930,13 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 			}
 			return
 		}
-		if ignoreErrors && version >= 13 {
+		if ignoreErrors && version >= 8 {
 			if !res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 0 || res.phase.SkippedActions != 1 || res.phase.MessagesCreated != 0 {
 				t.Fatalf("v%d invalid library skipped phase = %+v", version, res.phase)
 			}
 			return
 		}
-		if res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
+		if res.phase.Success || res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
 			t.Fatalf("v%d invalid library action phase = %+v", version, res.phase)
 		}
 	})
@@ -4994,7 +4990,7 @@ func FuzzTransactionVersionedMasterchainPublicLibraryDeploy(f *testing.F) {
 		_, usedState, skip, err := transactionPrepareComputeAccount(&transactionRuntimeAccount{
 			addr:   addr,
 			status: status,
-		}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+		}, status, false, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 		if err != nil {
 			t.Fatal(err)
 		}

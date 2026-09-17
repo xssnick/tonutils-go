@@ -228,10 +228,13 @@ func (m *CellManager) RegisterCellLoad(cl *cell.Cell) error {
 		return nil
 	}
 	if !m.loaded.add(cl.HashKey()) {
+		if m.state.GlobalVersion == 0 && m.state.Historical.GasSchedule == GasSchedule2019 {
+			return m.state.ConsumeGas(CellLoadGasPrice)
+		}
 		return m.state.ConsumeGas(CellReloadGasPrice)
 	}
-	// The observer runs on first load only, which is the same condition the
-	// first-load gas price is charged under, so it sees each cell exactly once.
+	// Observers see each cell once, including historical schedules that charge
+	// the same gas price for first and repeated loads.
 	if m.state.OnCellLoad != nil {
 		m.state.OnCellLoad(cl)
 	}
@@ -243,7 +246,7 @@ func (m *CellManager) RegisterCellLoadKey(key cell.Hash) error {
 		return nil
 	}
 
-	if m.loaded.add(key) {
+	if m.loaded.add(key) || (m.state.GlobalVersion == 0 && m.state.Historical.GasSchedule == GasSchedule2019) {
 		return m.state.ConsumeGas(CellLoadGasPrice)
 	}
 	return m.state.ConsumeGas(CellReloadGasPrice)

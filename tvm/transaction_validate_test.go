@@ -162,54 +162,90 @@ func TestBuiltTransactionMessageValidationRequiresExactReferencedStateInit(t *te
 
 func TestReferencedStateInitValidationKeepsPayloadRefsLazy(t *testing.T) {
 	refs := []*cell.Cell{
-		cell.BeginCell().MustStoreUInt(1, 1).EndCell(),
-		cell.BeginCell().MustStoreUInt(2, 2).EndCell(),
-		cell.BeginCell().MustStoreUInt(3, 2).EndCell(),
+		cell.BeginCell().MustStoreUInt(1, 8).EndCell(),
+		cell.BeginCell().MustStoreUInt(2, 8).EndCell(),
+		cell.BeginCell().MustStoreUInt(3, 8).EndCell(),
+		cell.BeginCell().MustStoreUInt(4, 8).EndCell(),
 	}
+	libraries := cell.NewDict(256)
+	for i := range 2 {
+		var key [32]byte
+		key[0] = byte(i) << 7
+		if err := libraries.SetBuilder(
+			cell.BeginCell().MustStoreSlice(key[:], 256).EndCell(),
+			cell.BeginCell().MustStoreBoolBit(i == 0).MustStoreRef(refs[i+2]),
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	libraryRoot := libraries.AsCell()
 	stateInit := cell.BeginCell().
 		MustStoreBoolBit(false).
 		MustStoreBoolBit(false).
 		MustStoreBoolBit(true).MustStoreRef(refs[0]).
 		MustStoreBoolBit(true).MustStoreRef(refs[1]).
-		MustStoreBoolBit(true).MustStoreRef(refs[2]).
+		MustStoreBoolBit(true).MustStoreRef(libraryRoot).
 		EndCell()
 
-	byHash := make(map[cell.Hash]*cell.Cell, len(refs))
-	lazyRefs := make([]cell.LazyRef, 0, len(refs))
-	for _, ref := range refs {
-		hash := ref.HashKey()
-		byHash[hash] = ref
-		lazyRefs = append(lazyRefs, cell.LazyRef{
-			Hashes: hash[:],
-			Depths: []uint16{ref.Depth()},
-		})
-	}
-	loads := 0
-	// Ordinary cell with three refs and the five StateInit presence bits 00111.
-	lazyStateInit, err := cell.CreateWithLazyRefsUnsafe(
-		0x0301,
-		[]byte{0x3c},
-		stateInit.Hash(),
-		[]uint16{stateInit.Depth()},
-		lazyRefs,
-		func(hash cell.Hash) (*cell.Cell, error) {
-			loads++
-			return byHash[hash], nil
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, validator := range []struct {
+		name     string
+		validate func(*cell.Cell) error
+	}{
+		{name: "built message", validate: func(msg *cell.Cell) error {
+			_, err := validateBuiltTransactionMessage(msg)
+			return err
+		}},
+		{name: "relaxed action message", validate: func(msg *cell.Cell) error {
+			_, err := transactionValidateRelaxedActionMessageCurrencies(msg)
+			return err
+		}},
+	} {
+		t.Run(validator.name, func(t *testing.T) {
+			byHash := make(map[cell.Hash]*cell.Cell)
+			loads := make(map[cell.Hash]int)
+			var makeLazy func(*cell.Cell) *cell.Cell
+			makeLazy = func(src *cell.Cell) *cell.Cell {
+				lazyRefs := make([]cell.LazyRef, src.RefsNum())
+				for i := range lazyRefs {
+					ref := src.MustPeekRef(i)
+					byHash[ref.HashKey()] = makeLazy(ref)
+					lazyRefs[i] = cell.LazyRef{Hashes: ref.Hash(), Depths: []uint16{ref.Depth()}}
+				}
 
-	msg := transactionTestMessageWithReferencedStateInit(lazyStateInit, false)
-	if _, err = validateBuiltTransactionMessage(msg); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = transactionValidateRelaxedActionMessageCurrencies(msg); err != nil {
-		t.Fatal(err)
-	}
-	if loads != 0 {
-		t.Fatalf("StateInit payload refs loaded %d times", loads)
+				// This fixture uses ordinary level-zero cells. Preserve their raw
+				// bodies and descriptors while replacing every edge with a lazy ref.
+				body := make([]byte, src.SerializedBOCBodySize())
+				src.SerializeBOCBodyTo(body)
+				descriptor := uint16(src.RefsNum())<<8 | uint16(src.BitsSize()/8*2)
+				if src.BitsSize()%8 != 0 {
+					descriptor++
+				}
+				lazy, err := cell.CreateWithLazyRefsUnsafe(descriptor, body, src.Hash(), []uint16{src.Depth()}, lazyRefs,
+					func(hash cell.Hash) (*cell.Cell, error) {
+						loads[hash]++
+						return byHash[hash], nil
+					})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return lazy
+			}
+
+			msg := transactionTestMessageWithReferencedStateInit(makeLazy(stateInit), false)
+			if err := validator.validate(msg); err != nil {
+				t.Fatal(err)
+			}
+			for _, ref := range refs {
+				if count := loads[ref.HashKey()]; count != 0 {
+					t.Fatalf("opaque code/data/library payload %x loaded %d times", ref.HashKey(), count)
+				}
+			}
+			for _, node := range []*cell.Cell{libraryRoot, libraryRoot.MustPeekRef(0), libraryRoot.MustPeekRef(1)} {
+				if loads[node.HashKey()] == 0 {
+					t.Fatalf("typed library dictionary node %x was not loaded", node.HashKey())
+				}
+			}
+		})
 	}
 }
 

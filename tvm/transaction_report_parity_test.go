@@ -213,7 +213,7 @@ func TestTransactionSpecialStorageDebtDoesNotChangeStatus(t *testing.T) {
 				StorageExtra: tlb.StorageExtraNone{},
 				DuePayment:   transactionCoinsPtr(big.NewInt(7)),
 			},
-		}, msg, big.NewInt(10), big.NewInt(0), 100, cfg, limits)
+		}, msg, big.NewInt(10), big.NewInt(0), 100, cfg, limits, false)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -622,7 +622,7 @@ func (p *transactionPreparedPhases) applyPreV9OriginalBalance(acc *transactionRu
 	return nil
 }
 
-func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits) (*transactionPreparedPhases, error) {
+func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Message, storageFee, importFee *big.Int, now uint32, cfg *PreparedBlockchainConfig, limits transactionStorageDueLimits, historicalMessageGas bool) (*transactionPreparedPhases, error) {
 	globalVersion := cfg.globalVersion()
 	extraCurrencies, err := transactionCloneExtraCurrencies(acc.extraCurrencies)
 	if err != nil {
@@ -676,7 +676,9 @@ func transactionPrepareInitialPhases(acc *transactionRuntimeAccount, msg *tlb.Me
 			if err = credit(prepared.msgBalance.grams, in.ExtraCurrencies); err != nil {
 				return nil, err
 			}
-			prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, true)
+			// Historical transactions retain the credited message amount even
+			// when storage fees reduce the account balance below it.
+			prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, !historicalMessageGas)
 		} else {
 			prepared.applyStoragePhase(acc, storageFee, now, globalVersion, limits, false)
 			if err = credit(prepared.msgBalance.grams, in.ExtraCurrencies); err != nil {
@@ -1966,7 +1968,7 @@ func transactionNormalizeFrozenFinalState(acc *transactionRuntimeAccount, status
 	return status, status, stateHash, nil
 }
 
-func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedBlockchainConfig) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
+func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb.AccountStatus, deleted bool, msg *tlb.Message, addressSuspended bool, cfg *PreparedBlockchainConfig, historicalExternalStateInit, historicalPublicLibraryDeploy bool) (*transactionRuntimeAccount, bool, *tlb.ComputeSkipReason, error) {
 	stateInit := transactionMessageStateInit(msg)
 	disableAnycast := cfg.globalVersion() >= 10
 	removeAnycast := disableAnycast && acc.rawAddress().Anycast() != nil
@@ -1974,7 +1976,9 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		return acc, false, &tlb.ComputeSkipReason{Type: transactionNoStateSkipReason(stateInit)}, nil
 	}
 	if status == tlb.AccountStatusActive {
-		if stateInit != nil && msg.MsgType == tlb.MsgTypeExternalIn {
+		// Early transactions used an active account's inbound StateInit only
+		// for libraries. Its hash was not checked against the account address.
+		if stateInit != nil && msg.MsgType == tlb.MsgTypeExternalIn && !(historicalExternalStateInit && cfg.globalVersion() <= 4) {
 			stateCell, err := tlb.ToCell(stateInit)
 			if err != nil {
 				return nil, false, nil, fmt.Errorf("failed to serialize inbound state init: %w", err)
@@ -2047,7 +2051,9 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 		if err != nil {
 			return nil, false, nil, fmt.Errorf("failed to validate message state libraries: %w", err)
 		}
-		if publicLibraries > 0 {
+		// TON 7262a66 added this deployment ban without a global-version gate.
+		// Historical replay can retain the prior rule, with normal limits below.
+		if publicLibraries > 0 && (!historicalPublicLibraryDeploy || cfg.globalVersion() > 4) {
 			return acc, false, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonBadState}, nil
 		}
 	}
@@ -2122,6 +2128,8 @@ func transactionMessageStateInit(msg *tlb.Message) *tlb.StateInit {
 		return msg.AsInternal().StateInit
 	case tlb.MsgTypeExternalIn:
 		return msg.AsExternalIn().StateInit
+	case tlb.MsgTypeExternalOut:
+		return msg.AsExternalOut().StateInit
 	default:
 		return nil
 	}
@@ -2133,24 +2141,5 @@ func transactionValidateMessageStateInitLibs(msg *tlb.Message) error {
 		return nil
 	}
 
-	iterator, err := state.Lib.Iterator(false, false)
-	if err != nil {
-		return err
-	}
-	for iterator.Next() {
-		value := iterator.View().Value
-		if _, err = value.LoadBoolBit(); err != nil {
-			return fmt.Errorf("invalid StateInit library entry: %w", err)
-		}
-		if _, err = value.LoadRefCell(); err != nil {
-			return fmt.Errorf("invalid StateInit library entry: %w", err)
-		}
-		if value.BitsLeft() != 0 || value.RefsNum() != 0 {
-			return errors.New("invalid StateInit library entry")
-		}
-	}
-	if err = iterator.Err(); err != nil {
-		return err
-	}
-	return nil
+	return transactionValidateStateInitLibraries(state.Lib)
 }

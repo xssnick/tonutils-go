@@ -117,7 +117,7 @@ func TestTransactionFrozenStateInitDepthMatchesExistingAnycast(t *testing.T) {
 				stateHash: stateCell.Hash(),
 			}
 
-			next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14))
+			next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -151,7 +151,7 @@ func TestTransactionFrozenStateInitDepthMatchesExistingAnycast(t *testing.T) {
 		addr:      addr,
 		status:    tlb.AccountStatusFrozen,
 		stateHash: stateCell.Hash(),
-	}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14))
+	}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, 14), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestTransactionFrozenStateInitDepthMismatchAllowedFromV16(t *testing.T) {
 				addr:      addr,
 				status:    tlb.AccountStatusFrozen,
 				stateHash: stateCell.Hash(),
-			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version))
+			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +239,7 @@ func TestTransactionNewlyFrozenAccountCannotReactivate(t *testing.T) {
 				addr:      addr,
 				status:    tlb.AccountStatusActive,
 				stateHash: stateCell.Hash(),
-			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, version))
+			}, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}

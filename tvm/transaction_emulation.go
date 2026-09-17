@@ -52,6 +52,50 @@ type TransactionOptions struct {
 	SignatureCheckAlwaysSucceed bool
 	// TraceHook observes VM execution.
 	TraceHook vm.TraceHook
+	// Historical explicitly selects historical VM rules for archive replay.
+	Historical vm.HistoricalConfig
+	// HistoricalMessageGas preserves the original message value after storage
+	// fees and derives the initial gas limit independently of the account gas
+	// maximum. It requires global version zero or one.
+	HistoricalMessageGas bool
+	// HistoricalExternalStateInit allows an active account to receive an
+	// external StateInit with a hash different from its address. Deployment and
+	// unfreezing checks remain strict. It requires global version 0–4.
+	HistoricalExternalStateInit bool
+	// HistoricalStorageFee reproduces the old C++ storage-fee arithmetic,
+	// including its unnormalized sign check. It requires global version 0–3.
+	HistoricalStorageFee bool
+	// HistoricalPublicLibraryDeploy allows public libraries in masterchain
+	// StateInit deployments before their prohibition. It requires global
+	// version 0–4; address and state-size checks still apply.
+	HistoricalPublicLibraryDeploy bool
+	// HistoricalNoActionStateLimits skips the later account-state size check
+	// in the action phase. It requires global version 0–3; deployment and
+	// individual action limits still apply.
+	HistoricalNoActionStateLimits bool
+}
+
+func (opts TransactionOptions) validateHistorical(globalVersion int) error {
+	if err := opts.Historical.Validate(globalVersion); err != nil {
+		return err
+	}
+	if globalVersion > 1 && opts.HistoricalMessageGas {
+		return fmt.Errorf("historical message gas requires global version 0 or 1, got %d", globalVersion)
+	}
+	if globalVersion > 4 && opts.HistoricalExternalStateInit {
+		return fmt.Errorf("historical external state init requires global version 0 through 4, got %d", globalVersion)
+	}
+	if globalVersion > 3 && opts.HistoricalStorageFee {
+		return fmt.Errorf("historical storage fee requires global version 0 through 3, got %d", globalVersion)
+	}
+	if globalVersion > 4 && opts.HistoricalPublicLibraryDeploy {
+		return fmt.Errorf("historical public library deploy requires global version 0 through 4, got %d", globalVersion)
+	}
+	if globalVersion > 3 && opts.HistoricalNoActionStateLimits {
+		return fmt.Errorf("historical action state limits require global version 0 through 3, got %d", globalVersion)
+	}
+
+	return nil
 }
 
 // OutMessage is an outbound message emitted by a transaction, in creation
@@ -536,6 +580,9 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 		return nil, errors.New("prepared message is required")
 	}
 	blockchainCfg := block.cfg
+	if err := opts.validateHistorical(int(blockchainCfg.GlobalVersion())); err != nil {
+		return nil, err
+	}
 
 	runtimeAcc, proof, err := acc.runtimeForExecution(opts.BuildProof)
 	if err != nil {
@@ -556,7 +603,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
 
-	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
+	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now, opts.HistoricalStorageFee)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +617,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 			return nil, err
 		}
 	}
-	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits)
+	prepared, err := transactionPrepareInitialPhases(runtimeAcc, &msg.msg, storageFee, importFee, now, blockchainCfg, storageDueLimits, opts.HistoricalMessageGas)
 	if err != nil {
 		return nil, err
 	}
@@ -592,7 +639,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 	if prepared.balance.Sign() <= 0 {
 		skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	} else {
-		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial)
+		gas = transactionMessageGas(opts.Gas, now, blockchainCfg, runtimeAcc.addr, prepared.balance, prepared.msgBalance.grams, msg.msg.MsgType, isSpecial, opts.HistoricalMessageGas)
 		if gas.Limit == 0 && gas.Credit == 0 {
 			skipReason = &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 		} else {
@@ -601,7 +648,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 				addressSuspended = blockchainCfg.isAddressSuspended(now, runtimeAcc.addr)
 			}
 
-			computeAcc, msgStateUsed, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg)
+			computeAcc, msgStateUsed, skipReason, err = transactionPrepareComputeAccount(runtimeAcc, prepared.status, prepared.deleted, &msg.msg, addressSuspended, blockchainCfg, opts.HistoricalExternalStateInit, opts.HistoricalPublicLibraryDeploy)
 			if err != nil {
 				return nil, err
 			}
@@ -679,7 +726,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 
 	var actionFees *big.Int
 	if msgRes != nil {
-		actionRes, applyErr := transactionApplyActions(computeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance())
+		actionRes, applyErr := transactionApplyActions(computeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits)
 		if applyErr != nil {
 			return nil, applyErr
 		}
@@ -814,6 +861,9 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 		return nil, errors.New("cannot run tick/tock transaction on non-existing account")
 	}
 	blockchainCfg := block.cfg
+	if err := opts.validateHistorical(int(blockchainCfg.GlobalVersion())); err != nil {
+		return nil, err
+	}
 
 	runtimeAcc, proof, err := acc.runtimeForExecution(opts.BuildProof)
 	if err != nil {
@@ -829,7 +879,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 	isSpecial := block.isSpecialAccount(runtimeAcc.addr)
 	runtimeAcc.isSpecial = isSpecial
 	storageDueLimits := blockchainCfg.storageDueLimitsFor(transactionIsMasterchain(runtimeAcc.addr))
-	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now)
+	storageFee, err := transactionComputeStorageFee(blockchainCfg, runtimeAcc, now, opts.HistoricalStorageFee)
 	if err != nil {
 		return nil, err
 	}
@@ -909,7 +959,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 
 	actionFees := bigint.FromInt64(0)
 	if transactionComputeSucceeded(msgRes) {
-		actionRes, applyErr := transactionApplyActions(runtimeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance())
+		actionRes, applyErr := transactionApplyActions(runtimeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits)
 		if applyErr != nil {
 			return nil, applyErr
 		}
@@ -1089,7 +1139,7 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *t
 	}
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.opts.Historical, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
 func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, env *transactionExecEnv, gas vm.Gas) (*MessageExecutionResult, error) {
@@ -1122,7 +1172,7 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 	}
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.opts.Historical, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
 }
 
 const transactionLTAlignment = uint64(1_000_000)

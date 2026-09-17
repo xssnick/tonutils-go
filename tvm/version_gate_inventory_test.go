@@ -20,12 +20,12 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"external_message.go":                  3,
 	"op/cellslice/advanced_deserialize.go": 1,
 	"op/dict/dictops.go":                   2,
-	"op/exec/controlregs.go":               1,
+	"op/exec/controlregs.go":               2,
 	"op/funcs/tonops.go":                   3,
 	"op/funcs/tonops_crypto_circl.go":      2,
 	"op/funcs/tonops_fee_hash.go":          8,
 	"op/funcs/tonops_misc_message.go":      16,
-	"op/math/arith_helpers.go":             4,
+	"op/math/arith_helpers.go":             6,
 	"op/math/quiet_compound.go":            6,
 	"op/math/quiet_logic.go":               2,
 	"op/math/rshiftc.go":                   1,
@@ -34,36 +34,37 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/math/rshiftrcode.go":               1,
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
-	"transaction_account.go":               17,
-	"transaction_actions.go":               40,
+	"transaction_account.go":               19,
+	"transaction_actions.go":               41,
 	"transaction_bounce.go":                3,
 	"transaction_config.go":                1,
-	"transaction_emulation.go":             5,
+	"transaction_emulation.go":             10,
 	"transaction_fees.go":                  4,
-	"vm/cell_manager.go":                   1,
+	"vm/cell_manager.go":                   3,
 	"vm/child_vm.go":                       2,
 	"vm/exec.go":                           2,
+	"vm/historical.go":                     3,
 	"vm/libraries.go":                      3,
-	"vm.go":                                6,
+	"vm.go":                                9,
 	"vm/state.go":                          1,
 }
 
-var expectedRuntimeGlobalVersionGateThresholds = []int{0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+var expectedRuntimeGlobalVersionGateThresholds = []int{0, 1, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 var expectedTransactionGlobalVersionGateCounts = map[string]int{
-	"transaction_account.go":   17,
-	"transaction_actions.go":   40,
+	"transaction_account.go":   19,
+	"transaction_actions.go":   41,
 	"transaction_bounce.go":    3,
 	"transaction_config.go":    1,
-	"transaction_emulation.go": 5,
+	"transaction_emulation.go": 10,
 	"transaction_fees.go":      4,
 }
 
-var expectedTransactionGlobalVersionGateThresholds = []int{4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+var expectedTransactionGlobalVersionGateThresholds = []int{1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 
 const (
 	expectedRuntimeGlobalVersionDynamicGateCount = 4
-	expectedRuntimeGlobalVersionDynamicGateHash  = "3a8f759bc824031d5599dfa654a7275a82bfe9e5ee8525cdbb075f5f5c604c36"
+	expectedRuntimeGlobalVersionDynamicGateHash  = "95e5fcf41486838e99c5ccc90cf27ed9b0ff8ec108a3cf65cc4551f1e39cd561"
 
 	expectedTransactionGlobalVersionDynamicGateCount = 1
 )
@@ -81,6 +82,8 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	},
 	"op/exec/controlregs.go": {
 		"FuzzTVMVersionedControlRegisterDuplicateSaveWrites",
+		"TestHistoricalPopC3Cell",
+		"TestHistoricalPopC3CellScope",
 	},
 	"op/funcs/tonops.go": {
 		"FuzzTVMEcrecoverEthereumRecoveryIDsV14Boundary",
@@ -100,6 +103,7 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	"op/math/arith_helpers.go": {
 		"FuzzTVMVersionedLogicNaNRules",
 		"FuzzTVMVersionedImmediateShiftNaNRules",
+		"TestHistoricalNaNComparisonMatrix",
 	},
 	"op/math/quiet_compound.go": {
 		"FuzzTVMVersionedQuietDynamicShiftRanges",
@@ -129,10 +133,13 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 		"FuzzTransactionFinalizeAccountStatusBoundaries",
 		"FuzzTransactionVersionedAccountStateLimitBoundaries",
 		"FuzzTransactionVersionedComputeStateInitBoundaries",
+		"TestHistoricalExternalStateInitScope",
+		"TestHistoricalPublicLibraryDeployScope",
 	},
 	"transaction_actions.go": {
 		"FuzzTransactionVersionedReserveActionBoundaries",
 		"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
+		"TestHistoricalNoActionStateLimitsScope",
 	},
 	"transaction_bounce.go": {
 		"FuzzTransactionVersionedBounceMessageUsage",
@@ -143,6 +150,7 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	},
 	"transaction_emulation.go": {
 		"FuzzTransactionVersionedGasLimitBoundaries",
+		"TestHistoricalTransactionOptionsVersionScope",
 	},
 	"transaction_fees.go": {
 		"FuzzTransactionVersionedMessageFeeWrappersUseTailUsage",
@@ -152,9 +160,13 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 		"FuzzExecutionConfigGlobalVersionPerRunEntrypoints",
 		"FuzzTVMLibraryCodeCellStartupV9BoundaryCosts",
 		"FuzzTVMVersionedInstructionGasCommitBoundary",
+		"TestTVMHistoricalImplicitGas",
+		"TestHistoricalMissingOpcodes",
+		"TestHistoricalOpcodeFlagsPreserveOtherInstructions",
 	},
 	"vm/cell_manager.go": {
 		"FuzzCellManagerNestedLibraryVersionGate",
+		"TestHistoricalCellLoadGas",
 	},
 	"vm/child_vm.go": {
 		"FuzzRunChildVMVersionedGasClamp",
@@ -162,6 +174,11 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 	},
 	"vm/exec.go": {
 		"FuzzJumpToVersionedNestedGasAndAdjust",
+	},
+	"vm/historical.go": {
+		"FuzzExecutionConfigGlobalVersionPerRunEntrypoints",
+		"TestHistoricalConfigValidate",
+		"TestTVMRejectInvalidHistoricalConfig",
 	},
 	"vm/libraries.go": {
 		"FuzzLoadLibraryByHashVersionedLookupGas",
@@ -269,6 +286,11 @@ var expectedRuntimeGlobalVersionGateCrossEmulatorAnchors = map[string][]string{
 	"vm/exec.go": {
 		"FuzzTVMCrossEmulatorCaughtTryGlobalVersion",
 		"FuzzTVMCrossEmulatorContExecScenariosGlobalVersion",
+	},
+	"vm/historical.go": {
+		// Current-reference comparison covers the default profile at every
+		// global version; archive replay tests cover historical overrides.
+		"FuzzTVMCrossEmulatorExecutionConfigGlobalVersionOverride",
 	},
 	"vm/libraries.go": {
 		"FuzzTVMCrossEmulatorLibraryLookupGasGlobalVersion",
@@ -472,7 +494,7 @@ func TestTVMRuntimeGlobalVersionGateScannerCoversSupportedShapes(t *testing.T) {
 	file, err := parser.ParseFile(token.NewFileSet(), "global_version_gate_shapes.go", `
 package tvm
 
-func globalVersionGateShapeFixture(globalVersion int, version int, state *State, s *State, cfg TransactionEmulationConfig, action TransactionAction) {
+func globalVersionGateShapeFixture(globalVersion int, version int, state *State, s *State, m *CellManager, cfg TransactionEmulationConfig, action TransactionAction) {
 	_ = globalVersion >= 4
 	_ = version < 5
 	_ = state.GlobalVersion <= 6
@@ -480,6 +502,10 @@ func globalVersionGateShapeFixture(globalVersion int, version int, state *State,
 	_ = cfg.globalVersion() >= 8
 	_ = state.effectiveGlobalVersion() >= 10
 	_ = version.Version == 11
+	_ = m.state.GlobalVersion == 0
+	_ = 0 != m.state.GlobalVersion
+	_ = m.config.GlobalVersion == 12
+	_ = m.state.OtherVersion == 13
 }
 	`, 0)
 	if err != nil {
@@ -499,13 +525,13 @@ func globalVersionGateShapeFixture(globalVersion int, version int, state *State,
 		return true
 	})
 
-	want := []int{4, 5, 6, 7, 8, 10, 11}
+	want := []int{4, 5, 6, 7, 8, 10, 11, 0, 0}
 	if len(thresholds) != len(want) {
 		t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, want)
 	}
-	for i, want := range want {
-		if thresholds[i] != want {
-			t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, []int{4, 5, 6, 7, 8, 10, 11})
+	for i, threshold := range want {
+		if thresholds[i] != threshold {
+			t.Fatalf("global-version gate shape thresholds = %v, want %v", thresholds, want)
 		}
 	}
 }
@@ -1299,6 +1325,10 @@ func runtimeGlobalVersionGateExpr(expr ast.Expr) bool {
 	case *ast.Ident:
 		return expr.Name == "globalVersion" || expr.Name == "version"
 	case *ast.SelectorExpr:
+		if state, ok := expr.X.(*ast.SelectorExpr); ok {
+			receiver, ok := state.X.(*ast.Ident)
+			return ok && receiver.Name == "m" && state.Sel.Name == "state" && expr.Sel.Name == "GlobalVersion"
+		}
 		x, ok := expr.X.(*ast.Ident)
 		if !ok {
 			return false

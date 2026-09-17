@@ -144,12 +144,12 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 		t.Fatalf("flat max gas threshold = %s, want %d", got.Big(), prices.FlatGasPrice)
 	}
 
-	fallback := transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), nil, tlb.MsgTypeInternal, false)
+	fallback := transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), nil, tlb.MsgTypeInternal, false, false)
 	if fallback.Limit != 0 || fallback.Remaining != 0 {
 		t.Fatalf("nil internal message balance gas = %+v, want zero limit fallback", fallback)
 	}
 	hugeBalance := new(big.Int).Lsh(big.NewInt(1), 70)
-	fallback = transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), hugeBalance, tlb.MsgTypeInternal, false)
+	fallback = transactionMessageGas(vm.Gas{}, 0, emptyPreparedTestConfig(), tonopsTestAddr, big.NewInt(0), hugeBalance, tlb.MsgTypeInternal, false, false)
 	if fallback.Limit != 0 || fallback.Remaining != 0 {
 		t.Fatalf("oversized internal message balance gas = %+v, want zero limit fallback", fallback)
 	}
@@ -157,7 +157,7 @@ func TestTransactionGasBoundaryHelpers(t *testing.T) {
 	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGasPricesBasechain: transactionFeesGasPricesCell(t, *prices),
 	})
-	gas := transactionMessageGas(vm.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(1000), big.NewInt(1000), tlb.MsgTypeExternalIn, true)
+	gas := transactionMessageGas(vm.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(1000), big.NewInt(1000), tlb.MsgTypeExternalIn, true, false)
 	if gas.Credit != transactionGasInt(prices.SpecialGasLimit) || gas.Limit != transactionGasInt(prices.SpecialGasLimit) {
 		t.Fatalf("special external gas = %+v, want credit/limit clamped to special limit", gas)
 	}

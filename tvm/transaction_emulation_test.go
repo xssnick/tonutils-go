@@ -976,7 +976,7 @@ func TestTransactionStateInitFixedPrefixLimitStartsAtV10(t *testing.T) {
 				addr:   msg.AsInternal().DstAddr,
 				status: tlb.AccountStatusUninit,
 			}
-			next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version))
+			next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1028,7 +1028,7 @@ func TestTransactionStateInitFixedPrefixPreservedFromV10(t *testing.T) {
 				addr:   msg.AsInternal().DstAddr,
 				status: tlb.AccountStatusUninit,
 			}
-			next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version))
+			next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1069,7 +1069,7 @@ func TestTransactionStateInitFixedPrefixPreservedFromV10(t *testing.T) {
 			addr:   zeroMsg.AsInternal().DstAddr,
 			status: tlb.AccountStatusUninit,
 		}
-		next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, zeroMsg, false, transactionTestConfigWithGlobalVersion(t, 10))
+		next, usedState, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, zeroMsg, false, transactionTestConfigWithGlobalVersion(t, 10), false, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1126,7 +1126,7 @@ func TestTransactionSpecialGasFullStartsAtV5(t *testing.T) {
 				tlb.ConfigParamGlobalVersion:      transactionTestGlobalVersionCell(t, tc.version),
 				tlb.ConfigParamGasPricesBasechain: gasCell,
 			})
-			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), big.NewInt(200), tlb.MsgTypeInternal, true)
+			gas := transactionMessageGas(vmcore.Gas{}, 0, cfg, tonopsTestAddr, big.NewInt(10_000), big.NewInt(200), tlb.MsgTypeInternal, true, false)
 			if gas.Max != 1_000 || gas.Limit != tc.wantLimit || gas.Remaining != tc.wantLimit {
 				t.Fatalf("gas = %+v, want max=1000 limit=%d", gas, tc.wantLimit)
 			}
@@ -1949,7 +1949,7 @@ func TestTransactionInboundIHRFeeCreditStopsAtV12(t *testing.T) {
 				storageInfo: tlb.StorageInfo{
 					StorageExtra: tlb.StorageExtraNone{},
 				},
-			}, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, tc.version), transactionStorageDueLimits{})
+			}, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, tc.version), transactionStorageDueLimits{}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1995,7 +1995,7 @@ func TestTransactionStorageDuePaymentClearStartsAtV7(t *testing.T) {
 				},
 			}
 
-			prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(77), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{})
+			prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(77), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2042,7 +2042,7 @@ func TestTransactionStorageDuePaymentPersistStartsAtV4(t *testing.T) {
 
 			prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(100), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, tc.version), transactionStorageDueLimits{
 				freezeDue: big.NewInt(1_000_000),
-			})
+			}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -2481,7 +2481,7 @@ func TestTVM14ActionFailureRestoresConsumedMessageBalanceRemaining(t *testing.T)
 				Actions:   actions,
 				Committed: true,
 			},
-		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), versionConfig(version), big.NewInt(1000), nil, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), versionConfig(version), big.NewInt(1000), nil, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 		if err != nil {
 			t.Fatalf("apply actions v%d failed: %v", version, err)
 		}
@@ -2658,7 +2658,7 @@ func TestTransactionApplyActionsReserveCurrencyAffectsLaterSends(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2705,7 +2705,7 @@ func TestTransactionApplyActionsSendMode2SkipsInvalidExtraFlags(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply actions failed: %v", err)
 	}
@@ -2750,7 +2750,7 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 					Actions:   malformed,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion)), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 			if err != nil {
 				t.Fatalf("apply actions failed: %v", err)
 			}
@@ -2788,7 +2788,7 @@ func TestTransactionApplyActionsMalformedSendPrepassSkipAndBounce(t *testing.T) 
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 13),
 		tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply skipped-only state-limit actions failed: %v", err)
 	}
@@ -2824,7 +2824,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   actions,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply library action failed: %v", err)
 	}
@@ -2860,7 +2860,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 			Actions:   failAfterLib,
 			Committed: true,
 		},
-	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply failing action list failed: %v", err)
 	}
@@ -2883,7 +2883,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply state-limit action failed: %v", err)
 	}
@@ -2908,7 +2908,7 @@ func TestTransactionApplyActionsChangeLibraryAndStateLimit(t *testing.T) {
 		},
 	}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamSizeLimits: buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+	})), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 	if err != nil {
 		t.Fatalf("apply send then state-limit action failed: %v", err)
 	}
@@ -2967,7 +2967,7 @@ func TestTransactionApplyActionsStateLimitVersionBoundaries(t *testing.T) {
 			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 				tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, uint32(tc.version)),
 				tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-			}), big.NewInt(1_000_000), nil, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), nil))
+			}), big.NewInt(1_000_000), nil, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), nil), false)
 			if err != nil {
 				t.Fatalf("apply actions failed: %v", err)
 			}
@@ -3307,7 +3307,7 @@ func TestTransactionBlackholeBurnsInboundGramsBeforeCreditPhase(t *testing.T) {
 		tlb.ConfigParamBurningConfig: burningCell,
 	}))
 
-	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{})
+	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(0), big.NewInt(0), uint32(tonopsTestTime.Unix()), cfg, transactionStorageDueLimits{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3392,7 +3392,7 @@ func TestTransactionStorageDeletionUsesCreditedExtraCurrencies(t *testing.T) {
 
 	prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(500), big.NewInt(0), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), transactionStorageDueLimits{
 		deleteDue: big.NewInt(100),
-	})
+	}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3435,7 +3435,7 @@ func TestTransactionStorageDeletionDestroyedStartsAtV13(t *testing.T) {
 
 			prepared, err := transactionPrepareInitialPhases(acc, msg, big.NewInt(500), big.NewInt(0), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, tc.version), transactionStorageDueLimits{
 				deleteDue: big.NewInt(100),
-			})
+			}, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3484,7 +3484,7 @@ func TestTransactionExternalUnfreezeStartsAtV8(t *testing.T) {
 				status:    tlb.AccountStatusFrozen,
 				stateHash: stateCell.Hash(),
 			}
-			_, _, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version))
+			_, _, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusFrozen, false, msg, false, transactionTestConfigWithGlobalVersion(t, tc.version), false, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3567,7 +3567,7 @@ func TestTransactionSendActionValidatesStateInitLibraries(t *testing.T) {
 			data:    cell.BeginCell().EndCell(),
 			balance: big.NewInt(1000),
 		}
-		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil))
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false)
 		if err != nil {
 			t.Fatal(err)
 		}
