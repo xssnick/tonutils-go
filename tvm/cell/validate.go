@@ -65,6 +65,9 @@ func validateCell(c *Cell, loadRefs bool) error {
 		if c.bitsSz != 8+256 {
 			return fmt.Errorf("not enough data for a library special cell")
 		}
+		if c.getLevelMask().Mask != 0 {
+			return fmt.Errorf("library level mask mismatch")
+		}
 	case MerkleProofCellType:
 		if c.bitsSz != 8+(hashSize+depthSize)*8 {
 			return fmt.Errorf("not enough data for a merkle proof special cell")
