@@ -34,6 +34,11 @@ func TestValidateLoadedCellSpecialVariants(t *testing.T) {
 		if err := validateLoadedCell(libWithRef); err == nil {
 			t.Fatal("library cell with refs should fail")
 		}
+
+		libWithMask := makeManualCellForTest(true, LevelMask{Mask: 1}, libCell.BitsSize(), libCell.data, nil)
+		if err := validateLoadedCell(libWithMask); err == nil {
+			t.Fatal("library cell with a non-zero level mask should fail")
+		}
 	})
 
 	t.Run("MerkleProofAndUpdateValidation", func(t *testing.T) {
