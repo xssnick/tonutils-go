@@ -359,7 +359,7 @@ func debugActionsSummary(root *cell.Cell) string {
 	if root == nil {
 		return "nil"
 	}
-	loaded, err := transactionLoadActions(root, vmcore.MaxSupportedGlobalVersion)
+	loaded, err := transactionLoadActions(root, vmcore.MaxSupportedGlobalVersion, false)
 	if err != nil {
 		return err.Error()
 	}

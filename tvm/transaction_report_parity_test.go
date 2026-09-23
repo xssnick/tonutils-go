@@ -85,7 +85,7 @@ func TestTransactionActionNodesRequireExactExhaustion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := transactionLoadActions(valid, 14)
+	loaded, err := transactionLoadActions(valid, 14, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestTransactionActionNodesRequireExactExhaustion(t *testing.T) {
 		{name: "trailing ref", root: cell.BeginCell().MustStoreBuilder(valid.ToBuilder()).MustStoreRef(cell.BeginCell().EndCell()).EndCell()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			loaded, err := transactionLoadActions(tc.root, 14)
+			loaded, err := transactionLoadActions(tc.root, 14, false)
 			if err != nil {
 				t.Fatal(err)
 			}

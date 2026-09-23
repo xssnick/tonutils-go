@@ -239,8 +239,8 @@ func TestTonopsGasConfigAndGlobals(t *testing.T) {
 	if err := GLOBALID().Interpret(st); err != nil {
 		t.Fatalf("pre-v6 GLOBALID failed: %v", err)
 	}
-	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != -2 {
-		t.Fatalf("pre-v6 GLOBALID = (%v, %v), want -2", got, err)
+	if got, err := st.Stack.PopIntFinite(); err != nil || got.Int64() != -3 {
+		t.Fatalf("pre-v6 GLOBALID = (%v, %v), want -3", got, err)
 	}
 
 	st = newFuncTestState(t, map[int]any{

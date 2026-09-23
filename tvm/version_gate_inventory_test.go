@@ -35,10 +35,10 @@ var expectedRuntimeGlobalVersionGateCounts = map[string]int{
 	"op/stack/blkswx.go":                   1,
 	"op/stack/internal.go":                 1,
 	"transaction_account.go":               19,
-	"transaction_actions.go":               41,
+	"transaction_actions.go":               42,
 	"transaction_bounce.go":                3,
 	"transaction_config.go":                1,
-	"transaction_emulation.go":             10,
+	"transaction_emulation.go":             11,
 	"transaction_fees.go":                  4,
 	"vm/cell_manager.go":                   3,
 	"vm/child_vm.go":                       2,
@@ -53,10 +53,10 @@ var expectedRuntimeGlobalVersionGateThresholds = []int{0, 1, 3, 4, 5, 6, 7, 8, 9
 
 var expectedTransactionGlobalVersionGateCounts = map[string]int{
 	"transaction_account.go":   19,
-	"transaction_actions.go":   41,
+	"transaction_actions.go":   42,
 	"transaction_bounce.go":    3,
 	"transaction_config.go":    1,
-	"transaction_emulation.go": 10,
+	"transaction_emulation.go": 11,
 	"transaction_fees.go":      4,
 }
 
@@ -135,11 +135,13 @@ var expectedRuntimeGlobalVersionGateCoverageAnchors = map[string][]string{
 		"FuzzTransactionVersionedComputeStateInitBoundaries",
 		"TestHistoricalExternalStateInitScope",
 		"TestHistoricalPublicLibraryDeployScope",
+		"TestTransactionDeploymentPrefixAddress",
 	},
 	"transaction_actions.go": {
 		"FuzzTransactionVersionedReserveActionBoundaries",
 		"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
 		"TestHistoricalNoActionStateLimitsScope",
+		"TestHistoricalActionLibraryValidationScope",
 	},
 	"transaction_bounce.go": {
 		"FuzzTransactionVersionedBounceMessageUsage",

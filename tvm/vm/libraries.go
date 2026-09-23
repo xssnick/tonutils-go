@@ -232,6 +232,15 @@ func (s *State) ResolveDictNodeCell(cl *cell.Cell) (*cell.Cell, error) {
 				return nil, err
 			}
 		}
+		if resolved.IsLazy() {
+			// Inspect the loaded cell, not the pruned-looking placeholder.
+			// Resolution has already accounted for its load above.
+			sl, err := s.Cells.BeginParseAlreadyLoadedRaw(resolved)
+			if err != nil {
+				return nil, err
+			}
+			resolved = sl.BaseCell()
+		}
 		libraryLoaded = true
 		if !resolved.IsSpecial() {
 			return resolved, nil

@@ -107,7 +107,7 @@ func applyActionRegression(t *testing.T, cfg *PreparedBlockchainConfig, data, ac
 		code: cell.BeginCell().EndCell(), data: cell.BeginCell().EndCell(), balance: big.NewInt(1000),
 	}
 	res := &MessageExecutionResult{Accepted: true, ExecutionResult: ExecutionResult{Data: data, Actions: actions, Committed: true}}
-	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), historical)
+	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), historical, false)
 	if err != nil {
 		t.Fatal(err)
 	}

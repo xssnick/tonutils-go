@@ -1,7 +1,6 @@
 package tvm
 
 import (
-	"errors"
 	"fmt"
 	"math/big"
 	"testing"
@@ -53,12 +52,8 @@ func TestTransactionStateInitLibraryStructuralValidation(t *testing.T) {
 					state := cell.BeginCell().MustStoreUInt(1, 5).MustStoreRef(tc.root).EndCell()
 					message := transactionStateInitLibraryTestMessage(state, external, referenced)
 					_, err := transactionValidateRelaxedActionMessageCurrencies(message)
-					if tc.valid {
-						if err != nil {
-							t.Fatal(err)
-						}
-					} else if !errors.Is(err, errTransactionInvalidRelaxedActionMessage) {
-						t.Fatalf("malformed library must fail schema validation, got %v", err)
+					if err != nil {
+						t.Fatalf("StateInit library reference must remain opaque in the modern schema: %v", err)
 					}
 
 					library := tc.root.AsDict(256)
@@ -72,29 +67,27 @@ func TestTransactionStateInitLibraryStructuralValidation(t *testing.T) {
 							t.Fatalf("parsed %s: valid=%t error=%v", parsed.MsgType, tc.valid, err)
 						}
 					}
-					for _, version := range []uint32{0, 2, 7, 8, 13, 15} {
+					for _, version := range []uint32{0, 2, 3, 4, 7, 8, 13, 16} {
 						for _, mode := range []uint8{0, 2, 3, 16, 18} {
 							actions := buildTransactionActionList(t,
 								tlb.ActionSetCode{NewCode: code},
 								tlb.ActionSendMsg{Mode: mode, Msg: message})
-							loaded, err := transactionLoadActions(actions, version)
-							if err != nil {
-								t.Fatal(err)
-							}
-							skipped := !tc.valid && version >= 8 && mode&2 != 0
-							if tc.valid || skipped {
-								if loaded.resultCode != 0 || len(loaded.actions) != 2 || loaded.actions[1].skipped != skipped {
-									t.Fatalf("v%d mode%d: accepted/skipped result %+v", version, mode, loaded)
+							for _, historical := range []bool{false, true} {
+								loaded, err := transactionLoadActions(actions, version, historical)
+								if err != nil {
+									t.Fatal(err)
 								}
-								if skipped && loaded.skippedActions != 1 {
-									t.Fatal("skipped malformed send not counted")
-								}
-							} else {
-								if loaded.resultCode != 34 || loaded.totalActions != 2 || len(loaded.actions) != 0 {
-									t.Fatalf("v%d mode%d: malformed library passed prepass: %+v", version, mode, loaded)
-								}
-								if loaded.resultArg == nil || *loaded.resultArg != 1 || loaded.bounce != (version >= 8 && mode&16 != 0) {
-									t.Fatalf("v%d mode%d: incorrect failure position/bounce: %+v", version, mode, loaded)
+								if tc.valid || !historical || version > 3 {
+									if loaded.resultCode != 0 || len(loaded.actions) != 2 || loaded.actions[1].skipped || loaded.skippedActions != 0 {
+										t.Fatalf("v%d mode%d historical=%t: unexpected prepass result %+v", version, mode, historical, loaded)
+									}
+								} else {
+									if loaded.resultCode != 34 || loaded.totalActions != 2 || len(loaded.actions) != 0 {
+										t.Fatalf("v%d mode%d: malformed library passed historical prepass: %+v", version, mode, loaded)
+									}
+									if loaded.resultArg == nil || *loaded.resultArg != 1 || loaded.bounce {
+										t.Fatalf("v%d mode%d: incorrect historical failure position/bounce: %+v", version, mode, loaded)
+									}
 								}
 							}
 						}

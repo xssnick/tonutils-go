@@ -600,7 +600,7 @@ func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 
 func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	for _, root := range []*cell.Cell{nil, cell.BeginCell().EndCell()} {
-		loaded, err := transactionLoadActions(root, 13)
+		loaded, err := transactionLoadActions(root, 13, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -610,7 +610,7 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	}
 
 	noPrevRef := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32).EndCell()
-	loaded, err := transactionLoadActions(noPrevRef, 13)
+	loaded, err := transactionLoadActions(noPrevRef, 13, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,7 +622,7 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = tlb.ActionSetCode{NewCode: cell.BeginCell().MustStoreUInt(uint64(i&0xff), 8).EndCell()}
 	}
-	loaded, err = transactionLoadActions(buildTransactionActionList(t, tooMany...), 13)
+	loaded, err = transactionLoadActions(buildTransactionActionList(t, tooMany...), 13, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -635,14 +635,14 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 		MustStoreUInt(0x0ec3c86d, 32).
 		MustStoreUInt(16, 8).
 		EndCell()
-	v7, err := transactionLoadActions(malformedBounce, 7)
+	v7, err := transactionLoadActions(malformedBounce, 7, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if v7.resultCode != 34 || v7.bounce {
 		t.Fatalf("v7 malformed send result = %+v, want code 34 without bounce", v7)
 	}
-	v8, err := transactionLoadActions(malformedBounce, 8)
+	v8, err := transactionLoadActions(malformedBounce, 8, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +682,7 @@ func TestTransactionReferencedStateInitRequiresExactExhaustion(t *testing.T) {
 				t.Fatalf("layout = %+v, known=%t", validation.layout, validation.layoutKnown)
 			}
 
-			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14)
+			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -704,7 +704,7 @@ func TestTransactionReferencedStateInitRequiresExactExhaustion(t *testing.T) {
 					t.Fatalf("validation error = %v", err)
 				}
 
-				loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14)
+				loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -734,7 +734,7 @@ func TestTransactionRelaxedActionMessageAcceptsStructurallyValidVariableAddress(
 			if err != nil {
 				t.Fatalf("structurally valid variable address rejected: %v", err)
 			}
-			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14)
+			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1000,7 +1000,7 @@ func TestTransactionMalformedSendPrepassSkipStartsAtV8(t *testing.T) {
 		MustStoreUInt(2, 8).
 		EndCell()
 
-	v7, err := transactionLoadActions(malformed, 7)
+	v7, err := transactionLoadActions(malformed, 7, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1008,7 +1008,7 @@ func TestTransactionMalformedSendPrepassSkipStartsAtV8(t *testing.T) {
 		t.Fatalf("unexpected v7 load result: %+v", v7)
 	}
 
-	v8, err := transactionLoadActions(malformed, 8)
+	v8, err := transactionLoadActions(malformed, 8, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2152,7 +2152,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *
 		data:    data,
 		balance: new(big.Int).Set(balance),
 	}
-	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra), false)
+	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

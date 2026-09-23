@@ -43,6 +43,8 @@ func TestHistoricalTransactionOptionsVersionScope(t *testing.T) {
 		{"message_gas_storage_fee", TransactionOptions{HistoricalMessageGas: true, HistoricalStorageFee: true}, 1},
 		{"external_state_init_public_library_deploy", TransactionOptions{HistoricalExternalStateInit: true, HistoricalPublicLibraryDeploy: true}, 4},
 		{"no_action_state_limits", TransactionOptions{HistoricalNoActionStateLimits: true}, 3},
+		{"action_library_validation", TransactionOptions{HistoricalActionLibraryValidation: true}, 3},
+		{"action_library_validation_message_gas", TransactionOptions{HistoricalActionLibraryValidation: true, HistoricalMessageGas: true}, 1},
 		{"external_state_init_no_action_state_limits", TransactionOptions{HistoricalExternalStateInit: true, HistoricalNoActionStateLimits: true}, 3},
 		{"external_state_init_pop_c3", TransactionOptions{HistoricalExternalStateInit: true, Historical: vm.HistoricalConfig{PopC3Cell: true}}, 0},
 		{"nan_comparison", TransactionOptions{Historical: vm.HistoricalConfig{NaNComparison: true}}, 3},

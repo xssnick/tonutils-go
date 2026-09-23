@@ -24,7 +24,7 @@ func TestTransactionLoadActionsTracesReusedList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	loaded, err := transactionLoadActions(tracedActions, 14)
+	loaded, err := transactionLoadActions(tracedActions, 14, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestTransactionLoadActionsMaterializesLazyListNodesBeforeSpecialCheck(t *te
 		t.Fatal(err)
 	}
 
-	loaded, err := transactionLoadActions(lazyRoot, 14)
+	loaded, err := transactionLoadActions(lazyRoot, 14, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestTransactionLoadActionsMaterializesLazyListNodesBeforeSpecialCheck(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	loaded, err = transactionLoadActions(exotic, 14)
+	loaded, err = transactionLoadActions(exotic, 14, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -16,9 +16,10 @@ import (
 )
 
 // PreparedAccount is an account state parsed once into the representation the
-// transaction executor needs. Build it with PrepareAccount at lane start; each
-// TransactionExecutionResult carries the follow-up PreparedAccount so
-// consecutive transactions of one account never re-parse state.
+// transaction executor needs. Build it with PrepareAccount at the start of each
+// block; each TransactionExecutionResult carries the follow-up PreparedAccount
+// for the next transaction of that account within the same block. The follow-up
+// also retains transient context that account_none cannot serialize.
 type PreparedAccount struct {
 	shard   *tlb.ShardAccount
 	state   *tlb.AccountState
@@ -28,7 +29,8 @@ type PreparedAccount struct {
 // PrepareAccount parses the shard account state exactly once. addr is the
 // account address used for non-existing accounts (a lane always knows its
 // account); it may be nil for existing accounts, whose address comes from the
-// parsed state.
+// parsed state. Use it again at the start of a new block to discard the previous
+// block's transient execution context.
 func PrepareAccount(shard *tlb.ShardAccount, addr *address.Address) (*PreparedAccount, error) {
 	if err := validateTransactionShardAccount(shard); err != nil {
 		return nil, err
@@ -280,6 +282,7 @@ func transactionSpendCellBudget(root *cell.Cell, budget int) error {
 	if root == nil {
 		return nil
 	}
+	initialBudget := budget
 
 	// A dictionary an account really carries is a handful of nodes deep, so the
 	// pending set stays on the goroutine stack for everything but an attack.
@@ -289,9 +292,16 @@ func transactionSpendCellBudget(root *cell.Cell, budget int) error {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if budget <= 0 {
-			return fmt.Errorf("exceeds the %d cell validation budget", transactionValidateOpsBudget)
+			return fmt.Errorf("exceeds the %d cell validation budget", initialBudget)
 		}
 		budget--
+		if current.IsLazy() {
+			var err error
+			current, err = current.WithoutTrace().Prewarm()
+			if err != nil {
+				return err
+			}
+		}
 
 		for i := 0; i < int(current.RefsNum()); i++ {
 			ref, err := current.PeekRef(i)
@@ -488,6 +498,12 @@ func (a *PreparedAccount) runtimeForExecution(buildProof bool) (*transactionRunt
 	runtime, err := loadTransactionRuntimeAccountState(a.shard, &state, a.runtime.addr, true)
 	if err != nil {
 		return nil, nil, err
+	}
+	if !state.IsValid {
+		// account_none omits storage context retained by the reference account
+		// between transactions in the same block. A traced reload must keep it.
+		runtime.storageInfo.LastPaid = a.runtime.storageInfo.LastPaid
+		runtime.storageInfo.DuePayment = a.runtime.storageInfo.DuePayment
 	}
 	// The serialized account_none state cannot carry this lane-local bound.
 	runtime.storageLT = a.runtime.storageLT
@@ -771,6 +787,10 @@ type builtTransactionAccount struct {
 	cell        *cell.Cell
 	state       *tlb.AccountState
 	storageStat *cell.Cell
+	// account_none omits these fields, but committing a transaction preserves
+	// them in the in-memory account until the block ends.
+	lastPaid   uint32
+	duePayment *tlb.Coins
 	// storageStatBound says storageStat was computed by this executor for
 	// exactly storageCellForStat, so the next transaction may reuse it even
 	// when the account carries no storage_dict_hash.
@@ -793,8 +813,10 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 			},
 		}
 		return &builtTransactionAccount{
-			cell:  cell.BeginCell().MustStoreBoolBit(false).EndCell(),
-			state: accountState,
+			cell:       cell.BeginCell().MustStoreBoolBit(false).EndCell(),
+			state:      accountState,
+			lastPaid:   lastPaid,
+			duePayment: duePayment,
 		}, nil
 	}
 	if acc.nonCanonicalMyAddr {
@@ -881,6 +903,14 @@ func buildTransactionAccountCell(acc *transactionRuntimeAccount, status tlb.Acco
 	accountCell, err := buildTransactionAccountStateCell(accountAddr, storageInfo.StorageUsed, storageExtraDictHash, lastPaid, duePayment, storageBuilder)
 	if err != nil {
 		return nil, fmt.Errorf("failed to serialize account state: %w", err)
+	}
+	if extraCurrencies != nil {
+		// compute_state validates the final Account with 1024 cells. Its root
+		// costs one; only balance dictionary nodes are typed references here.
+		// StateInit code/data/libraries remain opaque ^Cell fields.
+		if err := transactionSpendCellBudget(extraCurrencies.AsCell(), 1023); err != nil {
+			return nil, fmt.Errorf("invalid final account extra currencies: %w", err)
+		}
 	}
 
 	built := &builtTransactionAccount{
@@ -2072,6 +2102,15 @@ func transactionPrepareComputeAccount(acc *transactionRuntimeAccount, status tlb
 
 	next := *acc
 	next.removeAnycast = removeAnycast
+	if !disableAnycast && (status == tlb.AccountStatusUninit || status == tlb.AccountStatusNonExist) && stateInit.Depth != nil && *stateInit.Depth > 0 {
+		// check_in_msg_state_hash/recompute_tmp_addr uses the StateInit hash
+		// as the original address and the account ID as its rewrite prefix.
+		// This address is visible in c7 and outgoing messages during deployment,
+		// while compute_state still serializes the original account address.
+		next.addrVM = acc.addr.Copy()
+		copy(next.addrVM.Data(), stateCell.Hash())
+		next.addrVM.SetAnycast(address.NewAnycast(uint(*stateInit.Depth), acc.addr.Data()))
+	}
 	next.status = tlb.AccountStatusActive
 	next.code = stateInit.Code
 	next.data = stateInit.Data
@@ -2137,9 +2176,13 @@ func transactionMessageStateInit(msg *tlb.Message) *tlb.StateInit {
 
 func transactionValidateMessageStateInitLibs(msg *tlb.Message) error {
 	state := transactionMessageStateInit(msg)
-	if state == nil || state.Lib == nil || state.Lib.AsCell() == nil {
+	if state == nil {
 		return nil
 	}
 
-	return transactionValidateStateInitLibraries(state.Lib)
+	// StateInitWithLibs has a separate 1024-cell validation budget. A valid
+	// binary dictionary has 2*n-1 nodes, so both inline state (1024 available)
+	// and referenced state (1023) admit at most 512 entries.
+	budget := 1024
+	return transactionValidateStateInitLibraries(state.Lib, &budget)
 }

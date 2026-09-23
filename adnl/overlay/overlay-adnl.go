@@ -907,10 +907,6 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 			stream.mx.Unlock()
 			return fmt.Errorf("malformed source")
 		}
-		if t.Date != stream.date {
-			stream.mx.Unlock()
-			return fmt.Errorf("broadcast date mismatch")
-		}
 		if uint64(t.Seqno) >= broadcastFECPartLimit(stream.fec.SymbolsCount) {
 			stream.mx.Unlock()
 			return fmt.Errorf("too big seqno")
@@ -983,6 +979,9 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	if err != nil {
 		return err
 	}
+	// Full parts carry independently signed dates, which are not part of the
+	// broadcast ID. Keep the initial stream date only for dateless short parts,
+	// matching C++ BroadcastFecPart::run_checks and the short-part receiver.
 	if err = verifyBroadcastFECPartSignature(t.Source, partHash, t.Date, t.Signature); err != nil {
 		return err
 	}
@@ -1053,10 +1052,6 @@ func (a *ADNLOverlayWrapper) processFECBroadcast(t *BroadcastFEC) error {
 	if stream.flags&BroadcastFlagAnySender == 0 && !bytes.Equal(stream.source, sourceKey.Key) {
 		stream.mx.Unlock()
 		return fmt.Errorf("malformed source")
-	}
-	if t.Date != stream.date {
-		stream.mx.Unlock()
-		return fmt.Errorf("broadcast date mismatch")
 	}
 	if uint64(t.Seqno) >= broadcastFECPartLimit(stream.fec.SymbolsCount) {
 		stream.mx.Unlock()

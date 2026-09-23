@@ -241,8 +241,8 @@ func TestReferencedStateInitValidationKeepsPayloadRefsLazy(t *testing.T) {
 				}
 			}
 			for _, node := range []*cell.Cell{libraryRoot, libraryRoot.MustPeekRef(0), libraryRoot.MustPeekRef(1)} {
-				if loads[node.HashKey()] == 0 {
-					t.Fatalf("typed library dictionary node %x was not loaded", node.HashKey())
+				if loads[node.HashKey()] != 0 {
+					t.Fatalf("opaque StateInit library node %x was loaded", node.HashKey())
 				}
 			}
 		})

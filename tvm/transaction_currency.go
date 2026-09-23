@@ -115,14 +115,15 @@ func (c *transactionUsageCollector) addCell(root *cell.Cell, skipRoot bool) (tra
 	}
 
 	loaded := sl.BaseCell()
-	key := loaded.HashKey()
-	if _, ok := c.seen[key]; ok {
-		return transactionUsage{}, nil
-	}
-	c.seen[key] = struct{}{}
-
 	res := transactionUsage{}
 	if !skipRoot {
+		// Inline slices have no physical root to deduplicate. Their hash can
+		// still occur as a real cell reached through another message field.
+		key := loaded.HashKey()
+		if _, ok := c.seen[key]; ok {
+			return transactionUsage{}, nil
+		}
+		c.seen[key] = struct{}{}
 		res = transactionUsage{
 			cells: 1,
 			bits:  uint64(loaded.BitsSize()),

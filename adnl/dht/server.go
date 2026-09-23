@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -548,7 +549,7 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) (err error)
 	case RequestReversePing:
 		return errReverseConnectionsDisabled
 	default:
-		return fmt.Errorf("unsupported dht query type %s", reflect.TypeOf(payload))
+		return fmt.Errorf("unsupported dht query type %s", describePayloadType(payload))
 	}
 }
 
@@ -599,8 +600,33 @@ func (s *Server) handleMessage(peer adnl.Peer, msg *adnl.MessageCustom) error {
 	case RequestReversePingCont:
 		return nil
 	default:
-		return fmt.Errorf("unsupported dht message type %s", reflect.TypeOf(payload))
+		return fmt.Errorf("unsupported dht message type %s", describePayloadType(payload))
 	}
+}
+
+func describePayloadType(payload any) string {
+	switch payload.(type) {
+	case []tl.Serializable, []any:
+	default:
+		return fmt.Sprintf("%T", payload)
+	}
+
+	// ADNL decodes concatenated boxed objects as a slice. Log its shape without
+	// dumping node signatures or unbounded payload data from an untrusted peer.
+	list := reflect.ValueOf(payload)
+	var description strings.Builder
+	fmt.Fprintf(&description, "%T (len=%d, types=[", payload, list.Len())
+	for i := 0; i < min(list.Len(), 8); i++ {
+		if i != 0 {
+			description.WriteString(", ")
+		}
+		fmt.Fprintf(&description, "%T", list.Index(i).Interface())
+	}
+	if list.Len() > 8 {
+		description.WriteString(", ...")
+	}
+	description.WriteString("])")
+	return description.String()
 }
 
 func (s *Server) queryPrefix() ([]byte, error) {

@@ -106,6 +106,12 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 	if err != nil {
 		return fmt.Errorf("failed to prepare next account state: %w", err)
 	}
+	if !next.state.IsValid {
+		// Keep the reference account's in-block storage context separate from
+		// the serialized account_none exposed by State and ShardAccount.
+		nextAccount.runtime.storageInfo.LastPaid = next.lastPaid
+		nextAccount.runtime.storageInfo.DuePayment = next.duePayment
+	}
 	// account_none has no field for the last transaction end LT. Keep it in
 	// the prepared lane so another transaction cannot overlap this one.
 	nextAccount.runtime.storageLT = endLT

@@ -1,7 +1,8 @@
 # Historical mainnet replay witnesses
 
 Copied from the supplied TVM-002 through TVM-008, TVM-010, TVM-012 through
-TVM-016, TVM-018 and TVM-020 conformance reports. Tests run offline through the
+TVM-016, TVM-018, TVM-020, TVM-022, TVM-023, TVM-026 and TVM-027 conformance
+reports. Tests run offline through the
 public transaction API, without a C++ emulator. The MC 1
 and MC 94558 witnesses were captured from published `mainnet/v4` history on
 2026-09-14.
@@ -55,8 +56,12 @@ and MC 94558 witnesses were captured from published `mainnet/v4` history on
   losslessly, and tests check the original JSON's SHA-256 after decompression.
 - `malformed-library-23830662.json`: shard block 29259549, included in
   MC 23830662, with execution `MasterRef` MC 23830659. Malformed outgoing
-  StateInit libraries invalidate the action list before action execution,
-  producing code 34. No historical option is needed.
+  StateInit libraries invalidate the action list before action execution with
+  `HistoricalActionLibraryValidation`, producing code 34 and `Valid=false`.
+  Modern execution validates libraries during send processing, after the
+  structural action-list check, and retains `Valid=true` for this failure.
+  A control pins the modern transaction and ShardAccount hashes obtained by
+  running the same fixture inputs through the C++ emulator.
 - `nan-comparison-26399968.json`: shard block 31958896, included in MC 26399968,
   with execution `MasterRef` MC 26399963. Both transactions match with
   `Historical.NaNComparison`; the modern control preserves the second
@@ -64,9 +69,38 @@ and MC 94558 witnesses were captured from published `mainnet/v4` history on
   the final Account and last-transaction commitments; it is never an execution
   input. All five witnesses above use workchain 0, shard `8000000000000000` and
   global version 2.
+- `globalid-v4-34946802.json.gz`: shard block 40804162, included in MC
+  34946802, with execution MasterRef 34946799. `GLOBALID` reads the config
+  dictionary from c7 slot 9 and looks up config key 19. The missing parameter
+  produces exit 11, 1532 gas and the exact transaction hash. The bundled modern
+  C++ emulator has an incorrect v4/v5 fallback to c7 slot 19; this witness and
+  the pinned original source establish the historical result independently.
+- `nonexist-storage-debt-v4-35184388.json.gz`: shard block 41026304, included
+  in MC 35184388, with execution MasterRef 35184385. The first transaction
+  changes UNINIT to NON_EXIST with one nanoton of unpaid storage. The next
+  transaction in the same block collects that debt through `NextAccount`,
+  including when `BuildProof` reparses the account. The serialized
+  `account_none` remains unchanged. Start a new block with `PrepareAccount`
+  or `PrepareParsedAccount` to discard this transient context.
+- `special-outgoing-body-v4-35461295.json.gz`: masterchain block 35461295,
+  using predecessor 35461294 for execution. A referenced exotic library body
+  fails generated `MessageRelaxed Any` validation with action code 34 before
+  any send executes. The existing strong body-root check reproduces this
+  transaction without an additional production change.
+- `inline-state-size-v4-35514859.json.gz`: shard block 41347125, included in
+  MC 35514859, with execution MasterRef 35514856. An inline StateInit must not
+  suppress a physical cell with the same hash reached through the body. The
+  first transaction counts 71 cells and 25063 bits; both transactions and the
+  final ShardAccount match, with and without `BuildProof`.
 
-The JSON files are byte-for-byte copies of the supplied fixtures, with only the
-large action-state-limits witness compressed for storage. All files in each
+These four reports use global version 4 and require no historical options.
+Each includes an independent `-after.boc` used only to check the final
+ShardAccount. Account-only proofs do not support the message-supplied code in
+the GLOBALID and special-body fixtures; their exact replays use normal mode.
+
+The JSON contents are byte-for-byte copies of the supplied fixtures; files with
+the `.gz` suffix are compressed losslessly for storage, and their checksums are
+verified after decompression. All files in each
 report passed its SHA-256 manifest before testing.
 
 The block BOCs are Merkle proofs with `state_update` pruned. Tests verify their
@@ -80,7 +114,7 @@ MasterRef is checked separately from its inclusion masterchain sequence number.
 Replay verifies predecessor BlockIDs, initial and final account-block hashes,
 each transaction's old/new Account hash and previous-transaction chain, complete
 transaction hashes, last-trans fields, gas limits/credit/fees, total fees,
-outgoing message counts, VM steps and exit codes. The 26 transactions advance
+outgoing message counts, VM steps and exit codes. The 32 transactions advance
 using only computed accounts and storage statistics from the emulator's result.
 The first MC 94558 transaction is pinned to
 `3f75f750162d4c9defbea07eb840e9fe38bc60d526d5a7abfff72e17b542422e`.
@@ -103,7 +137,12 @@ Historical source references:
 - [Deletion requests are committed only after successful actions](https://github.com/ton-blockchain/ton/blob/41ed354b9fab9fa7d99a499b2a57eaeb635e32db/crypto/block/transaction.cpp)
 - [Introduction of action-phase state limits](https://github.com/ton-blockchain/ton/commit/d8dd75ec83224799afd3fd475e8f5506568ffc85)
 - [Structural validation of outgoing actions and libraries](https://github.com/ton-blockchain/ton/blob/9f008b129f1fec6c72a5e67e69ddf9caca02d27f/crypto/block/transaction.cpp)
+- [Separation of StateInit library validation from action-list structure](https://github.com/ton-blockchain/ton/commit/a78adf3062b73136a4f8cf558b3b46f92498af30)
 - [Historical integer comparisons](https://github.com/ton-blockchain/ton/blob/9f008b129f1fec6c72a5e67e69ddf9caca02d27f/crypto/vm/arithops.cpp)
+- [Original GLOBALID config-slot lookup](https://github.com/ton-blockchain/ton/blob/9f93888cf402f8421fef38406b67886be043ac58/crypto/vm/tonops.cpp#L214)
+- [Storage context retained when committing an account](https://github.com/ton-blockchain/ton/blob/3d478cbde854be03a18ab2a59f8fc3c565cf7d14/crypto/block/transaction.cpp#L3934)
+- [Strong validation of typed cell references](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/tl/tlblib.cpp#L118)
+- [Storage accounting for inline slices and physical cells](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/vm/boc.cpp#L1093)
 
 These witnesses establish specific historical executions. Git commit dates do
 not establish network activation heights, and global version zero alone does
@@ -154,9 +193,18 @@ rules. Version ranges restrict opt-ins; they do not automatically select them:
 | `TransactionOptions.HistoricalStorageFee` | 0–3 | Reproduce the old storage-fee arithmetic, including the sign of non-normalized intermediate limbs. |
 | `TransactionOptions.HistoricalPublicLibraryDeploy` | 0–4 | Permit public libraries in masterchain UNINIT deployment while preserving StateInit address and other state validation. |
 | `TransactionOptions.HistoricalNoActionStateLimits` | 0–3 | Skip the final action-phase state-size and public-library limits while preserving message and StateInit admission checks. |
+| `TransactionOptions.HistoricalActionLibraryValidation` | 0–3 | Validate outgoing StateInit libraries as part of the structural action-list check, before any action executes. |
+
+The action-library option restores the typed `StateInit.library` schema used
+before commit `a78adf30` (May 2023, supported global version 3). Modern rules
+treat this field as an opaque reference during the action-list check and apply
+the separate `StateInitWithLibs` check when processing a send. Both rules still
+validate incoming StateInit libraries. The option selects the historical error
+stage; global version alone does not select it.
 
 The opcode and comparison flags are available through all VM execution configs
 and are inherited by child VMs. Unknown opcodes use the usual exception path,
 charging 10 gas before the exception while leaving instruction bits and stack intact.
-The transaction flags belong to the transaction layer and apply to both
-full transaction emulation and external-message acceptance checks.
+The transaction flags belong to the transaction layer. Full transaction
+emulation and external-message acceptance checks validate their version bounds;
+action-related flags affect the action phase of full transaction emulation.

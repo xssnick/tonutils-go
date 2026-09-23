@@ -73,6 +73,9 @@ type TransactionOptions struct {
 	// in the action phase. It requires global version 0–3; deployment and
 	// individual action limits still apply.
 	HistoricalNoActionStateLimits bool
+	// HistoricalActionLibraryValidation validates typed StateInit libraries
+	// during action-list preprocessing. It requires global version 0–3.
+	HistoricalActionLibraryValidation bool
 }
 
 func (opts TransactionOptions) validateHistorical(globalVersion int) error {
@@ -94,6 +97,9 @@ func (opts TransactionOptions) validateHistorical(globalVersion int) error {
 	if globalVersion > 3 && opts.HistoricalNoActionStateLimits {
 		return fmt.Errorf("historical action state limits require global version 0 through 3, got %d", globalVersion)
 	}
+	if globalVersion > 3 && opts.HistoricalActionLibraryValidation {
+		return fmt.Errorf("historical action library validation requires global version 0 through 3, got %d", globalVersion)
+	}
 
 	return nil
 }
@@ -114,7 +120,9 @@ type TransactionExecutionResult struct {
 	// Burned is the inbound value destroyed by a blackhole account transaction.
 	Burned tlb.CurrencyCollection
 	// NextAccount is the resulting account state, prepared to feed the next
-	// transaction of the same account without any re-parsing.
+	// transaction of the same account within this block without re-parsing.
+	// At the start of a new block, call PrepareAccount on its ShardAccount to
+	// discard transient context that the serialized state cannot retain.
 	NextAccount *PreparedAccount
 	// OutMessages are the emitted outbound messages in creation order,
 	// including the bounce message when one was produced.
@@ -265,8 +273,11 @@ type transactionRuntimeAccount struct {
 	// addrRaw is the MsgAddressInt stored in the account state (addr_orig plus
 	// anycast metadata). addrExact encodes addr without anycast. They are
 	// resolved once while preparing the account and reused by c7 and actions.
-	addrRaw             *address.Address
-	addrExact           *address.Address
+	addrRaw   *address.Address
+	addrExact *address.Address
+	// addrVM is the temporary anycast address used during pre-v10 deployment.
+	// The stored account address and its effective identity do not change.
+	addrVM              *address.Address
 	addrRewriteDepth    uint64
 	addrIdentityDerived bool
 	// Account::compute_my_addr in the reference rebuilds an anycast addr_std
@@ -332,6 +343,9 @@ func (a *transactionRuntimeAccount) exactAddress() *address.Address {
 func (a *transactionRuntimeAccount) vmAddress(globalVersion uint32) *address.Address {
 	if globalVersion >= 10 {
 		return a.exactAddress()
+	}
+	if a.addrVM != nil {
+		return a.addrVM
 	}
 	return a.rawAddress()
 }
@@ -568,7 +582,7 @@ func transactionExecutionLibraries(acc *transactionRuntimeAccount, blockLibrarie
 
 // EmulateTransaction executes an ordinary transaction of acc with the inbound
 // message msg. The result feeds the next transaction of the same account
-// through NextAccount and AccountStorageStat.
+// within this block through NextAccount and AccountStorageStat.
 func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, msg *PreparedMessage, opts TransactionOptions) (*TransactionExecutionResult, error) {
 	if block == nil {
 		return nil, errors.New("block context is required")
@@ -726,7 +740,7 @@ func (tvm *TVM) EmulateTransaction(block *BlockContext, acc *PreparedAccount, ms
 
 	var actionFees *big.Int
 	if msgRes != nil {
-		actionRes, applyErr := transactionApplyActions(computeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits)
+		actionRes, applyErr := transactionApplyActions(computeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits, opts.HistoricalActionLibraryValidation)
 		if applyErr != nil {
 			return nil, applyErr
 		}
@@ -959,7 +973,7 @@ func (tvm *TVM) EmulateTickTockTransaction(block *BlockContext, acc *PreparedAcc
 
 	actionFees := bigint.FromInt64(0)
 	if transactionComputeSucceeded(msgRes) {
-		actionRes, applyErr := transactionApplyActions(runtimeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits)
+		actionRes, applyErr := transactionApplyActions(runtimeAcc, msgRes, startLT, now, blockchainCfg, finalBalance, nextExtraCurrencies, prepared.msgBalance, gasFees, prepared.preV9OriginalBalance(), opts.HistoricalNoActionStateLimits, opts.HistoricalActionLibraryValidation)
 		if applyErr != nil {
 			return nil, applyErr
 		}
@@ -1137,6 +1151,7 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *t
 	if err != nil {
 		return nil, err
 	}
+	c7In.addr = acc.vmAddress(env.cfg.version)
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
 	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.opts.Historical, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)

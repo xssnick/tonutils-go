@@ -99,7 +99,7 @@ type transactionActionLoadResult struct {
 	bounce         bool
 }
 
-func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance, historicalNoActionStateLimits bool) (*transactionActionApplyResult, error) {
+func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecutionResult, startLT uint64, now uint32, cfg *PreparedBlockchainConfig, balanceAfterGas *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees *big.Int, preV9OriginalBalance *transactionCurrencyBalance, historicalNoActionStateLimits, historicalActionLibraryValidation bool) (*transactionActionApplyResult, error) {
 	computeSuccess := transactionComputeSucceeded(res)
 	endLT := startLT + 1
 	// balance, actionFees, actionFine and msgBalanceRemaining are filled in by
@@ -128,7 +128,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 
 	globalVersion := cfg.globalVersion()
 	checkStateLimits := !historicalNoActionStateLimits || globalVersion > 3
-	loadedActions, err := transactionLoadActions(actionsRoot, globalVersion)
+	loadedActions, err := transactionLoadActions(actionsRoot, globalVersion, historicalActionLibraryValidation)
 	if err != nil {
 		return nil, err
 	}
@@ -463,7 +463,7 @@ func transactionApplyActions(acc *transactionRuntimeAccount, res *MessageExecuti
 	return out, nil
 }
 
-func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transactionActionLoadResult, error) {
+func transactionLoadActions(root *cell.Cell, globalVersion uint32, historicalActionLibraryValidation bool) (*transactionActionLoadResult, error) {
 	out := &transactionActionLoadResult{}
 	if root == nil {
 		return out, nil
@@ -529,7 +529,7 @@ func transactionLoadActions(root *cell.Cell, globalVersion uint32) (*transaction
 		entry := transactionActionEntry{action: list.Out}
 		switch act := list.Out.(type) {
 		case tlb.ActionSendMsg:
-			if !transactionOutboundActionMessageStructureValid(act.Msg) {
+			if !transactionOutboundActionMessageStructureValid(act.Msg, historicalActionLibraryValidation && globalVersion <= 3) {
 				if handled, res := transactionLoadMalformedAction(out, actions, &actionIdx, act.Mode, true, globalVersion); handled {
 					continue
 				} else if res != nil {
@@ -613,14 +613,20 @@ func transactionLoadMalformedAction(out *transactionActionLoadResult, actions []
 
 // transactionOutboundActionMessageStructureValid mirrors the scheme-level
 // validation the reference performs on every out_msg during action list
-// preprocessing (t_OutListNode.validate_ref), including StateInit library structure.
+// preprocessing (t_OutListNode.validate_ref). The historical v0–3 schema also
+// validates typed StateInit libraries within that preprocessing budget.
 // Canonicality of Grams fields stays in the per-action processing.
-func transactionOutboundActionMessageStructureValid(msgCell *cell.Cell) bool {
-	if _, err := transactionValidateRelaxedActionMessageCurrencies(msgCell); err != nil {
-		return false
-	}
+func transactionOutboundActionMessageStructureValid(msgCell *cell.Cell, historicalActionLibraryValidation bool) bool {
 	var msg tlb.Message
 	if err := transactionParseCell(&msg, msgCell); err != nil {
+		return false
+	}
+	// Bound typed dictionaries before canonicality checks can expand shared
+	// branches. The historical schema also includes StateInit libraries.
+	if err := transactionValidateActionMessageBudget(msgCell, &msg, historicalActionLibraryValidation); err != nil {
+		return false
+	}
+	if _, err := transactionValidateRelaxedActionMessageCurrencies(msgCell); err != nil {
 		return false
 	}
 	switch msg.MsgType {
@@ -1427,7 +1433,8 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 	}
 
 	libs := cell.NewDict(256)
-	if current != nil && !current.IsEmpty() {
+	if current != nil {
+		// A present empty root is malformed, not an absent dictionary.
 		libs = current.Copy()
 	}
 
@@ -1466,7 +1473,12 @@ func transactionProcessChangeLibraryAction(act tlb.ActionChangeLibrary, current 
 		return out, nil
 	}
 
-	if existing, err := libs.LoadValue(key); err == nil && existing != nil {
+	existing, err := libs.LoadValue(key)
+	if err != nil && !errors.Is(err, cell.ErrNoSuchKeyInDict) {
+		out.resultCode = 42
+		return out, nil
+	}
+	if err == nil {
 		isPublic, loadErr := existing.LoadBoolBit()
 		existingRef, refErr := existing.LoadRefCell()
 		if loadErr == nil && refErr == nil && existingRef != nil && existingRef.HashKey() == libHash {

@@ -3194,7 +3194,7 @@ func FuzzTransactionVersionedFailedActionMessageBalance(f *testing.F) {
 					Actions:   actions,
 					Committed: true,
 				},
-			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), extra), false)
+			}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(1_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1_000_000), extra), false, false)
 			if err != nil {
 				t.Fatalf("apply actions v%d failed: %v", version, err)
 			}
@@ -3283,7 +3283,7 @@ func FuzzTransactionVersionedStateLimitFailureMessageBalance(f *testing.F) {
 		}, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, version),
 			tlb.ConfigParamSizeLimits:    buildTransactionSizeLimitsCell(t, 1<<21, 1<<13, 1000, 1, 1),
-		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(10_000_000), extra), false)
+		}), big.NewInt(10_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(10_000_000), extra), false, false)
 		if err != nil {
 			t.Fatalf("apply actions v%d failed: %v", version, err)
 		}
@@ -3380,7 +3380,7 @@ func FuzzTransactionApplyActionsMessageBalanceInputIsolation(f *testing.F) {
 			data:    data,
 			balance: big.NewInt(2_000_000),
 		}
-		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(2_000_000), extra), false)
+		out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), transactionTestConfigWithGlobalVersion(t, version), big.NewInt(2_000_000), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(2_000_000), extra), false, false)
 		if err != nil {
 			t.Fatalf("apply actions v%d %s failed: %v", version, context, err)
 		}
@@ -3440,7 +3440,7 @@ func FuzzTransactionVersionedMalformedActionLoading(f *testing.F) {
 			}
 
 			for _, version := range transactionFuzzAllVersions {
-				loaded, err := transactionLoadActions(root, version)
+				loaded, err := transactionLoadActions(root, version, false)
 				if err != nil {
 					t.Fatalf("v%d load failed: %v", version, err)
 				}
@@ -3467,7 +3467,7 @@ func FuzzTransactionVersionedMalformedActionLoading(f *testing.F) {
 		}
 
 		for _, version := range transactionFuzzAllVersions {
-			loaded, err := transactionLoadActions(root, version)
+			loaded, err := transactionLoadActions(root, version, false)
 			if err != nil {
 				t.Fatalf("v%d load failed: %v", version, err)
 			}
@@ -4930,13 +4930,13 @@ func FuzzTransactionVersionedStateInitLibraryValidation(f *testing.F) {
 			}
 			return
 		}
-		if ignoreErrors && version >= 8 {
+		if ignoreErrors && version >= 13 {
 			if !res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 0 || res.phase.SkippedActions != 1 || res.phase.MessagesCreated != 0 {
 				t.Fatalf("v%d invalid library skipped phase = %+v", version, res.phase)
 			}
 			return
 		}
-		if res.phase.Success || res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
+		if res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 34 || res.phase.SkippedActions != 0 || res.phase.MessagesCreated != 0 {
 			t.Fatalf("v%d invalid library action phase = %+v", version, res.phase)
 		}
 	})

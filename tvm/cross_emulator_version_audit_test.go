@@ -19,8 +19,8 @@ import (
 )
 
 const (
-	expectedCrossEmulatorVersionTestAnchorCount = 135
-	expectedCrossEmulatorVersionTestAnchorHash  = "25d803b54ce6252b4edd79a47d783ec66497680e122725095ff2ed25631d4d00"
+	expectedCrossEmulatorVersionTestAnchorCount = 136
+	expectedCrossEmulatorVersionTestAnchorHash  = "1f5b9083d8b046bb1adb3035b2c32255e630c7c7f8ba71d66db9afcfeae00532"
 	expectedCrossEmulatorVersionFuzzerCount     = 136
 	expectedCrossEmulatorVersionFuzzerHash      = "37618805cde6d3fe4b572d4210a13e25059cf7165e8d52438fb4468666da26c7"
 
@@ -30,8 +30,8 @@ const (
 	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 35
 	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "a9b8321a85fc76172c2357f4755fadc3388ccaf8fe715a27bafa6ec2dc2c71b3"
 
-	expectedCrossEmulatorTransactionVersionTestCount = 79
-	expectedCrossEmulatorTransactionVersionTestHash  = "a7a2774d77fa330ab171edffbf40b00da2a0bac2ebab710a5f4f40fee585f12a"
+	expectedCrossEmulatorTransactionVersionTestCount = 89
+	expectedCrossEmulatorTransactionVersionTestHash  = "8506ae60b879bcf18172838308d0469caed41f0a1c91467b0414cc05fea49094"
 	expectedCrossEmulatorTransactionVersionFuzzCount = 48
 	expectedCrossEmulatorTransactionVersionFuzzHash  = "2bbcff7f27693d609863afd367a66292d7d07036419640531b3fdc1d9dd4460c"
 
@@ -3416,6 +3416,10 @@ func crossEmulatorVersionFuzzAliases() map[string][]string {
 		"TransactionAnycastWorkchainBoundary": {
 			"TransactionOutboundAnycastDestination",
 			"TransactionFrozenHashEqualsAddress",
+		},
+		"TransactionV16FrozenPrefixBoundaries": {
+			"TransactionFrozenExternalStateHash",
+			"TransactionStateInitFixedPrefix",
 		},
 		"TransactionNonComputePhaseExternalParity": {
 			"TransactionNonComputePhaseExternal",

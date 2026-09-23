@@ -12,22 +12,23 @@ import (
 
 func TestHistoricalReplayActionWitnesses(t *testing.T) {
 	cases := []struct {
-		name           string
-		file           string
-		checksum       string
-		inclusionMC    uint32
-		master         uint32
-		block          uint32
-		now            uint32
-		lts            []uint64
-		txHashes       []string
-		options        TransactionOptions
-		modernTarget   int
-		modernRejected bool
-		modernTxHash   string
-		modernGas      int64
-		modernSteps    uint64
-		modernExit     int64
+		name            string
+		file            string
+		checksum        string
+		inclusionMC     uint32
+		master          uint32
+		block           uint32
+		now             uint32
+		lts             []uint64
+		txHashes        []string
+		options         TransactionOptions
+		modernTarget    int
+		modernRejected  bool
+		modernTxHash    string
+		modernShardHash string
+		modernGas       int64
+		modernSteps     uint64
+		modernExit      int64
 	}{
 		{
 			name: "active_external_state_init", file: "external-state-init-v2-19763575.json",
@@ -62,8 +63,12 @@ func TestHistoricalReplayActionWitnesses(t *testing.T) {
 			name: "malformed_outgoing_library", file: "malformed-library-23830662.json",
 			checksum:    "da74cddb326161063e540c98130fec885ebf6b1a98a424d769e46c3061066593",
 			inclusionMC: 23830662, master: 23830659, block: 29259549, now: 1664209601,
-			lts:      []uint64{31528581000001},
-			txHashes: []string{"477d888664b01ac1056c4ed9a36c3ec96098580f1373b00d4b415343438f73a4"},
+			lts:          []uint64{31528581000001},
+			txHashes:     []string{"477d888664b01ac1056c4ed9a36c3ec96098580f1373b00d4b415343438f73a4"},
+			options:      TransactionOptions{HistoricalActionLibraryValidation: true},
+			modernTarget: 1, modernGas: 2917, modernSteps: 62,
+			modernTxHash:    "aa7b9da6a2ba105eb66d660be5f9afff251b3e907559cd20cf953dfc14bd1ea1",
+			modernShardHash: "ff6d434df49f3a0a60b2cb3f55ca9fae43c4ba1d3a9e87fd40a33d1aa51d5b12",
 		},
 		{
 			name: "historical_nan_comparison", file: "nan-comparison-26399968.json",
@@ -155,6 +160,9 @@ func TestHistoricalReplayActionWitnesses(t *testing.T) {
 								hex.EncodeToString(result.TransactionCell.Hash(0)) != tc.modernTxHash {
 								t.Fatalf("modern result changed: gas=%d steps=%d exit=%d transaction=%x",
 									result.GasUsed, result.Steps, result.ExitCode, result.TransactionCell.Hash(0))
+							}
+							if tc.modernShardHash != "" && hex.EncodeToString(result.NextAccount.ShardAccountCell().Hash(0)) != tc.modernShardHash {
+								t.Fatalf("modern shard account changed: %x", result.NextAccount.ShardAccountCell().Hash(0))
 							}
 						}
 					})

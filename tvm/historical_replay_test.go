@@ -283,7 +283,7 @@ func historicalPrepareFirstTransaction(t *testing.T, account historicalAccountWi
 	return current, message
 }
 
-func historicalReplayAccount(t *testing.T, ctx *BlockContext, account historicalAccountWitness, before []byte, options TransactionOptions) {
+func historicalReplayAccount(t *testing.T, ctx *BlockContext, account historicalAccountWitness, before []byte, options TransactionOptions) *PreparedAccount {
 	t.Helper()
 
 	var initial tlb.ShardAccount
@@ -382,6 +382,7 @@ func historicalReplayAccount(t *testing.T, ctx *BlockContext, account historical
 	if !bytes.Equal(previous.Account.Hash(0), account.FinalHash) {
 		t.Fatal("final account-block hash mismatch")
 	}
+	return current
 }
 
 func historicalComputePhase(t *testing.T, tx *tlb.Transaction) tlb.ComputePhase {

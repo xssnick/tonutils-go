@@ -370,7 +370,7 @@ func GLOBALID() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
 			if state.GlobalVersion < 6 {
-				rootAny, err := state.GetParam(19)
+				rootAny, err := state.GetParam(9)
 				if err != nil {
 					return err
 				}

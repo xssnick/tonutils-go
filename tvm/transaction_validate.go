@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"math/bits"
 
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
 
 // validateBuiltTransactionCell validates the final transaction structure.
-// Message bodies, StateInit code/data and library payloads remain opaque.
+// Message bodies and StateInit code/data/library references remain opaque.
 func validateBuiltTransactionCell(root, inMsg *cell.Cell, outMsgs []OutMessage) error {
 	var slice cell.Slice
 	if err := root.BeginParseIntoWithoutTrace(&slice); err != nil {
@@ -367,18 +368,8 @@ func transactionValidateStateInit(loader *cell.Slice) error {
 			if err = loader.SkipBits(2); err != nil {
 				return err
 			}
-		case 2, 3:
+		case 2, 3, 4:
 			if _, err = loader.LoadRefCell(); err != nil {
-				return err
-			}
-		case 4:
-			root, err := loader.LoadRefCell()
-			if err != nil {
-				return err
-			}
-			// The library dictionary is typed, unlike code/data. Validate it
-			// before any action executes or checks the message source address.
-			if err = transactionValidateStateInitLibraries(root.AsDict(256)); err != nil {
 				return err
 			}
 		}
@@ -386,17 +377,176 @@ func transactionValidateStateInit(loader *cell.Slice) error {
 	return nil
 }
 
-func transactionValidateStateInitLibraries(libraries *cell.Dictionary) error {
-	valid, err := libraries.ValidateCheck(func(value *cell.Slice, _ *cell.Cell) (bool, error) {
-		// SimpleLib is exactly public:Bool root:^Cell. The root is opaque;
-		// its hash is not constrained by the dictionary key in the TL-B schema.
-		return value.BitsLeft() == 1 && value.RefsNum() == 1, nil
-	}, false)
+func transactionValidateStateInitLibraries(libraries *cell.Dictionary, budget *int) error {
+	if libraries == nil {
+		return nil
+	}
+	return transactionValidateTypedDictionary(libraries.AsCell(), 256, budget, func(value *cell.Slice) error {
+		// SimpleLib is exactly public:Bool root:^Cell. Its root stays opaque,
+		// and the schema does not require its hash to match the dictionary key.
+		if value.BitsLeft() != 1 || value.RefsNum() != 1 {
+			return errors.New("invalid StateInit library entry")
+		}
+		return nil
+	})
+}
+
+// OutListNode validates the message and its typed dictionaries in one
+// budget. The historical schema also traverses StateInit libraries. Cell
+// payloads and the previous action ref are opaque. A referenced Any body costs
+// one cell, but its descendants remain opaque. Repeated typed refs are charged
+// on every visit.
+func transactionValidateActionMessageBudget(msgCell *cell.Cell, msg *tlb.Message, historicalLibraries bool) error {
+	budget := 1024 - 2 // OutListNode and MessageRelaxed roots.
+	if msg.MsgType == tlb.MsgTypeInternal {
+		extra := msg.AsInternal().ExtraCurrencies
+		if extra != nil {
+			if err := transactionValidateTypedDictionary(extra.AsCell(), 32, &budget, func(value *cell.Slice) error {
+				// Generated VarUInteger 32 validation only checks its shape;
+				// canonicality and positivity are checked during SEND processing.
+				size, err := value.LoadUInt(5)
+				if err != nil {
+					return err
+				}
+				if err := value.SkipBits(uint(size) * 8); err != nil {
+					return err
+				}
+				return transactionRequireEmptySlice(value)
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	state := transactionMessageStateInit(msg)
+	layout, err := transactionOutboundMessageLayout(msgCell)
 	if err != nil {
 		return err
 	}
-	if !valid {
-		return errors.New("invalid StateInit library entry")
+	if layout.stateInitInRef {
+		if budget == 0 {
+			return errors.New("StateInit exceeds cell validation budget")
+		}
+		budget--
+	}
+	if historicalLibraries && state != nil {
+		if err := transactionValidateStateInitLibraries(state.Lib, &budget); err != nil {
+			return err
+		}
+	}
+	if layout.bodyInRef {
+		if budget == 0 {
+			return errors.New("message body exceeds cell validation budget")
+		}
+		budget--
+		var body cell.Slice
+		if err := msg.Msg.Payload().BeginParseInto(&body); err != nil {
+			return err
+		}
+		if body.IsSpecial() {
+			return errors.New("referenced message body is special")
+		}
+	}
+	return nil
+}
+
+// transactionValidateTypedDictionary performs one strong TL-B traversal,
+// stopping before entering a node beyond the caller's budget. Loading all
+// entries before checking the limit would expand shared subtrees unboundedly.
+func transactionValidateTypedDictionary(root *cell.Cell, keyBits uint, budget *int, validateLeaf func(*cell.Slice) error) error {
+	if root == nil {
+		return nil
+	}
+	type pendingNode struct {
+		root    *cell.Cell
+		keyBits uint
+	}
+	var pending [257]pendingNode
+	pending[0] = pendingNode{root: root, keyBits: keyBits}
+	count := 1
+	for count > 0 {
+		if *budget <= 0 {
+			return errors.New("typed dictionary exceeds cell validation budget")
+		}
+		*budget--
+		count--
+		node := pending[count]
+		var value cell.Slice
+		if err := node.root.BeginParseInto(&value); err != nil {
+			return err
+		}
+		if value.IsSpecial() {
+			return errors.New("special typed dictionary node")
+		}
+
+		// HmLabel accepts short, long and repeated-bit labels, including
+		// non-minimal encodings. Only the length and available bits matter.
+		long, err := value.LoadBoolBit()
+		if err != nil {
+			return err
+		}
+		var labelBits uint
+		if !long {
+			for {
+				more, err := value.LoadBoolBit()
+				if err != nil {
+					return err
+				}
+				if !more {
+					break
+				}
+				labelBits++
+				if labelBits > node.keyBits {
+					return errors.New("dictionary label exceeds key length")
+				}
+			}
+			if err := value.SkipBits(labelBits); err != nil {
+				return err
+			}
+		} else {
+			same, err := value.LoadBoolBit()
+			if err != nil {
+				return err
+			}
+			if same {
+				if err := value.SkipBits(1); err != nil {
+					return err
+				}
+			}
+			length, err := value.LoadUInt(uint(bits.Len(node.keyBits)))
+			if err != nil {
+				return err
+			}
+			labelBits = uint(length)
+			if labelBits > node.keyBits {
+				return errors.New("dictionary label exceeds key length")
+			}
+			if !same {
+				if err := value.SkipBits(labelBits); err != nil {
+					return err
+				}
+			}
+		}
+		if labelBits == node.keyBits {
+			if err := validateLeaf(&value); err != nil {
+				return err
+			}
+			continue
+		}
+		if value.BitsLeft() != 0 || value.RefsNum() != 2 {
+			return errors.New("invalid typed dictionary fork")
+		}
+		left, err := value.LoadRefCell()
+		if err != nil {
+			return err
+		}
+		right, err := value.LoadRefCell()
+		if err != nil {
+			return err
+		}
+		childBits := node.keyBits - labelBits - 1
+		pending[count] = pendingNode{root: right, keyBits: childBits}
+		pending[count+1] = pendingNode{root: left, keyBits: childBits}
+		count += 2
 	}
 	return nil
 }
