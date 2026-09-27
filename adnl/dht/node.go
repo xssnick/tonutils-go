@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
@@ -486,7 +487,8 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) (dhtNodeS
 	reportLimit := t.Add(queryTimeout - 500*time.Millisecond)
 	err = peer.Query(ctx, req, res)
 	if err != nil {
-		if time.Now().After(reportLimit) {
+		// Hedge / search cancel must not mark the peer bad — we aborted the query ourselves.
+		if !errors.Is(err, context.Canceled) && time.Now().After(reportLimit) {
 			// to not report good nodes, because of our short deadline
 			n.updateStatus(false)
 		}
