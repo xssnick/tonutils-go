@@ -912,6 +912,9 @@ type foundResult struct {
 }
 
 // FindValue attempts to retrieve a value from the DHT based on the given key.
+// Slow DHT peers are hedged the same way as collectNearestNodes: after
+// lookupHedgeDelay without a response, extra parallel queries are launched
+// (up to maxActive), instead of waiting out a full queryTimeout round.
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
 	id, keyErr := tl.Hash(key)
 	if keyErr != nil {
@@ -927,124 +930,137 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 		}
 	}
 
-	threadCtx, stopThreads := context.WithCancel(ctx)
-	defer stopThreads()
+	baseActive := c.a
+	if baseActive <= 0 {
+		baseActive = 1
+	}
+	activeLimit := baseActive
 
-	threads := c.a
-	result := make(chan *foundResult, threads)
+	maxActive := activeLimit * 2
+	if c.k > activeLimit && maxActive > c.k {
+		maxActive = c.k
+	}
+	if maxActive < activeLimit {
+		maxActive = activeLimit
+	}
+
+	type queryResult struct {
+		node    *dhtNode
+		val     any
+		err     error
+		attempt int
+	}
+
+	searchCtx, stopSearch := context.WithCancel(ctx)
+	defer stopSearch()
+
+	result := make(chan queryResult, maxActive)
+	active := 0
 	attempts := map[string]int{}
+	var found *foundResult
 
-	cond := sync.NewCond(&sync.Mutex{})
-	waitingThreads := 0
-	stopped := false
-
-	launchWorker := func() {
-		for {
-			select {
-			case <-threadCtx.Done():
-				return
-			default:
+	launchQueries := func() {
+		for active < activeLimit {
+			node, _ := plist.Get()
+			if node == nil {
+				break
 			}
-
-			var node *dhtNode
-			cond.L.Lock()
-			node, _ = plist.Get()
-			for node == nil {
-				waitingThreads++
-				if waitingThreads == threads {
-					stopped = true
-					cond.Broadcast()
-					cond.L.Unlock()
-					result <- nil
-					return
-				}
-
-				cond.Wait()
-				if stopped {
-					cond.L.Unlock()
-					return
-				}
-				node, _ = plist.Get()
-				waitingThreads--
-			}
-			cond.L.Unlock()
 
 			nodeID := node.id()
-			cond.L.Lock()
-			attempts[nodeID]++
-			attempt := attempts[nodeID]
-			cond.L.Unlock()
-
-			findCtx, cancel := context.WithTimeout(threadCtx, queryTimeout)
-			val, err := node.findValue(findCtx, id, int32(c.k))
-			cancel()
-			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) && attempt < retryableQueryAttempts {
-					cond.L.Lock()
-					plist.MarkUsed(node, false)
-					cond.Broadcast()
-					cond.L.Unlock()
-				}
+			if attempts[nodeID] >= retryableQueryAttempts {
 				continue
 			}
-			c.markNodeReady(node)
+			attempts[nodeID]++
+			attempt := attempts[nodeID]
+			active++
 
-			switch v := val.(type) {
-			case *Value:
-				cond.L.Lock()
-				if !stopped {
-					stopped = true
-					cond.Broadcast()
+			go func(n *dhtNode, attempt int) {
+				ctxQuery, cancel := context.WithTimeout(searchCtx, queryTimeout)
+				defer cancel()
+
+				val, err := n.findValue(ctxQuery, id, int32(c.k))
+				select {
+				case result <- queryResult{node: n, val: val, err: err, attempt: attempt}:
+				case <-searchCtx.Done():
 				}
-				cond.L.Unlock()
-				result <- &foundResult{value: v, node: node}
-				return
-			case []*Node:
-				added := false
-				cond.L.Lock()
-				for _, n := range v {
-					if newNode, err := c.addNode(n); err == nil {
-						plist.Add(newNode)
-						added = true
-					}
-				}
-				if added {
-					cond.Broadcast()
-				} else if attempt < retryableQueryAttempts {
-					plist.MarkUsed(node, false)
-					cond.Broadcast()
-				}
-				cond.L.Unlock()
+			}(node, attempt)
+		}
+	}
+
+	growActive := func() {
+		if activeLimit >= maxActive {
+			return
+		}
+		activeLimit += baseActive
+		if activeLimit > maxActive {
+			activeLimit = maxActive
+		}
+	}
+
+	stopTimer := func(timer *time.Timer) {
+		if timer == nil {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
 			}
 		}
 	}
 
-	for i := 0; i < threads; i++ {
-		go launchWorker()
-	}
-
-	select {
-	case <-ctx.Done():
-		cond.L.Lock()
-		if !stopped {
-			stopped = true
-			cond.Broadcast()
+	for {
+		launchQueries()
+		if found != nil {
+			stopSearch()
+			cont.checkedNodes = append(cont.checkedNodes, found.node)
+			return found.value, cont, nil
 		}
-		cond.L.Unlock()
-		return nil, nil, ctx.Err()
-	case val := <-result:
-		cond.L.Lock()
-		if !stopped {
-			stopped = true
-			cond.Broadcast()
-		}
-		cond.L.Unlock()
-		if val == nil {
+		if active == 0 {
 			return nil, cont, ErrDHTValueIsNotFound
 		}
 
-		cont.checkedNodes = append(cont.checkedNodes, val.node)
-		return val.value, cont, nil
+		var hedge *time.Timer
+		var hedgeChan <-chan time.Time
+		if activeLimit < maxActive {
+			hedge = time.NewTimer(lookupHedgeDelay)
+			hedgeChan = hedge.C
+		}
+
+		select {
+		case res := <-result:
+			stopTimer(hedge)
+			active--
+
+			if res.err != nil {
+				if errors.Is(res.err, context.DeadlineExceeded) && res.attempt < retryableQueryAttempts {
+					plist.MarkUsed(res.node, false)
+				}
+			} else {
+				c.markNodeReady(res.node)
+				switch v := res.val.(type) {
+				case *Value:
+					found = &foundResult{value: v, node: res.node}
+				case []*Node:
+					added := false
+					for _, n := range v {
+						if newNode, err := c.addNode(n); err == nil {
+							plist.Add(newNode)
+							added = true
+						}
+					}
+					if !added && res.attempt < retryableQueryAttempts {
+						plist.MarkUsed(res.node, false)
+					}
+				}
+			}
+		case <-hedgeChan:
+			growActive()
+		case <-ctx.Done():
+			stopTimer(hedge)
+			stopSearch()
+			return nil, nil, ctx.Err()
+		}
 	}
 }
 

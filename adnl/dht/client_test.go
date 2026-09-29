@@ -899,6 +899,85 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 	}
 }
 
+func TestClient_FindValueHedgesSlowLookup(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	started := make(chan string, 8)
+	gateway := &MockGateway{}
+	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findValue FindValue
+				if _, err := tl.Parse(&findValue, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				started <- addr
+				if addr == "1" {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{}}))
+				return nil
+			},
+		}, nil
+	}
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       3,
+		a:       1,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = dhtCli.FindValue(ctx, &Key{
+			ID:    keyID,
+			Name:  []byte("address"),
+			Index: 0,
+		})
+		close(done)
+	}()
+
+	if addr := <-started; addr != "1" {
+		t.Fatalf("expected first FindValue to start with closest node, got %s", addr)
+	}
+
+	select {
+	case addr := <-started:
+		if addr != "2" {
+			t.Fatalf("expected hedge FindValue to start second closest node, got %s", addr)
+		}
+	case <-time.After(lookupHedgeDelay + time.Second):
+		t.Fatal("hedge FindValue was not launched")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("FindValue did not stop after context cancel")
+	}
+}
+
 func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 	keyID := make([]byte, 32)
 	nodeID := func(v byte) []byte {
