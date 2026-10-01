@@ -8,8 +8,8 @@ require (
 	github.com/cloudflare/circl v1.6.5
 	github.com/pierrec/lz4/v4 v4.1.28
 	github.com/xssnick/quic-go-ton v0.0.0-20260707110703-14f3237f97b9
-	github.com/xssnick/raptorq v1.5.2
-	golang.org/x/crypto v0.55.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sys v0.47.0
+	github.com/xssnick/raptorq v1.6.0
+	golang.org/x/crypto v0.57.0
+	golang.org/x/net v0.59.0
+	golang.org/x/sys v0.48.0
 )
