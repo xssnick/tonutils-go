@@ -27,6 +27,7 @@ var expectedSignatureCheckAlwaysCoverageAnchors = map[string]signatureCheckAlway
 	"execution_proof_test.go:TestExecuteDetailedWithAccountProofSignatureCheckAlwaysSucceedPerRun":         {path: "execution_proof_test.go"},
 	"internal_message_test.go:TestEmulateInternalMessageSignatureCheckAlwaysSucceedPerRun":                 {path: "internal_message_test.go"},
 	"op/funcs/tonops_ops_test.go:TestSignatureCheckAlwaysSucceed":                                          {path: "op/funcs/tonops_ops_test.go"},
+	"op/funcs/ed25519_encoding_test.go:TestSignatureCheckCanonicalREncoding":                               {path: "op/funcs/ed25519_encoding_test.go"},
 	"op/funcs/tonops_ops_test.go:TestSignatureCheckRejectsZeroAndIdentityPublicKeyV14":                     {path: "op/funcs/tonops_ops_test.go"},
 	"op/funcs/version_fuzz_test.go:FuzzTVMVersionedCryptoV14Edges":                                         {path: "op/funcs/version_fuzz_test.go", fullRangeFuzz: true},
 	"runvm_test.go:FuzzRunVMSignatureCheckAlwaysSucceedPerRun":                                             {path: "runvm_test.go", fullRangeFuzz: true},

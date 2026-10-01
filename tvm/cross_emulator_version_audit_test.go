@@ -27,11 +27,11 @@ const (
 	expectedCrossEmulatorFullRangeVersionFuzzerCount = 130
 	expectedCrossEmulatorFullRangeVersionFuzzerHash  = "b3eb80a34606257611af0070116dfa8c365ab0ed500de04b400205222c30a338"
 
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 35
-	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "a9b8321a85fc76172c2357f4755fadc3388ccaf8fe715a27bafa6ec2dc2c71b3"
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserCount = 51
+	expectedCrossEmulatorUnclassifiedExplicitVersionUserHash  = "e29b797d9458002736687aabec9e9de09ce12151ae0dc0e402d6e357456561e9"
 
-	expectedCrossEmulatorTransactionVersionTestCount = 89
-	expectedCrossEmulatorTransactionVersionTestHash  = "8506ae60b879bcf18172838308d0469caed41f0a1c91467b0414cc05fea49094"
+	expectedCrossEmulatorTransactionVersionTestCount = 91
+	expectedCrossEmulatorTransactionVersionTestHash  = "f270cb224abb4e00dadd3f26005297521df35d7b124c06d9aa5830ed43cc6660"
 	expectedCrossEmulatorTransactionVersionFuzzCount = 48
 	expectedCrossEmulatorTransactionVersionFuzzHash  = "2bbcff7f27693d609863afd367a66292d7d07036419640531b3fdc1d9dd4460c"
 
@@ -173,6 +173,110 @@ type crossEmulatorUnclassifiedExplicitVersionUser struct {
 }
 
 var expectedCrossEmulatorUnclassifiedExplicitVersionUsers = map[string]crossEmulatorUnclassifiedExplicitVersionUser{
+	"transaction_external_retry_fine_cross_emulator_test.go:TestTVMCrossEmulatorTransactionExternalSendPackingRetries": {
+		reason: "focused external send retry regression compares complete transactions across every supported version; the external-out action fuzzer owns broader version-sensitive message coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionExternalOutActionsGlobalVersion",
+		},
+	},
+	"ed25519_encoding_cross_emulator_test.go:TestTVMCrossEmulatorEd25519CanonicalREncoding": {
+		reason: "focused signature encoding regression checks both CHKSIGN instructions across every supported version; the tonops edge fuzzer owns broader version-sensitive signature coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTonOpsEdgeGlobalVersion",
+		},
+	},
+	"pruned_depth_cross_emulator_test.go:TestTVMCrossEmulatorENDXCPrunedDepthLimit": {
+		reason: "focused stored-depth regression checks every pruned level mask across every supported version; the advanced cell-op fuzzer owns broader version-sensitive builder coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorAdvancedCellOpsGlobalVersion",
+		},
+	},
+	"lazy_library_dictionary_cross_emulator_test.go:TestTVMCrossEmulatorLazyLibraryDictionary": {
+		reason: "focused eager/lazy library dictionary parity checks signed and unsigned repeated lookups around the library-loading version gates; cell-loading and dictionary fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorAdvancedCellOpsGlobalVersion",
+			"FuzzTVMCrossEmulatorDictOpsGlobalVersion",
+		},
+	},
+	"transaction_deploy_prefix_cross_emulator_test.go:TestTVMCrossEmulatorTransactionDeploymentPrefixAddress": {
+		reason: "focused deployment-address regression checks temporary prefix rewriting and the subsequent active transaction through v10; the StateInit fixed-prefix fuzzer owns broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion",
+		},
+	},
+	"transaction_extra_currency_budget_cross_emulator_test.go:TestTVMCrossEmulatorTransactionInboundExtraCurrencyBudget": {
+		reason: "focused final-account dictionary budget parity checks 511/512/513 incoming currencies at v11-v13; the storage extra-currency fuzzer owns broader account and version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionStorageExtraCurrencyUsageGlobalVersion",
+		},
+	},
+	"transaction_extra_currency_budget_cross_emulator_test.go:TestTVMCrossEmulatorTransactionOutgoingExtraCurrencyBudget": {
+		reason: "focused outgoing dictionary budget parity varies StateInit/body layouts and skip modes around v8 and v12/v13; extra-currency and malformed-action fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendExtraCurrencySizeGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionMalformedActionsGlobalVersion",
+		},
+	},
+	"transaction_extra_currency_budget_cross_emulator_test.go:TestTVMCrossEmulatorTransactionOutgoingReferencedBodyValidation": {
+		reason: "focused referenced-body schema parity checks ordinary and exotic roots around the v8 malformed-action skip gate; malformed-action and send-mode fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionMalformedActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
+		},
+	},
+	"transaction_frozen_prefix_cross_emulator_test.go:TestTVMCrossEmulatorTransactionFrozenFixedPrefixUnfreeze": {
+		reason: "focused frozen-state regression checks the v15/v16 fixed-prefix unfreeze transition; frozen-address and StateInit fixed-prefix fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionFrozenHashEqualsAddressGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionStateInitFixedPrefixGlobalVersion",
+		},
+	},
+	"transaction_library_lookup_error_cross_emulator_test.go:TestTVMCrossEmulatorTransactionLibraryLookupError": {
+		reason: "focused malformed account-library lookup regression pins v14 and action result 42; the change-library action fuzzer owns broader version-sensitive library coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionChangeLibraryActionsGlobalVersion",
+		},
+	},
+	"transaction_precompiled_gas_cross_emulator_test.go:TestTVMCrossEmulatorPrecompiledUint64Gas": {
+		reason: "focused unsigned precompiled-gas regression pins v13 and checks no-gas decisions at signed and unsigned integer boundaries; the precompiled no-gas fuzzer owns broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionPrecompiledNoGasGlobalVersion",
+		},
+	},
+	"transaction_send_retry_fine_cross_emulator_test.go:TestTVMCrossEmulatorTransactionSendPackingRetries": {
+		reason: "focused internal send retry regression checks fines and skip modes for original, StateInit-reference, and body-reference packing attempts at selected versions; action-fine and send-mode fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionActionFineGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionSendMsgExtraFlagsGlobalVersion",
+		},
+	},
+	"transaction_state_init_budget_cross_emulator_test.go:TestTVMCrossEmulatorTransactionOutgoingStateInitLibraryValidationBudget": {
+		reason: "focused outgoing StateInit library budget regression checks inline/reference layouts and skip modes at v12/v13; malformed-action and external-out action fuzzers own broader message version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionMalformedActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionExternalOutActionsGlobalVersion",
+		},
+	},
+	"transaction_state_init_budget_cross_emulator_test.go:TestTVMCrossEmulatorTransactionStateInitLibraryValidationBudget": {
+		reason: "focused incoming StateInit library budget regression pins v14 and the 512/513-library boundary for inline/reference layouts; the library-deployment fuzzer owns broader StateInit version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionMasterchainPublicLibrariesDeployGlobalVersion",
+		},
+	},
+	"transaction_state_init_opaque_cross_emulator_test.go:TestTVMCrossEmulatorTransactionMalformedStateInitLibraryStage": {
+		reason: "focused malformed StateInit library regression checks validation stage and skip modes for internal/external messages at selected version boundaries; malformed-action and external-out action fuzzers own broader version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionMalformedActionsGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionExternalOutActionsGlobalVersion",
+		},
+	},
+	"transaction_usage_inline_cross_emulator_test.go:TestTVMCrossEmulatorTransactionInlineStateUsage": {
+		reason: "focused message usage regression checks shared inline/reference StateInit and body cells at v4/v9/v13; send-fee and external-out action fuzzers own broader message accounting version coverage",
+		versionAnchors: []string{
+			"FuzzTVMCrossEmulatorTransactionSendMsgCustomFwdFeeGlobalVersion",
+			"FuzzTVMCrossEmulatorTransactionExternalOutActionsGlobalVersion",
+		},
+	},
 	"cellslice_special_levels_cross_emulator_test.go:TestTVMCrossEmulatorCellSliceSpecialLevels": {
 		reason: "focused sparse pruned-level-mask parity pins global version 13 for version-independent cell hash, depth, and storage semantics; the advanced cell-op fuzzer owns version-sensitive coverage",
 		versionAnchors: []string{

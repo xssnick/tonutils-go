@@ -283,47 +283,37 @@ func newCorrectNodeWithKey(
 	return testNode, nil
 }
 
+const testValueADNLID = "1b75dc8d548279be2fdd60132c0ff3c6dc3708fd5bae44b63d4fb6e8eb230f2f"
+
 func correctValue(tAdnlAddr []byte) (*ValueFoundResult, error) {
-	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
-	if err != nil {
-		return nil, err
-	}
-	pubIdRes := keys.PublicKeyED25519{pubId}
-	sign, err := base64.StdEncoding.DecodeString("Zwj4eW/tMbgzF7kQtI8AF11E0q76h5/3+hkylzHuJzKDD2sDd7sw/FXIiVptjrrOIPze8kbbDEkq4K5O78KeDQ==")
-	if err != nil {
-		return nil, err
-	}
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	data, err := base64.StdEncoding.DecodeString("WOYnIgEAAADnpg1nkp5cpAUNAAD6Zphj+maYYwAAAAAAAAAA")
 	if err != nil {
 		return nil, err
 	}
-	sign2, err := base64.StdEncoding.DecodeString("+1cttR4nsAC0UsZwZTfDwvraxK9NxOjU0pXATkftiEyDgvbyLzPt24lOHl9B756NWBlv8NzqswhNiq7V+SV6Aw==")
+
+	value := Value{
+		KeyDescription: KeyDescription{
+			Key:        Key{ID: tAdnlAddr, Name: []byte("address")},
+			ID:         keys.PublicKeyED25519{Key: privateKey.Public().(ed25519.PublicKey)},
+			UpdateRule: UpdateRuleSignature{},
+		},
+		Data: data,
+		TTL:  int32(time.Now().Add(time.Hour).Unix()),
+	}
+	value.KeyDescription.Signature, err = signTL(value.KeyDescription, privateKey)
 	if err != nil {
 		return nil, err
 	}
-
-	tValue := &ValueFoundResult{
-		Value: Value{
-			KeyDescription: KeyDescription{
-				Key: Key{
-					ID:    tAdnlAddr,
-					Name:  []byte("address"),
-					Index: 0,
-				},
-				ID:         pubIdRes,
-				UpdateRule: UpdateRuleSignature{},
-				Signature:  sign,
-			},
-			Data:      data,
-			TTL:       1671121877,
-			Signature: sign2,
-		},
+	value.Signature, err = signTL(value, privateKey)
+	if err != nil {
+		return nil, err
 	}
-	return tValue, nil
+	return &ValueFoundResult{Value: value}, nil
 }
 
 func TestClient_FindValue(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal("failed to prepare test site address, err: ", err.Error())
@@ -338,7 +328,7 @@ func TestClient_FindValue(t *testing.T) {
 		name, addr string
 		want       error
 	}{
-		{"existing address", "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174", nil},
+		{"existing address", testValueADNLID, nil},
 		{"missing address", "1537ee02d6d0a65185630084427a26eafdc11ad24566d835291a43b780701f0e", ErrDHTValueIsNotFound},
 	}
 
@@ -409,7 +399,7 @@ func TestClient_FindValue(t *testing.T) {
 }
 
 func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +460,7 @@ func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
 }
 
 func TestClient_FindValueRetriesValueNotFound(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal(err)
@@ -900,16 +890,20 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 }
 
 func TestClient_FindValueHedgesSlowLookup(t *testing.T) {
-	keyID := make([]byte, 32)
+	key := &Key{ID: make([]byte, 32), Name: []byte("address"), Index: 0}
+	target, err := tl.Hash(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	nodeID := func(v byte) []byte {
-		id := make([]byte, 32)
-		id[31] = v
+		id := append([]byte(nil), target...)
+		id[31] ^= v
 		return id
 	}
 
 	started := make(chan string, 8)
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findValue FindValue
@@ -926,7 +920,7 @@ func TestClient_FindValueHedgesSlowLookup(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -949,11 +943,7 @@ func TestClient_FindValueHedgesSlowLookup(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		_, _, _ = dhtCli.FindValue(ctx, &Key{
-			ID:    keyID,
-			Name:  []byte("address"),
-			Index: 0,
-		})
+		_, _, _ = dhtCli.FindValue(ctx, key)
 		close(done)
 	}()
 
@@ -1254,7 +1244,7 @@ func TestClient_addNodeRejectsMalformedSerializableFields(t *testing.T) {
 }
 
 func TestClient_FindAddressesUnit(t *testing.T) {
-	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
+	testAddr := testValueADNLID
 	adnlAddr, err := hex.DecodeString(testAddr)
 	if err != nil {
 		t.Fatal("failed creating test value, err:", err)
@@ -1275,11 +1265,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 		t.Fatal("failed to parse test address list: ", err)
 	}
 
-	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
-	if err != nil {
-		t.Fatal("failed creating pId of test value, err:", err)
-	}
-	tPubIdRes := keys.PublicKeyED25519{Key: pubId}
+	tPubIdRes := value.Value.KeyDescription.ID.(keys.PublicKeyED25519)
 
 	t.Run("find addresses positive case", func(t *testing.T) {
 		gateway := &MockGateway{}

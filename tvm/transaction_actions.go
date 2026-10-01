@@ -75,11 +75,9 @@ var (
 )
 
 type transactionNormalizedOutboundMessage struct {
-	cell          *cell.Cell
-	msg           tlb.Message
-	layout        transactionOutboundLayout
-	stats         transactionMessageStatsResult
-	packingFailed bool
+	msg    tlb.Message
+	layout transactionOutboundLayout
+	stats  transactionMessageStatsResult
 }
 
 type transactionRelaxedActionMessageValidation struct {
@@ -779,7 +777,6 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 		return out, nil
 	}
 
-	msgCell := normalized.cell
 	msg := normalized.msg
 
 	switch msg.MsgType {
@@ -789,60 +786,71 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 			return transactionSendPrepassInvalid(out, mode, globalVersion), nil
 		}
 		actionFineEnabled := globalVersion >= 4
-		stats := normalized.stats
-		if normalized.packingFailed {
-			// The reference node retries packing with StateInit and body moved into
-			// refs and re-runs the size and fee checks against that rewritten layout
-			// before failing with result code 39.
-			finalLayout, err := transactionOutboundMessageFailedLayout(extMsg.StateInit, extMsg.Body, normalized.layout)
+		currentLayout := layout
+		for {
+			stats := normalized.stats
+			stats.usage, err = transactionOutboundExternalMessageFeeUsage(extMsg, currentLayout)
 			if err != nil {
 				return nil, err
 			}
-			stats.usage, err = transactionOutboundExternalMessageFeeUsage(extMsg, finalLayout)
+			sizeCode, fine := transactionCheckOutboundMessageStatsSize(cfg, acc.addr, extMsg.DstAddr, stats, remainingBalance.grams, acc.isSpecial, actionFineEnabled)
+			if sizeCode != 0 {
+				if actionFineEnabled {
+					out.actionFine = fine
+				}
+				return transactionSendResultCode(out, mode, sizeCode, globalVersion), nil
+			}
+			fwdFee := transactionSelectComputedMessageFee(transactionComputeForwardFeeForUsage(cfg, acc.addr, extMsg.DstAddr, stats.usage), nil)
+			if acc.isSpecial {
+				fwdFee.SetInt64(0)
+			}
+			if remainingBalance.grams.Cmp(fwdFee) < 0 {
+				if actionFineEnabled && !acc.isSpecial {
+					out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, extMsg.DstAddr, stats.usage, remainingBalance.grams)
+				}
+				return transactionSendResultCode(out, mode, 37, globalVersion), nil
+			}
+			packed, packingErr := transactionBuildExternalMessage(extMsg, currentLayout)
+			if packingErr != nil {
+				if !transactionOutboundMessagePackingError(packingErr) {
+					return nil, packingErr
+				}
+				// Every reference retry rechecks size, fees and funds before packing.
+				next := currentLayout
+				if !next.stateInitInRef {
+					move, err := transactionStateInitRefRetryNeeded(extMsg.StateInit)
+					if err != nil {
+						return nil, err
+					}
+					next.stateInitInRef = move
+				}
+				if next == currentLayout && !next.bodyInRef && transactionMessageBodyRefRetryNeeded(extMsg.Body) {
+					next.bodyInRef = true
+				}
+				if next != currentLayout {
+					currentLayout = next
+					continue
+				}
+				if actionFineEnabled && !acc.isSpecial {
+					out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, extMsg.DstAddr, stats.usage, remainingBalance.grams)
+				}
+				return transactionSendResultCode(out, mode, 39, globalVersion), nil
+			}
+			if globalVersion >= 15 && !acc.isSpecial {
+				out.failActionFine = transactionComputeActionFineForUsage(cfg, acc.addr, extMsg.DstAddr, stats.usage, remainingBalance.grams)
+			}
+			packedStats, err := transactionMessageStats(packed)
 			if err != nil {
 				return nil, err
 			}
+			out.msgCell = packed
+			out.msg = &msg
+			out.usage = packedStats.totalUsage
+			out.debit.grams = fwdFee
+			out.totalFwdFees = fwdFee
+			out.totalActionFees = fwdFee
+			return out, nil
 		}
-		sizeCode, fine := transactionCheckOutboundMessageStatsSize(cfg, acc.addr, msg.Msg.DestAddr(), stats, remainingBalance.grams, acc.isSpecial, actionFineEnabled)
-		if sizeCode != 0 {
-			if actionFineEnabled {
-				out.actionFine = fine
-			}
-			return transactionSendResultCode(out, mode, sizeCode, globalVersion), nil
-		}
-		computedFwdFee := transactionComputeForwardFeeForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage)
-		if acc.isSpecial {
-			computedFwdFee.SetInt64(0)
-		}
-		fwdFee := transactionSelectComputedMessageFee(computedFwdFee, nil)
-		if remainingBalance.grams.Cmp(fwdFee) < 0 {
-			if actionFineEnabled && !acc.isSpecial {
-				out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage, remainingBalance.grams)
-			}
-			return transactionSendResultCode(out, mode, 37, globalVersion), nil
-		}
-		if normalized.packingFailed {
-			if actionFineEnabled && !acc.isSpecial {
-				out.actionFine = transactionComputeActionFineForUsage(cfg, acc.addr, msg.Msg.DestAddr(), stats.usage, remainingBalance.grams)
-			}
-			return transactionSendResultCode(out, mode, 39, globalVersion), nil
-		}
-		if globalVersion >= 15 && !acc.isSpecial {
-			out.failActionFine = transactionComputeActionFineForUsage(
-				cfg,
-				acc.addr,
-				msg.Msg.DestAddr(),
-				stats.usage,
-				remainingBalance.grams,
-			)
-		}
-		out.msgCell = msgCell
-		out.msg = &msg
-		out.usage = normalized.stats.totalUsage
-		out.debit.grams = fwdFee
-		out.totalFwdFees = fwdFee
-		out.totalActionFees = fwdFee
-		return out, nil
 	case tlb.MsgTypeInternal:
 		intMsg := *msg.AsInternal()
 		if globalVersion >= 11 {
@@ -884,10 +892,7 @@ func transactionProcessSendAction(acc *transactionRuntimeAccount, act tlb.Action
 				}
 				return transactionSendResultCode(prepared, sendMode, 39, globalVersion), nil
 			}
-			if prepared.resultCode != 0 || usedLayout == layoutForFees {
-				return prepared, nil
-			}
-			layoutForFees = usedLayout
+			return prepared, nil
 		}
 		return nil, errors.New("failed to stabilize outbound internal message layout")
 	default:
@@ -1207,12 +1212,25 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	} else {
 		outMsg.IHRFee = tlb.FromNanoTON(extraFlags)
 	}
-	msgCell, usedLayout, err := transactionInternalMessageToCellWithLayout(&outMsg, layout)
+	msgCell, err := transactionBuildInternalMessage(&outMsg, layout)
 	if err != nil {
-		if errors.Is(err, errTransactionOutboundMessageDoesNotFit) {
+		if transactionOutboundMessagePackingError(err) {
+			// Retry StateInit first, then body, with a fresh fee/funds check
+			// between them. Jumping to the final layout can overcharge a fine.
+			next := layout
+			if !next.stateInitInRef {
+				move, err := transactionStateInitRefRetryNeeded(outMsg.StateInit)
+				if err != nil {
+					return nil, layout, err
+				}
+				next.stateInitInRef = move
+			}
+			if next == layout && !next.bodyInRef && transactionMessageBodyRefRetryNeeded(outMsg.Body) {
+				next.bodyInRef = true
+			}
 			res.actionFine = actionFine
 			res.packingFailed = true
-			return res, usedLayout, nil
+			return res, next, nil
 		}
 		return nil, layout, fmt.Errorf("failed to serialize outbound internal message: %w", err)
 	}
@@ -1225,7 +1243,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	// currencies rather than the merged set.
 	usageMsg := outMsg
 	usageMsg.ExtraCurrencies = intMsg.ExtraCurrencies
-	res.usage, err = transactionOutboundInternalMessageActionUsage(cfg, &usageMsg, msgCell, usedLayout)
+	res.usage, err = transactionOutboundInternalMessageActionUsage(cfg, &usageMsg, msgCell, layout)
 	if err != nil {
 		return nil, layout, err
 	}
@@ -1239,7 +1257,7 @@ func transactionPrepareInternalSendAction(out *transactionSendActionResult, acc 
 	if sendMode&0xA0 == 0xA0 {
 		res.deleteAccount = true
 	}
-	return res, usedLayout, nil
+	return res, layout, nil
 }
 
 func transactionSendModeInvalid(mode uint8) bool {
@@ -1537,10 +1555,9 @@ func transactionPrepareNormalizedOutboundMessage(original *cell.Cell, msg *tlb.M
 			return transactionNormalizedOutboundMessage{}, err
 		}
 		return transactionNormalizedOutboundMessage{
-			msg:           normalizedMsg,
-			layout:        layout,
-			stats:         stats,
-			packingFailed: true,
+			msg:    normalizedMsg,
+			layout: layout,
+			stats:  stats,
 		}, nil
 	}
 
@@ -1550,7 +1567,6 @@ func transactionPrepareNormalizedOutboundMessage(original *cell.Cell, msg *tlb.M
 	}
 
 	return transactionNormalizedOutboundMessage{
-		cell:   msgCell,
 		msg:    normalizedMsg,
 		layout: layout,
 		stats:  stats,
@@ -1656,51 +1672,57 @@ func transactionInternalMessageToCellWithLayout(msg *tlb.InternalMessage, layout
 	}
 
 	return transactionMessageToCellWithRetry(layout, moveStateInitOnRetry, transactionMessageBodyRefRetryNeeded(msg.Body), func(next transactionOutboundLayout) (*cell.Cell, error) {
-		builder := cell.BeginCell()
-		if err := builder.StoreBoolBit(false); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBoolBit(msg.IHRDisabled); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBoolBit(msg.Bounce); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBoolBit(msg.Bounced); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreAddr(msg.SrcAddr); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreAddr(msg.DstAddr); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBigCoins(msg.Amount.NanoRef()); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreDict(msg.ExtraCurrencies); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBigCoins(msg.IHRFee.NanoRef()); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreBigCoins(msg.FwdFee.NanoRef()); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreUInt(msg.CreatedLT, 64); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreUInt(uint64(msg.CreatedAt), 32); err != nil {
-			return nil, err
-		}
-		if err := transactionStoreStateInit(builder, msg.StateInit, next.stateInitInRef); err != nil {
-			return nil, err
-		}
-		if err := transactionStoreMessageBody(builder, msg.Body, next.bodyInRef); err != nil {
-			return nil, err
-		}
-		return builder.EndCell(), nil
+		return transactionBuildInternalMessage(msg, next)
 	})
+}
+
+// transactionBuildInternalMessage serializes one layout so the caller can
+// recheck fees and funds between retries.
+func transactionBuildInternalMessage(msg *tlb.InternalMessage, layout transactionOutboundLayout) (*cell.Cell, error) {
+	builder := cell.BeginCell()
+	if err := builder.StoreBoolBit(false); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBoolBit(msg.IHRDisabled); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBoolBit(msg.Bounce); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBoolBit(msg.Bounced); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreAddr(msg.SrcAddr); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreAddr(msg.DstAddr); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBigCoins(msg.Amount.NanoRef()); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreDict(msg.ExtraCurrencies); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBigCoins(msg.IHRFee.NanoRef()); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreBigCoins(msg.FwdFee.NanoRef()); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreUInt(msg.CreatedLT, 64); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreUInt(uint64(msg.CreatedAt), 32); err != nil {
+		return nil, err
+	}
+	if err := transactionStoreStateInit(builder, msg.StateInit, layout.stateInitInRef); err != nil {
+		return nil, err
+	}
+	if err := transactionStoreMessageBody(builder, msg.Body, layout.bodyInRef); err != nil {
+		return nil, err
+	}
+	return builder.EndCell(), nil
 }
 
 func transactionExternalOutMessageToCell(msg *tlb.ExternalMessageOut, layout transactionOutboundLayout) (*cell.Cell, error) {
@@ -1710,31 +1732,35 @@ func transactionExternalOutMessageToCell(msg *tlb.ExternalMessageOut, layout tra
 	}
 
 	out, _, err := transactionMessageToCellWithRetry(layout, moveStateInitOnRetry, transactionMessageBodyRefRetryNeeded(msg.Body), func(next transactionOutboundLayout) (*cell.Cell, error) {
-		builder := cell.BeginCell()
-		if err := builder.StoreUInt(0b11, 2); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreAddr(msg.SrcAddr); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreAddr(msg.DstAddr); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreUInt(msg.CreatedLT, 64); err != nil {
-			return nil, err
-		}
-		if err := builder.StoreUInt(uint64(msg.CreatedAt), 32); err != nil {
-			return nil, err
-		}
-		if err := transactionStoreStateInit(builder, msg.StateInit, next.stateInitInRef); err != nil {
-			return nil, err
-		}
-		if err := transactionStoreMessageBody(builder, msg.Body, next.bodyInRef); err != nil {
-			return nil, err
-		}
-		return builder.EndCell(), nil
+		return transactionBuildExternalMessage(msg, next)
 	})
 	return out, err
+}
+
+func transactionBuildExternalMessage(msg *tlb.ExternalMessageOut, layout transactionOutboundLayout) (*cell.Cell, error) {
+	builder := cell.BeginCell()
+	if err := builder.StoreUInt(0b11, 2); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreAddr(msg.SrcAddr); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreAddr(msg.DstAddr); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreUInt(msg.CreatedLT, 64); err != nil {
+		return nil, err
+	}
+	if err := builder.StoreUInt(uint64(msg.CreatedAt), 32); err != nil {
+		return nil, err
+	}
+	if err := transactionStoreStateInit(builder, msg.StateInit, layout.stateInitInRef); err != nil {
+		return nil, err
+	}
+	if err := transactionStoreMessageBody(builder, msg.Body, layout.bodyInRef); err != nil {
+		return nil, err
+	}
+	return builder.EndCell(), nil
 }
 
 func transactionMessageToCellWithRetry(layout transactionOutboundLayout, moveStateInitOnRetry, moveBodyOnRetry bool, build func(transactionOutboundLayout) (*cell.Cell, error)) (*cell.Cell, transactionOutboundLayout, error) {

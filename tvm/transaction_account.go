@@ -1011,17 +1011,17 @@ func transactionAccountStorageInfo(acc *transactionRuntimeAccount, storageCellFo
 				usage, nextStorageStat, err = stat.replaceStorage(storageCellForStat)
 			}
 			if err != nil && errors.Is(err, cell.ErrDictHasSpecialCells) {
-				// A dict bound from another producer's collated proof is pruned
-				// along that producer's own update walk; replaying the update
-				// here in a different order can need a node — most often a
-				// delete-merge sibling — the producer never loaded. The new
-				// state's dictionary does not depend on the update order, so
-				// recompute it from the state directly, the same way an absent
-				// proof is handled, and leave the verdict to the commitment
-				// comparison downstream.
-				acc.storageStatRecomputed = true
+				proofErr := err
 				usage, nextStorageStat, err = transactionComputeAccountStorageStat(storageCellForStat,
 					transactionStorageUsedUint64(acc.storageInfo.StorageUsed.CellsUsed))
+				// C++ compute_state must materialize the authenticated dictionary
+				// when persisting its hash. A full state walk cannot replace a
+				// missing proof branch in that case. Below the configured threshold
+				// C++ can retain deferred dictionary changes without loading it.
+				if err == nil && storeStorageDictHash && usage.cells >= transactionGetSizeLimits(cfg).accStateCellsForStorageDict {
+					return transactionUsage{}, nil, nil, nil, false, proofErr
+				}
+				acc.storageStatRecomputed = true
 			}
 		} else {
 			// Measure first and build the dictionary only if this state turns

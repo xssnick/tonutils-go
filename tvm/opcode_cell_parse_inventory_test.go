@@ -22,7 +22,7 @@ import (
 // of silently skipping gas accounting.
 const expectedOpcodeDirectCellParseCount = 9
 
-const expectedOpcodeDirectCellParseHash = "097e4053ed5ad32c090e5326913a71d8f9f3af8a3edb6aed031e6d6cfbd83761"
+const expectedOpcodeDirectCellParseHash = "1bc8d33fcb9f133bf5cd38e54b1a5d7c8530d251f9b1fc963ec692a1b25f7b4a"
 
 func TestOpcodeDirectCellParsesStayInventoried(t *testing.T) {
 	sites := opcodeDirectCellParseSites(t)

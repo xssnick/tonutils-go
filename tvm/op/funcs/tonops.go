@@ -1,6 +1,7 @@
 package funcs
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/sha256"
@@ -502,10 +503,6 @@ func tvmEd25519Verify(key, data, sig []byte) bool {
 	if err != nil {
 		return false
 	}
-	signatureR, err := new(edwards25519.Point).SetBytes(sig[:32])
-	if err != nil {
-		return false
-	}
 	signatureS, err := new(edwards25519.Scalar).SetCanonicalBytes(sig[32:])
 	if err != nil {
 		return false
@@ -522,11 +519,11 @@ func tvmEd25519Verify(key, data, sig []byte) bool {
 
 	// s*B == R + k*A  <=>  s*B - k*A == R; a single vartime double-scalar
 	// multiplication is much cheaper than two constant-time ones, and inputs
-	// are public. Point-level Equal keeps non-canonical R encodings behaving
-	// exactly like the previous Add+Equal check.
+	// are public. Compare the canonical encoding with the original R bytes,
+	// matching OpenSSL: another encoding of the same point is not valid.
 	minusA := new(edwards25519.Point).Negate(publicKey)
 	rCheck := new(edwards25519.Point).VarTimeDoubleScalarBaseMult(challenge, minusA, signatureS)
-	return rCheck.Equal(signatureR) == 1
+	return bytes.Equal(rCheck.Bytes(), sig[:32])
 }
 
 func CHKSIGNU() *helpers.SimpleOP {

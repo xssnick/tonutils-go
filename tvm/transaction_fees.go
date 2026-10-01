@@ -455,26 +455,6 @@ func transactionOutboundExternalMessageFeeUsage(msg *tlb.ExternalMessageOut, lay
 	return usage, nil
 }
 
-// transactionOutboundMessageFailedLayout selects the second packing layout
-// after the inline form fails: StateInit moves into a ref only when it has at
-// least two refs, and the body only when its inline form is non-empty.
-func transactionOutboundMessageFailedLayout(state *tlb.StateInit, body *cell.Cell, layout transactionOutboundLayout) (transactionOutboundLayout, error) {
-	next := layout
-	if !next.stateInitInRef {
-		move, err := transactionStateInitRefRetryNeeded(state)
-		if err != nil {
-			return layout, err
-		}
-		if move {
-			next.stateInitInRef = true
-		}
-	}
-	if !next.bodyInRef && transactionMessageBodyRefRetryNeeded(body) {
-		next.bodyInRef = true
-	}
-	return next, nil
-}
-
 func transactionOutboundInternalMessageActionUsage(cfg *PreparedBlockchainConfig, msg *tlb.InternalMessage, msgCell *cell.Cell, layout transactionOutboundLayout) (transactionUsage, error) {
 	root, err := transactionLoadedCell(msgCell)
 	if err != nil {

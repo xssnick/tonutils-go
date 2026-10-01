@@ -2,6 +2,7 @@ package tvm
 
 import (
 	"bytes"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -11,23 +12,11 @@ import (
 	vmcore "github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-// TestStorageStatRecomputesWhenBoundDictProofFallsShort pins the fallback for
-// a storage-stat dict bound from another producer's Merkle proof: such a proof
-// is pruned along the producer's own update walk, and a delete replayed here
-// in a different order can need a node — most often the delete-merge sibling —
-// the producer never loaded. The update must then recompute the stat from the
-// state directly (the absent-proof path) instead of failing the transaction,
-// and must report that it did so.
-//
-// The test sweeps every single-node pruning of the true dict: for each
-// non-root node it binds a proof with exactly that node pruned and requires
-// the build to succeed with the identical account cell and dict as the
-// fully-materialized control — flagged as recomputed when the pruning was
-// load-bearing. Before the fallback the load-bearing arms failed with the
-// classified special-cells error; before the delete-merge guard some of them
-// silently committed a corrupted dict, which this test also catches through
-// the control comparison.
-func TestStorageStatRecomputesWhenBoundDictProofFallsShort(t *testing.T) {
+// A persisted storage dictionary must be updated through its authenticated
+// proof. Every single-node pruning must either remain sufficient and produce
+// the full-proof result, or return the classified missing-branch error. A full
+// state walk must not hide an insufficient proof when the hash is persisted.
+func TestStorageStatRequiresBoundProofForPersistedDictionary(t *testing.T) {
 	cfg := transactionTestConfigWithGlobalVersion(t, uint32(vmcore.MaxSupportedGlobalVersion))
 	now := uint32(tonopsTestTime.Unix())
 	addr := address.MustParseRawAddr("0:2b63f898590aa9e300fd0e696bc834b9ebe3ab75ec16dbc2a90955d960cc6a85")
@@ -133,7 +122,8 @@ func TestStorageStatRecomputesWhenBoundDictProofFallsShort(t *testing.T) {
 		t.Fatalf("true dict has only %d cells, the sweep proves nothing", len(nodes))
 	}
 
-	recomputed := 0
+	rejected := 0
+	accepted := 0
 	for _, excluded := range nodes[1:] {
 		proof, err := trueDict.CreateHashUsageProof(func(h cell.Hash) bool { return h != excluded })
 		if err != nil {
@@ -145,8 +135,12 @@ func TestStorageStatRecomputesWhenBoundDictProofFallsShort(t *testing.T) {
 		}
 
 		built, err := runBuild(virtual)
+		if errors.Is(err, cell.ErrDictHasSpecialCells) {
+			rejected++
+			continue
+		}
 		if err != nil {
-			t.Fatalf("prune %x: build failed instead of recomputing the stat: %v", excluded, err)
+			t.Fatalf("prune %x: unexpected build error: %v", excluded, err)
 		}
 		if !bytes.Equal(built.storageStat.Hash(), control.storageStat.Hash()) {
 			t.Fatalf("prune %x: storage dict %x differs from control %x",
@@ -156,11 +150,12 @@ func TestStorageStatRecomputesWhenBoundDictProofFallsShort(t *testing.T) {
 			t.Fatalf("prune %x: account cell diverged from control", excluded)
 		}
 		if built.storageStatRecomputed {
-			recomputed++
+			t.Fatalf("prune %x: persisted dictionary was recomputed from an insufficient proof", excluded)
 		}
+		accepted++
 	}
-	if recomputed == 0 {
-		t.Fatal("no pruning was load-bearing, the sweep never exercised the fallback")
+	if rejected == 0 || accepted == 0 {
+		t.Fatalf("sweep must cover sufficient and insufficient proofs: accepted=%d rejected=%d", accepted, rejected)
 	}
-	t.Logf("sweep: %d prunings, %d recomputes", len(nodes)-1, recomputed)
+	t.Logf("sweep: %d prunings, %d accepted, %d rejected", len(nodes)-1, accepted, rejected)
 }

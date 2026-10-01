@@ -197,7 +197,7 @@ type signedAddressListCallResult struct {
 }
 
 func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
-	oldKey, _, err := ed25519.GenerateKey(nil)
+	oldKey, oldPrivateKey, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestNode_getSignedAddressListUsesQueriedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, err := newCorrectNodeWithVersion(1, 2, 3, 4, 12345, 2)
+	response, err := newCorrectNodeWithKey(1, 2, 3, 4, 12345, 2, oldKey, oldPrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +308,7 @@ func TestNode_storeValue(t *testing.T) {
 		t.Fatal("failed to prepare test dht node, err: ", err)
 	}
 
-	hexAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	hexAddr := testValueADNLID
 	siteAddr, err := hex.DecodeString(hexAddr)
 	if err != nil {
 		t.Fatal("failed to prepare test site address, err: ", err.Error())
@@ -403,7 +403,7 @@ func TestNode_storeValue(t *testing.T) {
 }
 
 func TestNode_findValue(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal("failed to prepare test site address, err: ", err.Error())
@@ -430,7 +430,7 @@ func TestNode_findValue(t *testing.T) {
 		name, addr string
 		wantType   any
 	}{
-		{"existing address", "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174", typeValue},
+		{"existing address", testValueADNLID, typeValue},
 		{"missing address", "1537ee02d6d0a65185630084427a26eafdc11ad24566d835291a43b780701f0e", typeNode},
 	}
 	for _, test := range tests {
@@ -589,7 +589,7 @@ func TestNode_findValueFiltersBadNodesListResponse(t *testing.T) {
 }
 
 func TestNode_checkValue(t *testing.T) {
-	hexAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	hexAddr := testValueADNLID
 	siteAddr, err := hex.DecodeString(hexAddr)
 	if err != nil {
 		t.Fatal("failed to prepare test site address, err: ", err.Error())
@@ -818,12 +818,12 @@ func TestNode_isValueAcceptableOverlayNodesAge(t *testing.T) {
 		want    bool
 	}{
 		{
-			name:    "fresh within twenty minutes",
+			name:    "fresh within ten minutes",
 			version: now - _MaxOverlayNodeAgeSec + 1,
 			want:    true,
 		},
 		{
-			name:    "stale after twenty minutes",
+			name:    "stale after ten minutes",
 			version: now - _MaxOverlayNodeAgeSec,
 			want:    false,
 		},
@@ -846,6 +846,7 @@ func TestNode_isValueAcceptableOverlayNodesAge(t *testing.T) {
 					UpdateRule: UpdateRuleOverlayNodes{},
 				},
 				Data: data,
+				TTL:  int32(time.Now().Add(time.Hour).Unix()),
 			}
 			if got := isValueAcceptable(value); got != tt.want {
 				t.Fatalf("unexpected acceptability: got %v, want %v", got, tt.want)

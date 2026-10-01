@@ -134,10 +134,11 @@ type TransactionExecutionResult struct {
 	// next transaction of the same account.
 	AccountStorageStat *cell.Cell
 	// StorageStatRecomputed reports that the storage-stat dict bound for this
-	// transaction (typically from another producer's collated proof) was pruned
-	// short of this update's walk, and the stat was recomputed from the account
-	// state directly. The result is the same function of the state; the flag
-	// exists so a validator can count how often shipped proofs fall short.
+	// transaction was pruned short of this update's walk, and the stat was
+	// recomputed from the account state directly. Recovery is allowed only when
+	// the resulting account need not persist a storage dictionary hash; otherwise
+	// an insufficient bound proof fails the transaction. An omitted dictionary
+	// requests a direct state walk and does not set this flag.
 	StorageStatRecomputed bool
 }
 

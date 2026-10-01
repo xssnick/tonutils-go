@@ -773,7 +773,8 @@ func (s *nearestNodeSearch) CanReturn() bool {
 	}
 
 	for _, item := range s.items {
-		if item.state != nearestNodePending {
+		// In-flight queries can still return closer nodes or improve the shortlist.
+		if item.state == nearestNodeDone {
 			continue
 		}
 		return !xorDistanceLess(s.keyID, item.node.adnlId, worst.node.adnlId)
@@ -906,27 +907,28 @@ func signTL(obj tl.Serializable, key ed25519.PrivateKey) ([]byte, error) {
 	return ed25519.Sign(key, data), nil
 }
 
-type foundResult struct {
-	value *Value
-	node  *dhtNode
-}
-
 // FindValue attempts to retrieve a value from the DHT based on the given key.
-// Slow DHT peers are hedged the same way as collectNearestNodes: after
-// lookupHedgeDelay without a response, extra parallel queries are launched
-// (up to maxActive), instead of waiting out a full queryTimeout round.
+// Slow peers are hedged after lookupHedgeDelay without a response, up to the
+// same parallel query limit used by collectNearestNodes.
 func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Continuation) (*Value, *Continuation, error) {
-	id, keyErr := tl.Hash(key)
-	if keyErr != nil {
-		return nil, nil, keyErr
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 
-	plist := c.buildPriorityList(id)
+	id, err := tl.Hash(key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	search := newNearestNodeSearch(id, c.k, c.k*2)
+	c.seedNearestNodeSearch(search)
+
 	cont := &Continuation{}
 	if len(continuation) > 0 && continuation[0] != nil {
 		cont = continuation[0]
-		for _, n := range cont.checkedNodes {
-			plist.MarkUsed(n, true)
+		for _, node := range cont.checkedNodes {
+			search.Add(node)
+			search.Finish(node, false)
 		}
 	}
 
@@ -935,18 +937,14 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 		baseActive = 1
 	}
 	activeLimit := baseActive
-
-	maxActive := activeLimit * 2
-	if c.k > activeLimit && maxActive > c.k {
+	maxActive := baseActive * 2
+	if c.k > baseActive && maxActive > c.k {
 		maxActive = c.k
-	}
-	if maxActive < activeLimit {
-		maxActive = activeLimit
 	}
 
 	type queryResult struct {
 		node    *dhtNode
-		val     any
+		value   any
 		err     error
 		attempt int
 	}
@@ -954,144 +952,90 @@ func (c *Client) FindValue(ctx context.Context, key *Key, continuation ...*Conti
 	searchCtx, stopSearch := context.WithCancel(ctx)
 	defer stopSearch()
 
-	result := make(chan queryResult, maxActive)
-	active := 0
+	// Each query can report once, including after the caller has returned.
+	results := make(chan queryResult, maxActive)
 	attempts := map[string]int{}
-	var found *foundResult
+	active := 0
 
-	launchQueries := func() {
+	hedge := time.NewTimer(lookupHedgeDelay)
+	defer hedge.Stop()
+	hedgeChan := hedge.C
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+
 		for active < activeLimit {
-			node, _ := plist.Get()
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			node := search.Next()
 			if node == nil {
 				break
 			}
 
-			nodeID := node.id()
-			if attempts[nodeID] >= retryableQueryAttempts {
-				continue
-			}
-			attempts[nodeID]++
-			attempt := attempts[nodeID]
+			attempts[node.id()]++
+			attempt := attempts[node.id()]
 			active++
 
-			go func(n *dhtNode, attempt int) {
-				ctxQuery, cancel := context.WithTimeout(searchCtx, queryTimeout)
+			go func() {
+				queryCtx, cancel := context.WithTimeout(searchCtx, queryTimeout)
 				defer cancel()
 
-				val, err := n.findValue(ctxQuery, id, int32(c.k))
+				value, err := node.findValue(queryCtx, id, int32(c.k))
 				select {
-				case result <- queryResult{node: n, val: val, err: err, attempt: attempt}:
+				case results <- queryResult{node: node, value: value, err: err, attempt: attempt}:
 				case <-searchCtx.Done():
 				}
-			}(node, attempt)
+			}()
 		}
-	}
 
-	growActive := func() {
-		if activeLimit >= maxActive {
-			return
-		}
-		activeLimit += baseActive
-		if activeLimit > maxActive {
-			activeLimit = maxActive
-		}
-	}
-
-	stopTimer := func(timer *time.Timer) {
-		if timer == nil {
-			return
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}
-
-	for {
-		launchQueries()
-		if found != nil {
-			stopSearch()
-			cont.checkedNodes = append(cont.checkedNodes, found.node)
-			return found.value, cont, nil
-		}
 		if active == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
 			return nil, cont, ErrDHTValueIsNotFound
 		}
 
-		var hedge *time.Timer
-		var hedgeChan <-chan time.Time
-		if activeLimit < maxActive {
-			hedge = time.NewTimer(lookupHedgeDelay)
-			hedgeChan = hedge.C
-		}
-
 		select {
-		case res := <-result:
-			stopTimer(hedge)
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-hedgeChan:
+			activeLimit = maxActive
+			hedgeChan = nil
+		case res := <-results:
 			active--
-
+			if err := ctx.Err(); err != nil {
+				return nil, nil, err
+			}
+			if activeLimit < maxActive {
+				hedge.Reset(lookupHedgeDelay)
+			}
+			search.Finish(res.node, false)
 			if res.err != nil {
 				if errors.Is(res.err, context.DeadlineExceeded) && res.attempt < retryableQueryAttempts {
-					plist.MarkUsed(res.node, false)
+					search.Retry(res.node)
 				}
-			} else {
-				c.markNodeReady(res.node)
-				switch v := res.val.(type) {
-				case *Value:
-					found = &foundResult{value: v, node: res.node}
-				case []*Node:
-					added := false
-					for _, n := range v {
-						if newNode, err := c.addNode(n); err == nil {
-							plist.Add(newNode)
-							added = true
-						}
-					}
-					if !added && res.attempt < retryableQueryAttempts {
-						plist.MarkUsed(res.node, false)
-					}
-				}
-			}
-		case <-hedgeChan:
-			growActive()
-		case <-ctx.Done():
-			stopTimer(hedge)
-			stopSearch()
-			return nil, nil, ctx.Err()
-		}
-	}
-}
-
-func (c *Client) buildPriorityList(id []byte) *priorityList {
-	plistGood := newPriorityList(c.k+c.k/2, id)
-	plistBad := newPriorityList(c.k/2, id)
-
-	for i := 255; i >= 0; i-- {
-		bucket := c.buckets[i]
-		knownNodes := bucket.getNodes()
-		for _, node := range knownNodes {
-			if node == nil {
 				continue
 			}
+			c.markNodeReady(res.node)
 
-			if atomic.LoadInt32(&node.badScore) == 0 {
-				plistGood.Add(node)
-			} else {
-				plistBad.Add(node)
+			switch value := res.value.(type) {
+			case *Value:
+				cont.checkedNodes = append(cont.checkedNodes, res.node)
+				return value, cont, nil
+			case []*Node:
+				added := false
+				for _, node := range value {
+					if next, err := c.addNode(node); err == nil && search.Add(next) {
+						added = true
+					}
+				}
+				if !added && res.attempt < retryableQueryAttempts {
+					search.Retry(res.node)
+				}
 			}
 		}
 	}
-
-	// add K not good nodes to retry them if they can be better
-	for {
-		node, _ := plistBad.Get()
-		if node == nil {
-			break
-		}
-		plistGood.Add(node)
-	}
-
-	return plistGood
 }

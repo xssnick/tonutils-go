@@ -1,7 +1,7 @@
 # Historical mainnet replay witnesses
 
 Copied from the supplied TVM-002 through TVM-008, TVM-010, TVM-012 through
-TVM-016, TVM-018, TVM-020, TVM-022, TVM-023, TVM-026 and TVM-027 conformance
+TVM-016, TVM-018, TVM-020, TVM-022, TVM-023 and TVM-026 through TVM-029 conformance
 reports. Tests run offline through the
 public transaction API, without a C++ emulator. The MC 1
 and MC 94558 witnesses were captured from published `mainnet/v4` history on
@@ -98,6 +98,23 @@ Each includes an independent `-after.boc` used only to check the final
 ShardAccount. Account-only proofs do not support the message-supplied code in
 the GLOBALID and special-body fixtures; their exact replays use normal mode.
 
+- `child-c4-trace-v5-36714473.json.gz`: shard block 42485529, included in MC
+  36714473, with execution MasterRef 36714470 and global version 5. Reading c4
+  inside RUNVMX charges the child VM; the parent's cell trace must not charge
+  the suspended parent a second time. Replay uses 16313 gas, 320 steps and
+  exit 0, with total fees of 20549066 nanoton.
+- `send-retry-fine-v6-37149601.json.gz`: shard block 42848171, included in MC
+  37149601, with execution MasterRef 37149598 and global version 6. Each
+  outgoing-message packing retry must check fees and funds again. The first
+  retry moves only StateInit into a reference and fails for insufficient funds;
+  moving the body as well would overcharge the ignored send's action fine.
+  Replay charges a 750000-nanoton fine and total fees of 34884390 nanoton,
+  with 3308 gas, 68 steps, exit 0 and no outbound messages.
+
+These two witnesses need no historical options. Both compare the complete
+transaction and final ShardAccount against the block and independent
+`-after.boc`, with `BuildProof` disabled and enabled.
+
 The JSON contents are byte-for-byte copies of the supplied fixtures; files with
 the `.gz` suffix are compressed losslessly for storage, and their checksums are
 verified after decompression. All files in each
@@ -114,7 +131,7 @@ MasterRef is checked separately from its inclusion masterchain sequence number.
 Replay verifies predecessor BlockIDs, initial and final account-block hashes,
 each transaction's old/new Account hash and previous-transaction chain, complete
 transaction hashes, last-trans fields, gas limits/credit/fees, total fees,
-outgoing message counts, VM steps and exit codes. The 32 transactions advance
+outgoing message counts, VM steps and exit codes. The 34 transactions advance
 using only computed accounts and storage statistics from the emulator's result.
 The first MC 94558 transaction is pinned to
 `3f75f750162d4c9defbea07eb840e9fe38bc60d526d5a7abfff72e17b542422e`.
@@ -143,6 +160,9 @@ Historical source references:
 - [Storage context retained when committing an account](https://github.com/ton-blockchain/ton/blob/3d478cbde854be03a18ab2a59f8fc3c565cf7d14/crypto/block/transaction.cpp#L3934)
 - [Strong validation of typed cell references](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/tl/tlblib.cpp#L118)
 - [Storage accounting for inline slices and physical cells](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/vm/boc.cpp#L1093)
+- [RUNVM input state and c4](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/vm/contops.cpp#L209)
+- [Child VM execution and parent gas accounting](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/vm/vm.cpp#L695)
+- [Separate send attempts and retry layout changes](https://github.com/ton-blockchain/ton/blob/6308c96bc8c4e95d4d8c598a84d648534331e92b/crypto/block/transaction.cpp#L2132)
 
 These witnesses establish specific historical executions. Git commit dates do
 not establish network activation heights, and global version zero alone does

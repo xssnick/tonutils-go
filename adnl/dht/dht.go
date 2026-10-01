@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	_UnknownNetworkID     = int32(-1)
-	_MaxValueSize         = 768
-	_MaxValueTTLSec       = 3600 + 60
-	_MaxOverlayNodeAgeSec = 10 * 60
-	_MaxAddressListSize   = 128
+	_UnknownNetworkID        = int32(-1)
+	_MaxValueSize            = 768
+	_MaxValueTTLSec          = 3600 + 60
+	_MaxOverlayNodeAgeSec    = 10 * 60
+	_MaxOverlayNodeFutureSec = 60
+	_MaxAddressListSize      = 128
 )
 
 func checkValueTTLAt(ttl int32, now int64) error {

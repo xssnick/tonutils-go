@@ -91,7 +91,8 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
-	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
+	childData := unbindCellTrace(cfg.Data, parentTrace)
+	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, childData, childC7, childStack)
 	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
