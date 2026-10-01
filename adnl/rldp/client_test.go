@@ -214,6 +214,55 @@ func TestRLDPPrepareNextPartUsesCppCompatiblePartSize(t *testing.T) {
 	}
 }
 
+func TestRLDPPrepareNextPartKeepsBulkFastUnderBadNetworkGlobals(t *testing.T) {
+	oldPartSize := PartSize
+	oldSymbolSize := DefaultSymbolSize
+	oldMultiFEC := MultiFECMode
+	PartSize = 32 * 1024
+	DefaultSymbolSize = 256
+	MultiFECMode = false
+	defer func() {
+		PartSize = oldPartSize
+		DefaultSymbolSize = oldSymbolSize
+		MultiFECMode = oldMultiFEC
+	}()
+
+	bulkPayload := bytes.Repeat([]byte{0x5a}, 700*1024)
+	bulk := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x04}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      bulkPayload,
+		totalSize: uint64(len(bulkPayload)),
+	}
+	if ok, err := bulk.prepareNextPart(); err != nil || !ok {
+		t.Fatalf("expected bulk part, ok=%v err=%v", ok, err)
+	}
+	bulkPart := bulk.getCurrentPart()
+	if bulkPart.fec.GetDataSize() != uint32(len(bulkPayload)) {
+		t.Fatalf("bulk data size=%d want=%d", bulkPart.fec.GetDataSize(), len(bulkPayload))
+	}
+	if bulkPart.fec.GetSymbolSize() != bulkSymbolSize {
+		t.Fatalf("bulk symbol size=%d want=%d", bulkPart.fec.GetSymbolSize(), bulkSymbolSize)
+	}
+
+	smallPayload := bytes.Repeat([]byte{0x6b}, 16*1024)
+	small := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x05}, 32),
+		timeoutAt: time.Now().Add(time.Second).UnixMilli(),
+		data:      smallPayload,
+		totalSize: uint64(len(smallPayload)),
+	}
+	if ok, err := small.prepareNextPart(); err != nil || !ok {
+		t.Fatalf("expected small part, ok=%v err=%v", ok, err)
+	}
+	if got := small.getCurrentPart().fec.GetSymbolSize(); got != 256 {
+		t.Fatalf("small symbol size=%d want=256", got)
+	}
+	if got, want := small.getCurrentPart().fastSeqnoTill, small.getCurrentPart().fecSymbolsCount+badNetworkSmallExtraSymbols; got != want {
+		t.Fatalf("small fastSeqnoTill=%d want=%d", got, want)
+	}
+}
+
 func TestRLDPPrepareNextPartSymbolsCountIsCeil(t *testing.T) {
 	oldMultiFEC := MultiFECMode
 	MultiFECMode = false
@@ -243,7 +292,7 @@ func TestRLDPPrepareNextPartSymbolsCountIsCeil(t *testing.T) {
 	}
 }
 
-func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
+func TestRLDPSendFastSymbolsCapsBulkInitialBurst(t *testing.T) {
 	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
 	transfer := &activeTransfer{
 		id:        bytes.Repeat([]byte{0x02}, 32),
@@ -285,14 +334,14 @@ func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := sent.Load(); got != maxInitialFastSymbols {
-		t.Fatalf("sent initial symbols=%d want %d", got, maxInitialFastSymbols)
+	if got := sent.Load(); got != maxInitialFastSymbolsBulk {
+		t.Fatalf("sent initial symbols=%d want %d", got, maxInitialFastSymbolsBulk)
 	}
 	stats := rl.Stats()
-	if stats.Outbound.SymbolsSent != maxInitialFastSymbols {
-		t.Fatalf("stats symbols sent=%d want=%d", stats.Outbound.SymbolsSent, maxInitialFastSymbols)
+	if stats.Outbound.SymbolsSent != maxInitialFastSymbolsBulk {
+		t.Fatalf("stats symbols sent=%d want=%d", stats.Outbound.SymbolsSent, maxInitialFastSymbolsBulk)
 	}
-	if stats.Outbound.SymbolBytesSent != uint64(maxInitialFastSymbols)*uint64(DefaultSymbolSize) {
+	if stats.Outbound.SymbolBytesSent != uint64(maxInitialFastSymbolsBulk)*uint64(DefaultSymbolSize) {
 		t.Fatalf("stats symbol bytes=%d", stats.Outbound.SymbolBytesSent)
 	}
 	if stats.Outbound.LastSymbolAt.IsZero() {
