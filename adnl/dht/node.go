@@ -80,7 +80,7 @@ func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey, v
 	n := &dhtNode{
 		adnlId:     id,
 		addr:       addr,
-		serverKey:  serverKey,
+		serverKey:  append(ed25519.PublicKey(nil), serverKey...),
 		client:     c,
 		version:    version,
 		failedFrom: time.Now().UnixNano(),

@@ -61,6 +61,7 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 			return nil
 		},
 	})
+	defer cli.Close()
 
 	part := MessagePart{
 		TransferID: transferID,
@@ -75,24 +76,22 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 		Data:      make([]byte, MaxSymbolSize+1),
 	}
 
-	if err := cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
-		t.Fatal(err)
+	if err := cli.handleMessage(&adnl.MessageCustom{Data: part}); err == nil {
+		t.Fatal("invalid FEC was accepted")
 	}
 
 	cli.mx.RLock()
 	stream := cli.recvStreams[[32]byte(transferID)]
 	cli.mx.RUnlock()
-	if stream == nil {
-		t.Fatal("expected stream to be created")
+	if stream != nil {
+		t.Fatal("invalid FEC allocated a stream")
 	}
 	if stats := cli.Stats(); stats.Inbound.ProcessingErrors != 1 {
 		t.Fatalf("processing errors=%d want=1", stats.Inbound.ProcessingErrors)
 	}
 
-	stream.mx.Lock()
-	defer stream.mx.Unlock()
-	if stream.nextPartIndex != 0 || len(stream.activeParts) != 0 {
-		t.Fatal("expected no decoder part created for invalid fec")
+	if got := cli.Stats().Inbound.TransfersStarted; got != 0 {
+		t.Fatalf("invalid FEC started %d transfers", got)
 	}
 }
 

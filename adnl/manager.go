@@ -74,7 +74,9 @@ func (s *SingleNetManager) InitConnection(gate *Gateway, addr string) error {
 
 func (s *SingleNetManager) Close() {
 	s.globalCtxCancel()
-	_ = s.conn.Close()
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *SingleNetManager) Free(p *UDPPacket) {
@@ -85,7 +87,9 @@ func (s *SingleNetManager) Free(p *UDPPacket) {
 
 func (s *SingleNetManager) CloseConnection(gate *Gateway) {
 	s.globalCtxCancel()
-	_ = s.conn.Close()
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (s *SingleNetManager) GetReaderChan(gate *Gateway) <-chan *UDPPacket {

@@ -8,13 +8,13 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 )
 
-// continuationTraceCopier copies a continuation graph while removing the
-// execution-local trace owned by a child VM. Continuations are opaque stack
-// values, so their code, captured stack, and saved registers need an explicit
-// ownership-boundary copy when they leave that VM.
+// continuationTraceCopier removes an execution-local trace at a VM ownership
+// boundary. Its maps preserve sharing in tuple DAGs and continuation graphs,
+// including code, captured stacks, and saved registers.
 type continuationTraceCopier struct {
 	trace  *cell.Trace
 	copied map[Continuation]Continuation
+	tuples map[tuple.Tuple]tuple.Tuple
 }
 
 func (c *continuationTraceCopier) continuation(cont Continuation) Continuation {
@@ -139,44 +139,67 @@ func (c *continuationTraceCopier) stack(stack *Stack) *Stack {
 		trace: stack.trace.WithoutTrace(c.trace),
 	}
 	for i, val := range stack.elems {
-		dst.elems[i] = c.value(val)
+		if n, ok := val.(*big.Int); ok && n != nil {
+			// Unlike tuple reads, PopInt transfers a mutable integer to the
+			// caller. Captured stacks must own their integer leaves.
+			dst.elems[i] = new(big.Int).Set(n)
+		} else {
+			dst.elems[i] = c.value(val)
+		}
 	}
 	return dst
 }
 
 func (c *continuationTraceCopier) tuple(t tuple.Tuple) tuple.Tuple {
 	if t.IsNull() {
-		return tuple.Tuple{}
+		return t
+	}
+	if copied, ok := c.tuples[t]; ok {
+		return copied
 	}
 
-	vals := make([]any, t.Len())
-	for i := range vals {
+	var vals []any
+	for i := 0; i < t.Len(); i++ {
 		val, err := t.RawIndex(i)
 		if err != nil {
 			panic(err)
 		}
-		vals[i] = c.value(val)
+		next := c.value(val)
+		if vals == nil && sameStackValue(next, val) {
+			continue
+		}
+		if vals == nil {
+			vals = make([]any, t.Len())
+			copyTuplePrefix(vals, t, i)
+		}
+		vals[i] = next
 	}
-	return tuple.NewTupleOwned(vals)
+
+	var dst tuple.Tuple
+	if vals == nil {
+		dst = t.WithBindingID(nil)
+	} else {
+		dst = tuple.NewTupleOwned(vals)
+	}
+	if c.tuples == nil {
+		c.tuples = make(map[tuple.Tuple]tuple.Tuple)
+	}
+	c.tuples[t] = dst
+	return dst
 }
 
 func (c *continuationTraceCopier) value(val any) any {
 	switch v := val.(type) {
-	case *big.Int:
-		if v == nil {
-			return nil
-		}
-		return new(big.Int).Set(v)
 	case *cell.Cell:
 		if v == nil {
-			return nil
+			return v
 		}
 		return v.WithTrace(v.Trace().WithoutTrace(c.trace))
 	case *cell.Slice:
 		return c.slice(v)
 	case *cell.Builder:
 		if v == nil {
-			return nil
+			return v
 		}
 		return v.Copy().SetTrace(v.Trace().WithoutTrace(c.trace))
 	case tuple.Tuple:
@@ -193,43 +216,4 @@ func (c *continuationTraceCopier) slice(sl *cell.Slice) *cell.Slice {
 		return nil
 	}
 	return sl.Copy().SetTrace(sl.Trace().WithoutTrace(c.trace))
-}
-
-// returnTuple removes child traces and copies continuations nested inside a
-// returned tuple. Other leaves stay on the regular PushAny ownership path.
-func (c *continuationTraceCopier) returnTuple(t tuple.Tuple) tuple.Tuple {
-	if t.IsNull() || c.trace == nil {
-		return t
-	}
-
-	var vals []any
-	for i := 0; i < t.Len(); i++ {
-		val, err := t.RawIndex(i)
-		if err != nil {
-			panic(err)
-		}
-
-		var next any
-		switch v := val.(type) {
-		case Continuation:
-			next = c.continuation(v)
-		case tuple.Tuple:
-			next = c.returnTuple(v)
-		default:
-			next = unbindValueTrace(val, c.trace)
-		}
-
-		if vals == nil && sameStackValue(next, val) {
-			continue
-		}
-		if vals == nil {
-			vals = make([]any, t.Len())
-			copyTuplePrefix(vals, t, i)
-		}
-		vals[i] = next
-	}
-	if vals == nil {
-		return t.WithBindingID(nil)
-	}
-	return tuple.NewTupleOwned(vals)
 }

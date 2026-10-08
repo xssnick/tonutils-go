@@ -29,22 +29,7 @@ func pushMaybeCell(stack *Stack, cl *cell.Cell) error {
 }
 
 func copyTopValuesToParent(parent, child *Stack, count int) error {
-	if count <= 0 {
-		return nil
-	}
-
-	start := child.Len() - count
-	if start < 0 {
-		return vmerr.Error(vmerr.CodeStackUnderflow)
-	}
-
-	for _, val := range child.elems[start:] {
-		val = unbindValueTrace(val, child.trace)
-		if err := parent.PushAny(val); err != nil {
-			return err
-		}
-	}
-	return nil
+	return copyTopValuesToParentWithTrace(parent, child, count, child.trace)
 }
 
 func unbindCellTrace(cl *cell.Cell, trace *cell.Trace) *cell.Cell {
@@ -87,8 +72,9 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	}
 
 	parentTrace := s.Cells.Trace()
-	childStack := cfg.Stack.WithoutTrace(parentTrace)
-	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
+	copier := continuationTraceCopier{trace: parentTrace}
+	childStack := copier.stack(cfg.Stack)
+	childC7 := copier.tuple(cfg.C7)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
 	childData := unbindCellTrace(cfg.Data, parentTrace)
@@ -237,6 +223,7 @@ func copyTopValuesToParentWithTrace(parent, child *Stack, count int, childTrace 
 	}
 
 	copier := continuationTraceCopier{trace: childTrace}
+	binder := stackValueCopier{trace: parent.trace}
 	for _, val := range child.elems[start:] {
 		switch v := val.(type) {
 		case Continuation:
@@ -245,9 +232,13 @@ func copyTopValuesToParentWithTrace(parent, child *Stack, count int, childTrace 
 			}
 			continue
 		case tuple.Tuple:
-			val = copier.returnTuple(v)
+			val = binder.tuple(copier.tuple(v))
+			if err := parent.PushOwnedValue(val); err != nil {
+				return err
+			}
+			continue
 		default:
-			val = unbindValueTrace(val, childTrace)
+			val = copier.value(val)
 		}
 		if err := parent.PushAny(val); err != nil {
 			return err

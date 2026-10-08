@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -632,4 +633,80 @@ func TestSendClock_ConcurrentRaces(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestBBR_ActivityRestartsAfterIdle(t *testing.T) {
+	for _, entry := range []string{"burst", "rtt", "delta"} {
+		t.Run(entry, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bbr, tb := newBBR(t, 1<<20, BBRv2Options{MinRate: 32 << 10})
+				bbr.ObserveRTT(20)
+				bbr.state.Store(2)
+				bbr.fullBW.Store(1 << 20)
+				bbr.fullBWCount.Store(3)
+				bbr.rateAcked.Store(64 << 10)
+				_ = tb.ConsumeUpTo(1 << 20)
+				time.Sleep(2 * time.Second)
+
+				switch entry {
+				case "burst":
+					bbr.OnNewSendBurst()
+				case "rtt":
+					bbr.ObserveRTT(75)
+				case "delta":
+					bbr.ObserveDelta(1500, 1500)
+				}
+
+				if got := bbr.state.Load(); got != 0 {
+					t.Fatalf("state after idle = %d, want Startup", got)
+				}
+				if bbr.fullBW.Load() != 0 || bbr.fullBWCount.Load() != 0 {
+					t.Fatal("idle restart kept full-bandwidth detection")
+				}
+				if got := bbr.rateAcked.Load(); got != 0 {
+					t.Fatalf("delivery-rate sample after idle = %d, want 0", got)
+				}
+				if got := tb.GetTokensLeft(); got <= 0 {
+					t.Fatalf("idle restart did not prime packet pacing: bytes = %d", got)
+				}
+
+				// Confirmations observe RTT before their delivery sample.
+				if entry != "rtt" {
+					bbr.ObserveRTT(75)
+				}
+				bbr.ObserveDelta(1500, 1500)
+				if got := bbr.minRTT.Load(); got != 75 {
+					t.Fatalf("fresh flow min RTT = %d, want 75", got)
+				}
+			})
+		})
+	}
+}
+
+func TestBBR_RecentActivityDoesNotRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bbr, _ := newBBR(t, 1<<20, BBRv2Options{MinRate: 32 << 10, MinSampleMs: 1000})
+		bbr.ObserveRTT(20)
+		bbr.state.Store(2)
+		bbr.fullBW.Store(1 << 20)
+		bbr.fullBWCount.Store(3)
+		bbr.rateAcked.Store(64 << 10)
+		time.Sleep(100 * time.Millisecond)
+
+		bbr.OnNewSendBurst()
+		bbr.ObserveRTT(75)
+		bbr.ObserveDelta(1500, 1500)
+		if got := bbr.state.Load(); got != 2 {
+			t.Fatalf("active flow state = %d, want ProbeBW", got)
+		}
+		if bbr.fullBW.Load() != 1<<20 || bbr.fullBWCount.Load() != 3 {
+			t.Fatal("recent activity reset full-bandwidth detection")
+		}
+		if got := bbr.rateAcked.Load(); got != 64<<10 {
+			t.Fatalf("active flow delivery sample = %d, want 64 KiB", got)
+		}
+		if got := bbr.minRTT.Load(); got != 20 {
+			t.Fatalf("active flow min RTT = %d, want 20", got)
+		}
+	})
 }

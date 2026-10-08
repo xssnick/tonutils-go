@@ -95,20 +95,36 @@ func (s *Stack) SetTrace(trace *cell.Trace) {
 	if trace == nil {
 		return
 	}
+	copier := stackValueCopier{trace: trace}
 	for i, val := range s.elems {
-		s.elems[i] = BindValueTrace(val, trace)
+		s.elems[i] = copier.value(val)
 	}
+}
+
+// stackValueCopier snapshots or binds tuple DAGs without expanding shared
+// subtuples. A nil trace snapshots cursors; a non-nil trace also binds them.
+type stackValueCopier struct {
+	trace  *cell.Trace
+	tuples map[tuple.Tuple]tuple.Tuple
 }
 
 func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if trace == nil {
 		return t
 	}
-	if t.HasBindingID(trace) {
+	copier := stackValueCopier{trace: trace}
+	return copier.tuple(t)
+}
+
+func (c *stackValueCopier) tuple(t tuple.Tuple) tuple.Tuple {
+	if c.trace != nil && t.HasBindingID(c.trace) {
 		return t
 	}
 	if !t.NeedsValueSnapshot() {
 		return t
+	}
+	if copied, ok := c.tuples[t]; ok {
+		return copied
 	}
 
 	var vals []any
@@ -117,7 +133,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		if err != nil {
 			panic(err)
 		}
-		bound := BindValueTrace(val, trace)
+		bound := c.value(val)
 		if vals == nil && sameStackValue(bound, val) {
 			continue
 		}
@@ -127,29 +143,25 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		}
 		vals[i] = bound
 	}
+	var dst tuple.Tuple
 	if vals == nil {
-		return t.WithBindingID(trace)
+		dst = t.WithBindingID(c.trace)
+	} else {
+		dst = tuple.NewTupleOwnedBound(vals, c.trace)
 	}
-	return tuple.NewTupleOwnedBound(vals, trace)
+	if c.tuples == nil {
+		c.tuples = make(map[tuple.Tuple]tuple.Tuple)
+	}
+	c.tuples[t] = dst
+	return dst
 }
 
 func snapshotTupleValue(t tuple.Tuple) tuple.Tuple {
-	if t.IsNull() || !t.NeedsValueSnapshot() {
-		return t
-	}
-
-	vals := make([]any, t.Len())
-	for i := range vals {
-		val, err := t.RawIndex(i)
-		if err != nil {
-			panic(err)
-		}
-		vals[i] = snapshotStackValue(val)
-	}
-	return tuple.NewTupleOwned(vals)
+	copier := stackValueCopier{}
+	return copier.tuple(t)
 }
 
-func snapshotStackValue(val any) any {
+func (c *stackValueCopier) value(val any) any {
 	switch x := val.(type) {
 	case *big.Int:
 		if x == nil {
@@ -162,14 +174,22 @@ func snapshotStackValue(val any) any {
 		if x == nil {
 			return x
 		}
-		return x.Copy()
+		combined := cell.CombineTraces(x.Trace(), c.trace)
+		if c.trace != nil && combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
 	case *cell.Builder:
 		if x == nil {
 			return x
 		}
-		return x.Copy()
+		combined := cell.CombineTraces(x.Trace(), c.trace)
+		if c.trace != nil && combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
 	case tuple.Tuple:
-		return snapshotTupleValue(x)
+		return c.tuple(x)
 	default:
 		return val
 	}
@@ -233,115 +253,16 @@ func BindValueTrace(val any, trace *cell.Trace) any {
 		return val
 	}
 
-	switch x := val.(type) {
-	case *big.Int:
-		// normalize typed nils coming from user-built tuples
-		if x == nil {
-			return nil
-		}
-		return x
-	case *cell.Cell:
-		return x
-	case *cell.Slice:
-		if x == nil {
-			return x
-		}
-		combined := cell.CombineTraces(x.Trace(), trace)
-		if combined == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(combined)
-	case *cell.Builder:
-		if x == nil {
-			return x
-		}
-		combined := cell.CombineTraces(x.Trace(), trace)
-		if combined == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(combined)
-	case tuple.Tuple:
-		return bindTupleTrace(x, trace)
-	default:
-		return val
-	}
-}
-
-func unbindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
-	if trace == nil || t.IsNull() {
-		return t
-	}
-
-	var vals []any
-	for i := 0; i < t.Len(); i++ {
-		val, err := t.RawIndex(i)
-		if err != nil {
-			panic(err)
-		}
-		unbound := unbindValueTrace(val, trace)
-		if vals == nil && sameStackValue(unbound, val) {
-			continue
-		}
-		if vals == nil {
-			vals = make([]any, t.Len())
-			copyTuplePrefix(vals, t, i)
-		}
-		vals[i] = unbound
-	}
-	if vals == nil {
-		return t.WithBindingID(nil)
-	}
-	return tuple.NewTupleOwned(vals)
-}
-
-func unbindValueTrace(val any, trace *cell.Trace) any {
-	if trace == nil {
-		return val
-	}
-
-	switch x := val.(type) {
-	case *cell.Cell:
-		if x == nil {
-			return x
-		}
-		return x.WithTrace(x.Trace().WithoutTrace(trace))
-	case *cell.Slice:
-		if x == nil {
-			return x
-		}
-		next := x.Trace().WithoutTrace(trace)
-		if next == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(next)
-	case *cell.Builder:
-		if x == nil {
-			return x
-		}
-		next := x.Trace().WithoutTrace(trace)
-		if next == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(next)
-	case tuple.Tuple:
-		return unbindTupleTrace(x, trace)
-	default:
-		return val
-	}
+	copier := stackValueCopier{trace: trace}
+	return copier.value(val)
 }
 
 func (s *Stack) WithoutTrace(trace *cell.Trace) *Stack {
 	if s == nil || trace == nil {
 		return s
 	}
-	cp := &Stack{
-		elems: make([]any, len(s.elems)),
-		trace: s.trace.WithoutTrace(trace),
-	}
-	for i, val := range s.elems {
-		cp.elems[i] = unbindValueTrace(val, trace)
-	}
-	return cp
+	copier := continuationTraceCopier{trace: trace}
+	return copier.stack(s)
 }
 
 func shareStackValue(val any, trace *cell.Trace) (any, error) {

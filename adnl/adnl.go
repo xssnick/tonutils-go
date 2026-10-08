@@ -42,6 +42,7 @@ const (
 const BasePayloadMTU = 1024
 const HugePacketMaxSz = 1024*8 + 128
 const maxIncompleteMultipartMessages = 512
+const packetReplayWindowSize = 1024
 const respondWithNopDelay = 1500 * time.Millisecond
 const idleReinitTimeout = 120 * time.Second
 const idleReinitSilence = 5 * time.Second
@@ -125,6 +126,7 @@ type ADNL struct {
 
 	lifecycleMx      sync.RWMutex
 	lifecycleVersion uint64
+	recvSeqnoWindow  [packetReplayWindowSize / 64]uint64
 	mx               sync.RWMutex
 
 	stats *peerStats
@@ -363,21 +365,13 @@ func (a *ADNL) preparePacketLocked(packet *PacketContent, fromChannel bool, ch *
 		return preparation, nil
 	}
 
-	var seqno int64
-	if packet.Seqno != nil {
-		seqno = *packet.Seqno
-	}
 	if packet.ConfirmSeqno != nil {
 		atomicMaxInt64(&a.stats.peerConfirmSeqno, *packet.ConfirmSeqno)
 	}
 
-	for {
-		if conf := atomic.LoadInt64(&a.confirmSeqno); seqno > conf {
-			if !atomic.CompareAndSwapInt64(&a.confirmSeqno, conf, seqno) {
-				continue
-			}
-		}
-		break
+	if packet.Seqno != nil && !a.acceptPacketSeqnoLocked(*packet.Seqno) {
+		preparation.stop = true
+		return preparation, nil
 	}
 
 	a.noteAddressListVersions(packet)
@@ -392,6 +386,44 @@ func (a *ADNL) preparePacketLocked(packet *PacketContent, fromChannel bool, ch *
 	}
 
 	return preparation, nil
+}
+
+func (a *ADNL) acceptPacketSeqnoLocked(seqno int64) bool {
+	if seqno <= 0 {
+		return false
+	}
+
+	highest := atomic.LoadInt64(&a.confirmSeqno)
+	if seqno > highest {
+		delta := seqno - highest
+		if delta >= packetReplayWindowSize {
+			clear(a.recvSeqnoWindow[:])
+		} else {
+			// Only clear slots reused by the advancing circular window.
+			// Sequential packets clear one bit; gaps clear at most 17 words.
+			slot := int((highest + 1) % packetReplayWindowSize)
+			for remaining := int(delta); remaining > 0; {
+				bits := min(64-slot%64, remaining)
+				mask := (^uint64(0) >> uint(64-bits)) << uint(slot%64)
+				a.recvSeqnoWindow[slot/64] &^= mask
+				remaining -= bits
+				slot = (slot + bits) % packetReplayWindowSize
+			}
+		}
+		atomic.StoreInt64(&a.confirmSeqno, seqno)
+		highest = seqno
+	}
+
+	delta := highest - seqno
+	if delta >= packetReplayWindowSize {
+		return false
+	}
+	index, bit := int(seqno%packetReplayWindowSize)/64, uint64(1)<<uint(seqno%64)
+	if a.recvSeqnoWindow[index]&bit != 0 {
+		return false
+	}
+	a.recvSeqnoWindow[index] |= bit
+	return true
 }
 
 func (a *ADNL) inboundStateCurrent(state *inboundPacketState) bool {
@@ -729,6 +761,7 @@ func (a *ADNL) applyPeerReinitLocked(date int32) {
 
 	a.lifecycleVersion++
 	atomic.StoreInt64(&a.confirmSeqno, 0)
+	clear(a.recvSeqnoWindow[:])
 	a.stats.peerConfirmSeqno.Store(0)
 	atomic.StoreInt32(&a.ourAddrVerOnPeerSide, 0)
 	atomic.StoreInt32(&a.ourPriorityAddrVerOnPeerSide, 0)
@@ -899,7 +932,7 @@ type PreparedCustomMessageSender interface {
 var ErrPreparedCustomMessageUnsupported = errors.New("transport does not support prepared custom messages")
 
 // SendPreparedCustomMessage sends a message prepared by PrepareCustomMessage
-// or PrepareCustomMessageParts. It splits, packs, encrypts and retries on MTU
+// or PrepareCustomMessageParts. It splits, packs and encrypts
 // exactly as SendCustomMessage does; only the serialization is skipped.
 func (a *ADNL) SendPreparedCustomMessage(_ context.Context, msg *PreparedCustomMessage) error {
 	if msg == nil || len(msg.wire) == 0 {
@@ -911,16 +944,13 @@ func (a *ADNL) SendPreparedCustomMessage(_ context.Context, msg *PreparedCustomM
 // sendCustomMessage takes either the message object to serialize or its
 // prepared wire form.
 func (a *ADNL) sendCustomMessage(req tl.Serializable, wire []byte) error {
-	baseMTU := false
-
-reSplit:
 	var packet []byte
 	var packets [][]byte
 	var err error
 	if wire != nil {
-		packet, packets, err = a.buildRequestMaySplitWire(wire, baseMTU)
+		packet, packets, err = a.buildRequestMaySplitWire(wire, false)
 	} else {
-		packet, packets, err = a.buildRequestMaySplit(req, baseMTU)
+		packet, packets, err = a.buildRequestMaySplit(req, false)
 	}
 	if err != nil {
 		return fmt.Errorf("failed to send custom message: %w", err)
@@ -928,19 +958,11 @@ reSplit:
 
 	if packet != nil {
 		if err = a.send(packet); err != nil {
-			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-				baseMTU = true
-				goto reSplit
-			}
 			return fmt.Errorf("failed to send custom packet: %w", err)
 		}
 	} else {
 		for _, packet := range packets {
 			if err = a.send(packet); err != nil {
-				if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-					baseMTU = true
-					goto reSplit
-				}
 				return fmt.Errorf("failed to send custom packet: %w", err)
 			}
 		}
@@ -1045,32 +1067,22 @@ func (a *ADNL) Query(ctx context.Context, req, result tl.Serializable) error {
 		a.queryMx.Unlock()
 	}()
 
-	baseMTU := false
 	timer := time.NewTimer(250 * time.Millisecond)
 	defer timer.Stop()
 
-retry:
 	for {
-		packet, packets, err := a.buildRequestMaySplit(q, baseMTU)
+		packet, packets, err := a.buildRequestMaySplit(q, false)
 		if err != nil {
 			return fmt.Errorf("request failed: %w", err)
 		}
 
 		if packet != nil {
 			if err = a.send(packet); err != nil {
-				if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-					baseMTU = true
-					continue
-				}
 				return fmt.Errorf("failed to send query packet 0: %w", err)
 			}
 		} else {
 			for i, packet := range packets {
 				if err = a.send(packet); err != nil {
-					if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-						baseMTU = true
-						continue retry
-					}
 					return fmt.Errorf("failed to send query packet %d: %w", i, err)
 				}
 			}
@@ -1081,7 +1093,11 @@ retry:
 			if err, ok := resp.(error); ok {
 				return err
 			}
-			reflect.ValueOf(result).Elem().Set(reflect.ValueOf(resp))
+			dst, src := reflect.ValueOf(result).Elem(), reflect.ValueOf(resp)
+			if !src.IsValid() || !src.Type().AssignableTo(dst.Type()) {
+				return fmt.Errorf("unexpected query response type %T, want %s", resp, dst.Type())
+			}
+			dst.Set(src)
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("deadline exceeded, addr %s %s, err: %w", a.addr, hex.EncodeToString(a.peerKey), ctx.Err())
@@ -1092,31 +1108,21 @@ retry:
 }
 
 func (a *ADNL) Answer(ctx context.Context, queryID []byte, result tl.Serializable) error {
-	baseMTU := false
-reSplit:
 	packet, packets, err := a.buildRequestMaySplit(&MessageAnswer{
 		ID:   queryID,
 		Data: result,
-	}, baseMTU)
+	}, false)
 	if err != nil {
 		return fmt.Errorf("send answer  failed: %w", err)
 	}
 
 	if packet != nil {
 		if err = a.send(packet); err != nil {
-			if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-				baseMTU = true
-				goto reSplit
-			}
 			return fmt.Errorf("failed to send answer: %w", err)
 		}
 	} else {
 		for _, packet := range packets {
 			if err = a.send(packet); err != nil {
-				if !baseMTU && errors.Is(err, ErrPacketBiggerThanMTU) {
-					baseMTU = true
-					goto reSplit
-				}
 				return fmt.Errorf("failed to send answer: %w", err)
 			}
 		}
@@ -1147,16 +1153,33 @@ func (a *ADNL) buildRequestMaySplit(req tl.Serializable, useBase bool) (packet [
 // passed straight in.
 func (a *ADNL) buildRequestMaySplitWire(msg []byte, useBase bool) (packet []byte, packets [][]byte, err error) {
 	mtu := BasePayloadMTU
+	var headerSz uint32
 	if !useBase { // useBase is true when packet is oversize, and we rebuild it with lower MTU
-		if sz := atomic.LoadUint32(&a.prevPacketHeaderSz); sz > 0 {
+		headerSz = atomic.LoadUint32(&a.prevPacketHeaderSz)
+		if headerSz > 0 {
 			// trying to extend mtu to send use all possible mtu
-			mtu = (MaxMTU - 32 - 64) - int(sz)
+			mtu = (MaxMTU - 32 - 64) - int(headerSz)
 		}
+	}
+	if mtu <= 0 {
+		return nil, nil, ErrPacketBiggerThanMTU
 	}
 
 	if len(msg) > mtu {
 		if len(msg) > HugePacketMaxSz {
 			return nil, nil, fmt.Errorf("too big message payload")
+		}
+		if headerSz > 0 {
+			const channelPrefixSize = 32 + 32         // channel id and checksum
+			const partHeaderSize = 4 + 32 + 4 + 4 + 4 // constructor, hash, size, offset, TL bytes header
+			const randomPaddingGrowth = 2 * (15 - 7)  // rand1 and rand2 can each grow by 8 bytes
+
+			// Account for MessagePart framing and the largest next packet header.
+			// Align the payload so TL's final-part padding also fits the budget.
+			mtu = (MaxMTU - channelPrefixSize - int(headerSz) - partHeaderSize - randomPaddingGrowth) &^ 3
+			if mtu <= 0 {
+				return nil, nil, ErrPacketBiggerThanMTU
+			}
 		}
 
 		parts := splitMessage(msg, mtu)
@@ -1166,6 +1189,13 @@ func (a *ADNL) buildRequestMaySplitWire(msg []byte, useBase bool) (packet []byte
 			if err != nil {
 				return nil, nil, fmt.Errorf("filed to build message part %d, err: %w", i, err)
 			}
+			if len(buf) > MaxMTU {
+				if !useBase {
+					// Rebuild before any part is sent so every packet uses the same split.
+					return a.buildRequestMaySplitWire(msg, true)
+				}
+				return nil, nil, ErrPacketBiggerThanMTU
+			}
 			packets = append(packets, buf)
 		}
 		return nil, packets, nil
@@ -1174,6 +1204,12 @@ func (a *ADNL) buildRequestMaySplitWire(msg []byte, useBase bool) (packet []byte
 	buf, err := a.buildRequestWire(msg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filed to build message, err: %w", err)
+	}
+	if len(buf) > MaxMTU {
+		if !useBase {
+			return a.buildRequestMaySplitWire(msg, true)
+		}
+		return nil, nil, ErrPacketBiggerThanMTU
 	}
 	return buf, nil, nil
 }
@@ -1332,11 +1368,22 @@ func decodePacket(key ed25519.PrivateKey, packet []byte) ([]byte, error) {
 
 func (a *ADNL) SetAddresses(list address.List) {
 	listCopy := address.CloneList(&list)
-	if listCopy == nil {
-		listCopy = &address.List{}
+
+	for {
+		current := (*address.List)(atomic.LoadPointer(&a.ourAddresses))
+		// Reinit publishes the refreshed list before the packet epoch. Keep
+		// that epoch when an address update races with the publication.
+		listCopy.ReinitDate = max(atomic.LoadInt32(&a.reinitTime), current.ReinitDate)
+		listCopy.Version = max(list.Version, listCopy.ReinitDate)
+		if list.ReinitDate < current.ReinitDate && listCopy.Version <= current.Version {
+			// An update from the gateway's older epoch must invalidate a peer's
+			// acknowledgement of the list already refreshed by Reinit.
+			listCopy.Version = current.Version + 1
+		}
+		if atomic.CompareAndSwapPointer(&a.ourAddresses, unsafe.Pointer(current), unsafe.Pointer(listCopy)) {
+			return
+		}
 	}
-	atomic.StoreInt32(&a.reinitTime, listCopy.ReinitDate)
-	atomic.StorePointer(&a.ourAddresses, unsafe.Pointer(listCopy))
 }
 
 func (a *ADNL) GetAddressList() address.List {
@@ -1395,6 +1442,7 @@ func (a *ADNL) Reinit() {
 	atomic.StoreInt32(&a.dstReinit, 0)
 	atomic.StoreInt64(&a.seqno, 0)
 	atomic.StoreInt64(&a.confirmSeqno, 0)
+	clear(a.recvSeqnoWindow[:])
 	a.stats.peerConfirmSeqno.Store(0)
 	atomic.StoreInt64(&a.lastReceivedPacket, 0)
 	atomic.StoreInt64(&a.tryReinitAt, 0)

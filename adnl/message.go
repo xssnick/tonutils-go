@@ -358,19 +358,24 @@ func parseBoxedPayloadSource(source []byte, rest []byte, noCopy bool) (tl.Serial
 }
 
 type partitionedMessage struct {
-	startedAt    time.Time
-	knownOffsets map[int32]bool
-	buf          []byte
-	gotLen       int32
+	startedAt  time.Time
+	ranges     [32]messagePartRange
+	rangeCount int
+	buf        []byte
+	gotLen     int32
 
 	mx sync.Mutex
 }
 
+type messagePartRange struct {
+	start int32
+	end   int32
+}
+
 func newPartitionedMessage(size int32) *partitionedMessage {
 	return &partitionedMessage{
-		startedAt:    time.Now(),
-		knownOffsets: map[int32]bool{},
-		buf:          make([]byte, size),
+		startedAt: time.Now(),
+		buf:       make([]byte, size),
 	}
 }
 
@@ -390,18 +395,35 @@ func (m *partitionedMessage) AddPart(offset int32, data []byte) (bool, error) {
 	if int64(offset) > int64(len(m.buf)) || int64(offset)+int64(len(data)) > int64(len(m.buf)) {
 		return false, fmt.Errorf("part is bigger than defined message")
 	}
-	if m.knownOffsets[offset] {
-		return false, nil
+
+	start, end := offset, offset+int32(len(data))
+	i := 0
+	for i < m.rangeCount && m.ranges[i].end < start {
+		i++
 	}
 
-	if len(m.knownOffsets) > 32 {
+	j := i
+	var covered int32
+	for j < m.rangeCount && m.ranges[j].start <= end {
+		covered += m.ranges[j].end - m.ranges[j].start
+		start = min(start, m.ranges[j].start)
+		end = max(end, m.ranges[j].end)
+		j++
+	}
+	added := end - start - covered
+	if added == 0 {
+		return false, nil
+	}
+	if m.rangeCount-(j-i) >= len(m.ranges) {
 		return false, fmt.Errorf("too many parts")
 	}
 
 	copy(m.buf[offset:], data)
 
-	m.knownOffsets[offset] = true
-	m.gotLen += int32(len(data))
+	copy(m.ranges[i+1:], m.ranges[j:m.rangeCount])
+	m.rangeCount += 1 - (j - i)
+	m.ranges[i] = messagePartRange{start: start, end: end}
+	m.gotLen += added
 
 	return m.gotLen == int32(len(m.buf)), nil
 }

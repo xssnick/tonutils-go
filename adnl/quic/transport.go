@@ -772,11 +772,11 @@ func (c *Client) sendMessageParts(ctx context.Context, prefix, body []byte) erro
 	if err != nil {
 		return fmt.Errorf("quic: open stream: %w", err)
 	}
+	stopCancel := cancelStreamOnContext(ctx, st)
+	defer stopCancel()
+
 	if dl, ok := ctx.Deadline(); ok {
 		_ = st.SetDeadline(dl)
-	} else {
-		stopCancel := cancelStreamOnContext(ctx, st)
-		defer stopCancel()
 	}
 	if err := writeBoxedObjectParts(st, idQuicMessage, prefix, body); err != nil {
 		st.CancelRead(1)

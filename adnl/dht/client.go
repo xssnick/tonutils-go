@@ -617,7 +617,7 @@ func (c *Client) collectNearestNodes(ctx context.Context, keyId []byte) []*dhtNo
 }
 
 func (c *Client) seedNearestNodeSearch(search *nearestNodeSearch) {
-	var badNodes []*dhtNode
+	var nodes, badNodes []*dhtNode
 
 	for i := 255; i >= 0; i-- {
 		for _, node := range c.buckets[i].getNodes() {
@@ -625,16 +625,30 @@ func (c *Client) seedNearestNodeSearch(search *nearestNodeSearch) {
 				continue
 			}
 			if atomic.LoadInt32(&node.badScore) == 0 {
-				search.Add(node)
+				nodes = append(nodes, node)
 				continue
 			}
 			badNodes = append(badNodes, node)
 		}
 	}
 
-	for _, node := range badNodes {
-		search.Add(node)
+	for _, node := range append(nodes, badNodes...) {
+		id := node.id()
+		if _, ok := search.byID[id]; ok {
+			continue
+		}
+
+		item := &nearestNodeItem{
+			id:    id,
+			node:  node,
+			state: nearestNodePending,
+		}
+		search.items = append(search.items, item)
+		search.byID[id] = item
 	}
+
+	search.sortItems()
+	search.rebalancePending()
 }
 
 type nearestNodeState uint8

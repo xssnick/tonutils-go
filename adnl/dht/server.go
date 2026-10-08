@@ -233,19 +233,19 @@ func (s *Server) StoreOverlayNodes(
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 
+	id := keys.PublicKeyOverlay{Key: overlayKey}
+	overlayID, err = tl.Hash(id)
+	if err != nil {
+		return 0, nil, err
+	}
+
 	for i := range nodes.List {
-		if err = nodes.List[i].CheckSignature(); err != nil {
+		if err = checkOverlayNode(&nodes.List[i], overlayID, s.networkID); err != nil {
 			return 0, nil, fmt.Errorf("untrusted overlay node in list: %w", err)
 		}
 	}
 
 	data, err := tl.Serialize(nodes, true)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	id := keys.PublicKeyOverlay{Key: overlayKey}
-	overlayID, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err
 	}

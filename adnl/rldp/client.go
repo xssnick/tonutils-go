@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/rldp/roundrobin"
 	"math"
+	"net/netip"
 	"reflect"
 	"sort"
 	"sync"
@@ -190,6 +191,10 @@ type decoderStream struct {
 	pending    atomic.Bool
 	processing atomic.Bool
 	mx         sync.Mutex
+
+	// Valid while this stream holds a shared per-IP admission slot, including
+	// completed streams retained for duplicate completion handling.
+	admissionIP netip.Addr
 }
 
 var MaxUnexpectedTransferSize uint64 = 64 << 10 // 64 KB
@@ -433,6 +438,10 @@ func (r *RLDP) retireInboundStreamLocked(stream *decoderStream, outcome inboundS
 	}
 
 	clear(stream.activeParts)
+	if stream.admissionIP.IsValid() {
+		releaseInboundTransfer(stream.admissionIP)
+		stream.admissionIP = netip.Addr{}
+	}
 	stream.retired = true
 }
 
@@ -510,10 +519,15 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 	id := [32]byte(m.TransferID)
 	r.mx.RLock()
 	stream := r.recvStreams[id]
-	expected := r.expectedTransfers[id]
+	var expected *activeRequest
 	var cancelled *cancelledTransfer
-	if stream == nil && expected == nil {
-		cancelled = r.cancelledTransfers[id]
+	var closed bool
+	if stream == nil {
+		closed = r.closed
+		expected = r.expectedTransfers[id]
+		if expected == nil {
+			cancelled = r.cancelledTransfers[id]
+		}
 	}
 	r.mx.RUnlock()
 
@@ -528,6 +542,12 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 	}
 
 	if stream == nil {
+		// Later parts can arrive before part zero over UDP. They cannot start a
+		// transfer and will be retransmitted once its first part is accepted.
+		if closed || m.Part != 0 {
+			return nil
+		}
+
 		if m.TotalSize > _MTU || m.TotalSize <= 0 {
 			return fmt.Errorf("bad rldp packet total size %d", m.TotalSize)
 		}
@@ -540,6 +560,11 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 
 		if m.TotalSize > maxTransferSize {
 			return fmt.Errorf("too big transfer size %d, max allowed %d", m.TotalSize, maxTransferSize)
+		}
+
+		ip, err := r.validateFirstTransferPart(m)
+		if err != nil {
+			return err
 		}
 
 		qsz := int(m.FecType.GetSymbolsCount()) + 32
@@ -559,12 +584,17 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 			r.mx.Unlock()
 			return nil
 		} else {
+			if err = acquireInboundTransfer(ip); err != nil {
+				r.mx.Unlock()
+				return err
+			}
 			stream = &decoderStream{
 				lastMessageAt: tm,
 				startedAt:     tm,
 				msgBuf:        NewQueue(qsz),
 				activeParts:   map[uint32]*decoderStreamPart{},
 				totalSize:     m.TotalSize,
+				admissionIP:   ip,
 			}
 
 			r.recvStreams[id] = stream
@@ -611,6 +641,19 @@ func (r *RLDP) handleMessagePart(m *MessagePart, isV2 bool) error {
 			if err := r.processStreamMessagePart(stream, part, tm, isV2); err != nil {
 				r.stats.inboundProcessingErrors.Add(1)
 				Logger("[RLDP] transfer", hex.EncodeToString(part.TransferID), "process msg part:", part.Part, "error:", err.Error())
+				if stream.nextPartIndex == 0 {
+					// Decoder initialization can still reject codec-specific
+					// parameters. Do not retain a transfer that never started.
+					r.mx.Lock()
+					if r.recvStreams[id] == stream {
+						delete(r.recvStreams, id)
+					}
+					r.mx.Unlock()
+					r.retireInboundStreamLocked(stream, inboundStreamCanceled)
+					stream.pending.Store(false)
+					stream.processing.Store(false)
+					return err
+				}
 			}
 		}
 
@@ -1090,30 +1133,64 @@ func (r *RLDP) sendStreamConfirmation(cur *decoderStreamPart, part *MessagePart,
 	}
 }
 
-// createFECDecoder validates fec parameters of an inbound transfer part the same way
-// the reference C++ node does (fec::FecType::create) and initializes a decoder.
+// Validate the first symbol and determine its admission IP before allocation.
+// Keep address parsing outside the hot path that handles established transfers.
+func (r *RLDP) validateFirstTransferPart(m *MessagePart) (netip.Addr, error) {
+	if err := validateFEC(m.FecType, m.TotalSize); err != nil {
+		r.stats.inboundProcessingErrors.Add(1)
+		return netip.Addr{}, fmt.Errorf("invalid first transfer part: %w", err)
+	}
+	if len(m.Data) != int(m.FecType.GetSymbolSize()) {
+		r.stats.inboundProcessingErrors.Add(1)
+		return netip.Addr{}, fmt.Errorf("invalid first transfer symbol size %d, expected %d", len(m.Data), m.FecType.GetSymbolSize())
+	}
+
+	remote, err := netip.ParseAddrPort(r.adnl.RemoteAddr())
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("invalid RLDP remote address: %w", err)
+	}
+	return remote.Addr().Unmap().WithZone(""), nil
+}
+
+// validateFEC checks inbound part parameters before reserving transfer state,
+// matching the reference C++ fec::FecType::create validation.
 // maxDataSize is the space not yet occupied by previous parts of the transfer.
-func createFECDecoder(fec FEC, maxDataSize uint64) (fecDecoder, error) {
+func validateFEC(fec FEC, maxDataSize uint64) error {
 	dataSize, symbolSize, symbolsCount := fec.GetDataSize(), fec.GetSymbolSize(), fec.GetSymbolsCount()
 
 	if symbolSize == 0 || symbolSize > MaxSymbolSize {
-		return nil, fmt.Errorf("invalid fec symbol size %d", symbolSize)
+		return fmt.Errorf("invalid fec symbol size %d", symbolSize)
 	}
 
 	if dataSize == 0 || dataSize > MaxFECDataSize || uint64(dataSize) > maxDataSize {
-		return nil, fmt.Errorf("invalid fec data size %d", dataSize)
+		return fmt.Errorf("invalid fec data size %d", dataSize)
 	}
 
 	if uint64(dataSize) > uint64(symbolSize)<<24 {
-		return nil, fmt.Errorf("too many fec symbols")
+		return fmt.Errorf("too many fec symbols")
 	}
 
 	// symbols count must correspond to data and symbol sizes; older tonutils-go
 	// senders report ceil+1 when data size is a multiple of symbol size, allow it too
 	minSymbols := (uint64(dataSize) + uint64(symbolSize) - 1) / uint64(symbolSize)
 	if c := uint64(symbolsCount); c < minSymbols || c > minSymbols+1 {
-		return nil, fmt.Errorf("invalid fec symbols count %d, data size %d, symbol size %d", symbolsCount, dataSize, symbolSize)
+		return fmt.Errorf("invalid fec symbols count %d, data size %d, symbol size %d", symbolsCount, dataSize, symbolSize)
 	}
+
+	switch fec.(type) {
+	case FECRaptorQ, FECRoundRobin:
+		return nil
+	default:
+		return fmt.Errorf("not supported fec type")
+	}
+}
+
+func createFECDecoder(fec FEC, maxDataSize uint64) (fecDecoder, error) {
+	if err := validateFEC(fec, maxDataSize); err != nil {
+		return nil, err
+	}
+
+	dataSize, symbolSize := fec.GetDataSize(), fec.GetSymbolSize()
 
 	switch fec.(type) {
 	case FECRaptorQ:
@@ -1717,8 +1794,8 @@ func (r *RLDP) sendFastSymbols(ctx context.Context, transfer *activeTransfer) er
 	}
 
 	atomic.StoreUint32(&part.seqno, seqno)
-	part.recoveryReady.Store(true)
 	part.startedAt = time.Now()
+	part.recoveryReady.Store(true)
 	r.stats.noteOutboundSymbols(sent, part.fecSymbolSize, part.startedAt)
 
 	r.activateRecoveryLoop()

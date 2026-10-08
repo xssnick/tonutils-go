@@ -213,7 +213,24 @@ func applyBBRDefaults(o *BBRv2Options) {
 
 func (c *BBRv2Controller) SetAppLimited(v bool) { c.appLimited.Store(v) }
 
-func (c *BBRv2Controller) markActive() { c.lastActive.Store(nowMs()) }
+func (c *BBRv2Controller) markActive(now int64) {
+	last := c.lastActive.Load()
+	if now-last <= 800 {
+		c.lastActive.Store(now)
+		return
+	}
+
+	idleMs := max64(800, 2*max64(c.minRTT.Load(), 1))
+	if last > 0 && now-last > idleMs {
+		// Only an idle restart needs to arbitrate between concurrent events.
+		last = c.lastActive.Swap(now)
+		if last > 0 && now-last > idleMs {
+			c.resetForNewFlow(now)
+		}
+		return
+	}
+	c.lastActive.Store(now)
+}
 
 func (c *BBRv2Controller) applyInflightLimit(inflight int64) {
 	if inflight < 0 {
@@ -238,20 +255,21 @@ func (c *BBRv2Controller) applyInflightLimit(inflight int64) {
 }
 
 func (c *BBRv2Controller) OnNewSendBurst() {
+	now := nowMs()
 	if c.appLimited.Swap(false) {
 		c.fullBW.Store(0)
 		c.fullBWCount.Store(0)
 		// what goes out now is still sized by the peer's request, and its acks land within a couple of RTTs
-		c.appLimitedUntil.Store(nowMs() + 2*max64(c.minRTT.Load(), 1))
+		c.appLimitedUntil.Store(now + 2*max64(c.minRTT.Load(), 1))
 	}
-	c.markActive()
+	c.markActive(now)
 }
 
 func (c *BBRv2Controller) ObserveDelta(total, recv int64) {
 	if total == 0 {
 		return
 	}
-	c.markActive()
+	c.markActive(nowMs())
 	c._total.Add(total)
 	c._recv.Add(recv)
 	c._samples.Add(1)
@@ -264,7 +282,7 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 	}
 
 	now := nowMs()
-	c.markActive()
+	c.markActive(now)
 	old := c.minRTT.Load()
 	provisional := c.minRTTProvisional.Load()
 
@@ -284,12 +302,6 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 
 func (c *BBRv2Controller) maybeUpdate() {
 	now := nowMs()
-
-	minRtt := max64(c.minRTT.Load(), 1)
-	idleMs := max64(800, 2*minRtt)
-	if la := c.lastActive.Load(); la > 0 && now-la > idleMs {
-		c.resetForNewFlow(now)
-	}
 
 	last := c.lastProc.Load()
 	if last+c.opts.MinSampleMs > now {
