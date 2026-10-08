@@ -7,7 +7,7 @@ require (
 	github.com/bwesterb/go-ristretto v1.2.4
 	github.com/cloudflare/circl v1.6.5
 	github.com/pierrec/lz4/v4 v4.1.28
-	github.com/xssnick/quic-go-ton v0.0.0-20260707110703-14f3237f97b9
+	github.com/xssnick/quic-go-ton v0.0.0-20261001181112-f2ad8f940a32
 	github.com/xssnick/raptorq v1.6.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
