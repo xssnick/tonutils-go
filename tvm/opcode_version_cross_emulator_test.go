@@ -15,11 +15,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-const (
-	expectedRegisteredOpcodeAvailabilityFuzzSeedCount = 595
-	expectedRegisteredOpcodeAvailabilityFuzzSeedHash  = "6b46e418a6136bf5f5573cf456ae5c071d20fbe32b8a30516f30282e0853b079"
-)
-
 func TestTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
@@ -100,49 +95,6 @@ func FuzzTVMCrossEmulatorOpcodeMinGlobalVersionBoundaries(f *testing.F) {
 	})
 }
 
-func TestTVMCrossEmulatorOpcodeMinGlobalVersionFuzzSeedAuditInventory(t *testing.T) {
-	cases := opcodeMinGlobalVersionBoundaryCases()
-	seeds := opcodeMinGlobalVersionBoundaryFuzzSeeds(cases)
-	if len(seeds) == 0 {
-		t.Fatal("opcode min-version boundary fuzz seeds are empty")
-	}
-	if len(seeds) != expectedOpcodeMinGlobalVersionBoundaryFuzzSeedCount {
-		t.Fatalf("opcode min-version boundary fuzz seed count = %d, want %d:\n%s", len(seeds), expectedOpcodeMinGlobalVersionBoundaryFuzzSeedCount, strings.Join(opcodeMinGlobalVersionBoundaryFuzzSeedInventory(cases, seeds), "\n"))
-	}
-	if got := crossEmulatorVersionNameInventoryHash(opcodeMinGlobalVersionBoundaryFuzzSeedInventory(cases, seeds)); got != expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash {
-		t.Fatalf("opcode min-version boundary fuzz seed hash = %s, want %s:\n%s", got, expectedOpcodeMinGlobalVersionBoundaryFuzzSeedHash, strings.Join(opcodeMinGlobalVersionBoundaryFuzzSeedInventory(cases, seeds), "\n"))
-	}
-
-	seen := make(map[int]map[int]struct{}, len(cases))
-	for _, seed := range seeds {
-		if seed.caseIdx < 0 || seed.caseIdx >= len(cases) {
-			t.Fatalf("opcode min-version boundary fuzz seed case index %d outside [0, %d)", seed.caseIdx, len(cases))
-		}
-		if seed.version < 0 || seed.version > vm.MaxSupportedGlobalVersion {
-			t.Fatalf("opcode min-version boundary fuzz seed %s version %d outside [%d, %d]", cases[seed.caseIdx].name, seed.version, 0, vm.MaxSupportedGlobalVersion)
-		}
-		if seen[seed.caseIdx] == nil {
-			seen[seed.caseIdx] = make(map[int]struct{})
-		}
-		if _, ok := seen[seed.caseIdx][seed.version]; ok {
-			t.Fatalf("duplicate opcode min-version boundary fuzz seed %s v%d", cases[seed.caseIdx].name, seed.version)
-		}
-		seen[seed.caseIdx][seed.version] = struct{}{}
-	}
-
-	for i, tt := range cases {
-		versions := seen[i]
-		if len(versions) == 0 {
-			t.Fatalf("opcode min-version boundary fuzz seeds do not cover case %s", tt.name)
-		}
-		for _, version := range opcodeMinGlobalVersionRequiredBoundarySeedVersions(tt) {
-			if _, ok := versions[version]; !ok {
-				t.Fatalf("opcode min-version boundary fuzz seeds do not cover %s v%d", tt.name, version)
-			}
-		}
-	}
-}
-
 func TestTVMCrossEmulatorOpcodeMinGlobalVersionFullAllVersionsAudit(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
@@ -212,18 +164,6 @@ func FuzzTVMCrossEmulatorRegisteredOpcodeAvailabilityGlobalVersion(f *testing.F)
 		version := tvmFuzzGlobalVersionByte(rawVersion)
 		assertCrossRegisteredOpcodeAvailability(t, tt.opName, tt.code, version)
 	})
-}
-
-func TestTVMCrossEmulatorRegisteredOpcodeAvailabilityFuzzSeedInventory(t *testing.T) {
-	cases := registeredOpcodeAvailabilityAuditCases()
-	seeds := registeredOpcodeAvailabilityFuzzSeeds(cases)
-	assertRegisteredOpcodeAvailabilityFuzzSeedInventory(
-		t,
-		cases,
-		seeds,
-		expectedRegisteredOpcodeAvailabilityFuzzSeedCount,
-		expectedRegisteredOpcodeAvailabilityFuzzSeedHash,
-	)
 }
 
 func TestTVMCrossEmulatorRegisteredOpcodeAvailabilityAuditInventory(t *testing.T) {

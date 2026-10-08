@@ -5,7 +5,7 @@ import "github.com/xssnick/tonutils-go/tvm/vmerr"
 // Gas prices constants.
 const (
 	GasInfinite               int64 = 1<<63 - 1
-	MaxSupportedGlobalVersion       = 16
+	MaxSupportedGlobalVersion       = 17
 
 	CellLoadGasPrice           = 100
 	CellReloadGasPrice         = 25
@@ -182,9 +182,13 @@ func (g *Gas) FlushFree() error {
 		return nil
 	}
 
-	amt := g.FreeConsumed
+	// A failed isolated RUNVM flush leaves deferred gas for the outer VM.
+	if err := g.Consume(g.FreeConsumed); err != nil {
+		return err
+	}
+
 	g.FreeConsumed = 0
-	return g.Consume(amt)
+	return nil
 }
 
 func (g *Gas) Used() int64 {

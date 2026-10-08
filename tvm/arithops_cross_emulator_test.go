@@ -868,12 +868,10 @@ func FuzzTVMCrossEmulatorArithOpsVersionedQuietEdges(f *testing.F) {
 }
 
 type arithParityCase struct {
-	name          string
-	code          *cell.Cell
-	stack         []any
-	exit          int32
-	skipReference string
-	goStack       []any
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  int32
 }
 
 func arithOpcodeCoverageCases(t *testing.T) []arithParityCase {
@@ -1092,13 +1090,6 @@ func runArithParityCases(t *testing.T, tests []arithParityCase) {
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			if tt.skipReference != "" {
-				if goRes.exitCode != tt.exit {
-					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
-				}
-				assertArithSkippedGoStack(t, goRes.stack, tt.goStack)
-				t.Skip(tt.skipReference)
-			}
 			refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
 			if err != nil {
 				t.Fatalf("reference tvm execution failed: %v", err)
@@ -1156,13 +1147,6 @@ func runArithVersionedParityCaseWithExpected(t *testing.T, tt arithParityCase, g
 	if err != nil {
 		t.Fatalf("go tvm execution failed: %v", err)
 	}
-	if tt.skipReference != "" {
-		if expectedExit != nil && goRes.exitCode != *expectedExit {
-			t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, *expectedExit)
-		}
-		assertArithSkippedGoStack(t, goRes.stack, tt.goStack)
-		t.Skip(tt.skipReference)
-	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(globalVersion)))
 	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
@@ -1190,33 +1174,6 @@ func runArithVersionedParityCaseWithExpected(t *testing.T, tt arithParityCase, g
 	}
 	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
 		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
-	}
-}
-
-func assertArithSkippedGoStack(t *testing.T, got *cell.Cell, want []any) {
-	t.Helper()
-
-	if want == nil {
-		return
-	}
-	wantStack, err := buildCrossStack(want...)
-	if err != nil {
-		t.Fatalf("failed to build expected go stack: %v", err)
-	}
-	wantStackCell, err := stackToCell(wantStack)
-	if err != nil {
-		t.Fatalf("failed to serialize expected go stack: %v", err)
-	}
-	gotStackCell, err := normalizeStackCell(got)
-	if err != nil {
-		t.Fatalf("failed to normalize go stack: %v", err)
-	}
-	wantStackCell, err = normalizeStackCell(wantStackCell)
-	if err != nil {
-		t.Fatalf("failed to normalize expected go stack: %v", err)
-	}
-	if !bytes.Equal(gotStackCell.Hash(), wantStackCell.Hash()) {
-		t.Fatalf("go stack mismatch:\ngo=%s\nwant=%s", gotStackCell.Dump(), wantStackCell.Dump())
 	}
 }
 

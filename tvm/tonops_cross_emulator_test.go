@@ -282,26 +282,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		globalVersion    int
 		hasGlobalVersion bool
 		refCfg           *referenceGetMethodConfig
-		skipReference    string
-		goStack          []any
-	}
-	ecrecoverEthereumReferenceSkip := func(version int) string {
-		if version >= 14 {
-			return "bundled reference emulator predates upstream ECRECOVER v=27/28 support"
-		}
-		return ""
-	}
-	sendMsgUserFwdFeeReferenceSkip := func(version int) string {
-		if version >= 14 {
-			return "bundled reference emulator predates upstream SENDMSG v14 user fwd fee handling"
-		}
-		return ""
-	}
-	ed25519SignatureCheckRejectedKeyReferenceSkip := func(version int) string {
-		if version >= 14 {
-			return "bundled reference emulator predates upstream CHKSIG v14 zero/identity public-key rejection"
-		}
-		return ""
+		wantStack        []any
 	}
 	ed25519SignatureCheckRejectedKeyGoStack := func(version int) []any {
 		if version >= 14 {
@@ -364,8 +345,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ecrecoverEthereumReferenceSkip(14),
-			goStack:       ecrecoverSuccessGoStack(),
+			wantStack:     ecrecoverSuccessGoStack(),
 		},
 		{
 			name: "secp256k1_xonly_pubkey_tweak_add_success",
@@ -425,8 +405,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
-			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
+			wantStack:     ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksignu_zero_key_rejected_v14",
@@ -439,8 +418,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
-			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
+			wantStack:     ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksigns_success",
@@ -463,8 +441,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
-			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
+			wantStack:     ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "chksigns_zero_key_rejected_v14",
@@ -477,8 +454,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			exit:          0,
 			globalVersion: 14,
 			refCfg:        tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, 14)),
-			skipReference: ed25519SignatureCheckRejectedKeyReferenceSkip(14),
-			goStack:       ed25519SignatureCheckRejectedKeyGoStack(14),
+			wantStack:     ed25519SignatureCheckRejectedKeyGoStack(14),
 		},
 		{
 			name: "p256_chksignu_success",
@@ -1570,6 +1546,13 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 		})
 	}
 	for _, version := range tonOpsVersionCrossEmulatorVersions(t) {
+		var ecrecoverEthStack []any
+		if version >= 14 {
+			ecrecoverEthStack = ecrecoverSuccessGoStack()
+		} else if version >= 4 {
+			ecrecoverEthStack = []any{int64(0)}
+		}
+
 		changelibExit := int32(0)
 		if version < 4 {
 			changelibExit = int32(vmerr.CodeRangeCheck)
@@ -1600,8 +1583,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				globalVersion:    version,
 				hasGlobalVersion: true,
 				refCfg:           sendMsgVersionRefCfg(uint32(version)),
-				skipReference:    sendMsgUserFwdFeeReferenceSkip(version),
-				goStack:          sendMsgUserFwdFeeGoStack(version),
+				wantStack:        sendMsgUserFwdFeeGoStack(version),
 			},
 			testCase{
 				name:             fmt.Sprintf("sendmsg_mode128_balance_fee_only_v%d", version),
@@ -1951,8 +1933,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				globalVersion:    version,
 				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
-				skipReference:    ecrecoverEthereumReferenceSkip(version),
-				goStack:          ecrecoverSuccessGoStack(),
+				wantStack:        ecrecoverEthStack,
 			},
 			testCase{
 				name: fmt.Sprintf("secp256k1_xonly_pubkey_tweak_add_success_v%d", version),
@@ -1978,8 +1959,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				globalVersion:    version,
 				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
-				skipReference:    ed25519SignatureCheckRejectedKeyReferenceSkip(version),
-				goStack:          ed25519SignatureCheckRejectedKeyGoStack(version),
+				wantStack:        ed25519SignatureCheckRejectedKeyGoStack(version),
 			},
 			testCase{
 				name: fmt.Sprintf("chksigns_identity_key_v%d", version),
@@ -1993,8 +1973,7 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 				globalVersion:    version,
 				hasGlobalVersion: true,
 				refCfg:           tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version))),
-				skipReference:    ed25519SignatureCheckRejectedKeyReferenceSkip(version),
-				goStack:          ed25519SignatureCheckRejectedKeyGoStack(version),
+				wantStack:        ed25519SignatureCheckRejectedKeyGoStack(version),
 			},
 			testCase{
 				name: fmt.Sprintf("p256_chksignu_success_v%d", version),
@@ -2058,13 +2037,6 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			if tt.skipReference != "" {
-				if goRes.exitCode != tt.exit {
-					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
-				}
-				assertCrossSkippedGoStack(t, goRes.stack, tt.goStack)
-				t.Skip(tt.skipReference)
-			}
 			var refRes *crossRunResult
 			if tt.refCfg != nil {
 				refRes, err = runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *tt.refCfg)
@@ -2083,6 +2055,10 @@ func TestTVMCrossEmulatorTonOps(t *testing.T) {
 			}
 			if goRes.gasUsed != refRes.gasUsed {
 				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+			}
+			if tt.wantStack != nil {
+				assertCrossSkippedGoStack(t, goRes.stack, tt.wantStack)
+				assertCrossSkippedGoStack(t, refRes.stack, tt.wantStack)
 			}
 
 			goStackCell, err := normalizeStackCell(goRes.stack)

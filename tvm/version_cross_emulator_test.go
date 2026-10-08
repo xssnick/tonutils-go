@@ -240,7 +240,7 @@ func assertLibraryCodeCellStartupGlobalVersion(t *testing.T, version int, stackT
 			t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.exitCode)
 		}
 		assertCrossSkippedGoStack(t, goRes.stack, []any{stackValue})
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
+		t.Skip("reference C ABI uses SmartContract startup without libraries; direct Execute resolves its library root before execution")
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
@@ -491,7 +491,7 @@ func assertExecutionConfigLibrariesGlobalVersion(t *testing.T, version int, stac
 			t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.exitCode)
 		}
 		assertCrossSkippedGoStack(t, goRes.stack, []any{stackValue})
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
+		t.Skip("reference C ABI uses SmartContract startup without libraries; direct Execute resolves its library root before execution")
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
@@ -541,7 +541,7 @@ func assertExecutionConfigLibrariesGlobalVersionOverride(t *testing.T, version, 
 			t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.exitCode)
 		}
 		assertCrossSkippedGoStack(t, goRes.stack, []any{stackValue})
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
+		t.Skip("reference C ABI uses SmartContract startup without libraries; direct Execute resolves its library root before execution")
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))

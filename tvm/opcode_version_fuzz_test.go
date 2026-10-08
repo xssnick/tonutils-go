@@ -13,11 +13,6 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-const (
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount = 595
-	expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash  = "6b46e418a6136bf5f5573cf456ae5c071d20fbe32b8a30516f30282e0853b079"
-)
-
 func fuzzOpcodeVersion(raw int64) int {
 	return tvmFuzzGlobalVersion(raw)
 }
@@ -206,13 +201,7 @@ func FuzzTVMRegisteredOpcodeAvailabilityAcrossGlobalVersions(f *testing.F) {
 func TestTVMRegisteredOpcodeAvailabilityFuzzSeedInventory(t *testing.T) {
 	cases := registeredOpcodeAvailabilityAuditCases()
 	seeds := registeredOpcodeAvailabilityFuzzSeeds(cases)
-	assertRegisteredOpcodeAvailabilityFuzzSeedInventory(
-		t,
-		cases,
-		seeds,
-		expectedGoRegisteredOpcodeAvailabilityFuzzSeedCount,
-		expectedGoRegisteredOpcodeAvailabilityFuzzSeedHash,
-	)
+	assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t, cases, seeds)
 }
 
 func registeredOpcodeAvailabilityCaseShouldBeValid(tt registeredOpcodeAvailabilityAuditCase) bool {

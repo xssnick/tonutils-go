@@ -288,9 +288,13 @@ func transactionApplyPrecompiledGasConfig(blockchainCfg *PreparedBlockchainConfi
 	}
 	env.precompiledGasUsage = usage
 
-	// Configured usage is uint64: values above MaxInt64 must skip compute
-	// before the final signed gas accounting can narrow them.
-	if usage.Cmp(big.NewInt(gas.Limit)) > 0 {
+	// The transaction allowance is uint64; the VM receives a signed cast.
+	// External messages may buy gas up to the account maximum at ACCEPT.
+	limit := gas.Limit
+	if env.msg.MsgType == tlb.MsgTypeExternalIn {
+		limit = gas.Max
+	}
+	if usage.Cmp(new(big.Int).SetUint64(uint64(limit))) > 0 {
 		return gas, &tlb.ComputeSkipReason{Type: tlb.ComputeSkipReasonNoGas}
 	}
 	return transactionPrecompiledFallbackGas(gas, transactionPrecompiledFallbackLimit(blockchainCfg, addr, isSpecial)), nil
@@ -308,13 +312,15 @@ func transactionPrecompiledFallbackLimit(blockchainCfg *PreparedBlockchainConfig
 }
 
 func transactionPrecompiledFallbackGas(gas vm.Gas, rawLimit uint64) vm.Gas {
-	limit := transactionGasInt(rawLimit)
+	max := transactionGasInt(rawLimit)
+	limit := max
 	credit := int64(0)
 	if gas.Credit != 0 {
-		credit = limit
+		limit = 0
+		credit = max
 	}
 	return vm.Gas{
-		Max:       limit,
+		Max:       max,
 		Limit:     limit,
 		Credit:    credit,
 		Base:      limit + credit,

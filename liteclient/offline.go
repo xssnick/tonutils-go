@@ -19,11 +19,11 @@ func (o OfflineClient) QueryLiteserver(ctx context.Context, payload tl.Serializa
 }
 
 func (o OfflineClient) StickyContext(ctx context.Context) context.Context {
-	return nil
+	return ctx
 }
 
 func (o OfflineClient) StickyContextNextNode(ctx context.Context) (context.Context, error) {
-	return ctx, nil
+	return ctx, ErrOfflineMode
 }
 
 func (o OfflineClient) StickyNodeID(ctx context.Context) uint32 {
@@ -31,5 +31,5 @@ func (o OfflineClient) StickyNodeID(ctx context.Context) uint32 {
 }
 
 func (o OfflineClient) StickyContextNextNodeBalanced(ctx context.Context) (context.Context, error) {
-	return ctx, nil
+	return ctx, ErrOfflineMode
 }

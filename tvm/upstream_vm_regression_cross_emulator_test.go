@@ -13,16 +13,15 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-const (
-	upstreamVMRegressionCrossCaseCount = 8
-	upstreamVMRegressionCrossGasLimit  = int64(1000)
-)
+const upstreamVMRegressionCrossGasLimit = int64(1000)
 
-func upstreamVMRegressionCrossCases(t *testing.T) []upstreamVMRegressionCase {
+func upstreamVMRegressionCrossCases(t testing.TB) []upstreamVMRegressionCase {
 	t.Helper()
 
 	return []upstreamVMRegressionCase{
 		{name: "bug_div_short_any", code: rawCodeCellFromHex(t, "6883FF73A98D")},
+		{name: "assert_pfx_dict_lookup", code: rawCodeCellFromHex(t, "778B04216D73F43E018B04591277F473")},
+		{name: "assert_lookup_prefix", code: rawCodeCellFromHex(t, "78E58B008B028B04010000016D90ED5272F43A755D77F4A8")},
 		{name: "assert_code_not_null", code: rawCodeCellFromHex(t, "76ED40DE")},
 		{name: "bug_exec_dict_getnear", code: rawCodeCellFromHex(t, "8B048B00006D72F47573655F6D656D6D656D8B007F")},
 		{name: "bug_stack_overflow", code: rawCodeCellFromHex(t, "72A93AF8")},
@@ -57,10 +56,11 @@ func FuzzTVMCrossEmulatorUpstreamVMRegressionsGlobalVersion(f *testing.F) {
 		f.Skipf("reference emulator library is unavailable: %v", err)
 	}
 
+	caseCount := len(upstreamVMRegressionCrossCases(f))
 	for version := 0; version <= vm.MaxSupportedGlobalVersion; version++ {
-		f.Add(uint8(version), uint8(version%upstreamVMRegressionCrossCaseCount), uint16(upstreamVMRegressionCrossGasLimit))
+		f.Add(uint8(version), uint8(version%caseCount), uint16(upstreamVMRegressionCrossGasLimit))
 	}
-	for i := 0; i < upstreamVMRegressionCrossCaseCount; i++ {
+	for i := 0; i < caseCount; i++ {
 		f.Add(uint8(vm.MaxSupportedGlobalVersion), uint8(i), uint16(upstreamVMRegressionCrossGasLimit))
 	}
 	f.Add(uint8(255), uint8(255), uint16(1))
@@ -68,10 +68,6 @@ func FuzzTVMCrossEmulatorUpstreamVMRegressionsGlobalVersion(f *testing.F) {
 	f.Fuzz(func(t *testing.T, rawVersion uint8, rawCase uint8, rawGas uint16) {
 		version := tvmFuzzGlobalVersionByte(rawVersion)
 		cases := upstreamVMRegressionCrossCases(t)
-		if len(cases) != upstreamVMRegressionCrossCaseCount {
-			t.Fatalf("upstream regression cross case count = %d, want %d", len(cases), upstreamVMRegressionCrossCaseCount)
-		}
-
 		gasLimit := int64(1 + rawGas%uint16(upstreamVMRegressionCrossGasLimit))
 		runUpstreamVMRegressionVersionedCaseWithGas(t, cases[int(rawCase)%len(cases)], version, gasLimit)
 	})

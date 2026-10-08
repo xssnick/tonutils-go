@@ -1625,10 +1625,12 @@ func SENDMSG() *helpers.SimpleOP {
 			haveExtraCurrencies := msg.Info.HasExtraCurrencies()
 			if msg.MsgType == tlb.MsgTypeInternal {
 				if mode&128 != 0 {
-					value, valueNaN, haveExtraCurrencies, err = sendMsgTupleAmount(state, 7, "BALANCE")
+					var balanceHasExtra bool
+					value, valueNaN, balanceHasExtra, err = sendMsgTupleAmount(state, 7, "BALANCE")
 					if err != nil {
 						return err
 					}
+					haveExtraCurrencies = haveExtraCurrencies || balanceHasExtra
 				} else if mode&64 != 0 {
 					incomingValue, incomingNaN, incomingHasExtra, err := sendMsgTupleAmount(state, 11, "INCOMINGVALUE")
 					if err != nil {

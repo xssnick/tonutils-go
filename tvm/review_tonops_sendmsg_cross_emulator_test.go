@@ -99,22 +99,17 @@ func TestReviewTonopsSendMsgSharedFeeOverflow(t *testing.T) {
 	}
 }
 
-func TestReviewTonopsSendMsgMode128ExtraCurrencyLayoutKnownMismatch(t *testing.T) {
-	// C++ 6c33ece43f40ed29508db0ff58d3f08685e5c5a9 preserves the message's
-	// extra-currency ref when mode 128 replaces the grams value. Go overwrites
-	// that flag with BALANCE's flag (always false from v10). Moving StateInit
-	// out then leaves five refs, requiring the body to move as well. Go misses
-	// the fifth ref and underestimates the fee by one cell. These assertions
-	// expose the current divergence; replace goFee with refFee when fixed.
+func TestReviewTonopsSendMsgMode128ExtraCurrencyLayout(t *testing.T) {
+	// Mode 128 replaces grams, preserving the message's extra-currency ref.
+	// Once StateInit moves out, the five refs also force the body out.
 	for _, version := range []int{9, 10, 13, 14} {
 		for _, bodyBits := range []uint{337, 338, 341} {
 			t.Run(fmt.Sprintf("v%d/body%d", version, bodyBits), func(t *testing.T) {
-				goFee, refFee := int64(4), int64(5)
+				fee := int64(5)
 				if version < 10 {
-					goFee++
-					refFee++
+					fee++
 				}
-				reviewTonopsSendMsgFees(t, version, reviewTonopsSendMsgInlineExtra(t, bodyBits, true), 1024|128, goFee, refFee)
+				reviewTonopsSendMsgFees(t, version, reviewTonopsSendMsgInlineExtra(t, bodyBits, true), 1024|128, fee)
 			})
 		}
 	}
@@ -139,13 +134,13 @@ func TestReviewTonopsSendMsgExtraCurrencyLayoutBoundaries(t *testing.T) {
 				if version < 10 && tc.withExtra {
 					fee++
 				}
-				reviewTonopsSendMsgFees(t, version, reviewTonopsSendMsgInlineExtra(t, tc.bodyBits, tc.withExtra), tc.mode, fee, fee)
+				reviewTonopsSendMsgFees(t, version, reviewTonopsSendMsgInlineExtra(t, tc.bodyBits, tc.withExtra), tc.mode, fee)
 			})
 		}
 	}
 }
 
-func reviewTonopsSendMsgFees(t *testing.T, version int, msg *cell.Cell, mode, goFee, refFee int64) {
+func reviewTonopsSendMsgFees(t *testing.T, version int, msg *cell.Cell, mode, fee int64) {
 	t.Helper()
 
 	prices := tlb.ConfigMsgForwardPrices{CellPrice: 1 << 16}
@@ -173,6 +168,6 @@ func reviewTonopsSendMsgFees(t *testing.T, version int, msg *cell.Cell, mode, go
 	if goRes.gasUsed != refRes.gasUsed {
 		t.Fatalf("gas: Go=%d C++=%d", goRes.gasUsed, refRes.gasUsed)
 	}
-	assertCrossSkippedGoStack(t, goRes.stack, []any{goFee})
-	assertCrossSkippedGoStack(t, refRes.stack, []any{refFee})
+	assertCrossSkippedGoStack(t, goRes.stack, []any{fee})
+	assertCrossSkippedGoStack(t, refRes.stack, []any{fee})
 }

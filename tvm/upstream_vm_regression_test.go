@@ -21,7 +21,7 @@ type upstreamVMRegressionCase struct {
 
 const upstreamVMRegressionGasLimit = int64(1000)
 
-func rawCodeCellFromHex(t *testing.T, src string) *cell.Cell {
+func rawCodeCellFromHex(t testing.TB, src string) *cell.Cell {
 	t.Helper()
 
 	data, err := hex.DecodeString(src)

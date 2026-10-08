@@ -576,8 +576,8 @@ type executeOptions struct {
 	signatureCheckAlwaysSucceed bool
 	maxVMDataDepth              uint16
 	libraryLoadLimit            *uint32
-	// codeConversionWithoutLibraries reproduces the get-method flow, where the
-	// library collection is registered only after the machine is constructed,
+	// codeConversionWithoutLibraries reproduces the SmartContract dry-run flow
+	// for get methods and messages. Libraries are registered after construction,
 	// so startup code conversion cannot resolve library cells. Transaction
 	// flows have the libraries up front and resolve them for free.
 	codeConversionWithoutLibraries bool
@@ -1079,6 +1079,14 @@ func interpretOpcode(state *vm.State, run func() error, trace func() string) err
 		// out-of-gas abort from the reference VM takes precedence.
 		if gasErr := state.Cells.PendingError(); gasErr != nil {
 			return gasErr
+		}
+		if errors.Is(err, vm.ErrStopOnAccept) {
+			// ACCEPT can exhaust gas when clearing credit and clamping the
+			// limit to max. Its early-stop signal still needs the post-step
+			// gas check before the transaction precheck returns.
+			if gasErr := state.Gas.Check(); gasErr != nil {
+				return gasErr
+			}
 		}
 		return normalizeCellError(err)
 	}

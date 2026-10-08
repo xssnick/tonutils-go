@@ -1155,7 +1155,16 @@ func (tvm *TVM) executeTransactionMessage(acc *transactionRuntimeAccount, env *t
 	c7In.addr = acc.vmAddress(env.cfg.version)
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.stopOnAccept, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.opts.Historical, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.cfg, executeOptions{
+		historical:                  env.opts.Historical,
+		stopOnAccept:                env.stopOnAccept,
+		proof:                       env.proof,
+		traceHook:                   env.opts.TraceHook,
+		onCellLoad:                  env.opts.OnCellLoad,
+		signatureCheckAlwaysSucceed: env.opts.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:              env.cfg.sizeLimits.maxVMDataDepth,
+		libraryLoadLimit:            env.cfg.sizeLimits.maxTransactionLibraryLoads,
+	}, libraries...)
 }
 
 func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isTock bool, env *transactionExecEnv, gas vm.Gas) (*MessageExecutionResult, error) {
@@ -1188,7 +1197,15 @@ func (tvm *TVM) executeTickTockTransaction(acc *transactionRuntimeAccount, isToc
 	}
 
 	libraries := transactionExecutionLibraries(acc, env.block.libraries, env.cfg.version)
-	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, false, env.opts.SignatureCheckAlwaysSucceed, env.proof, env.opts.TraceHook, env.opts.OnCellLoad, env.cfg, env.opts.Historical, env.cfg.sizeLimits.maxTransactionLibraryLoads, libraries...)
+	return tvm.executeMessageEmulation(acc.code, acc.data, c7In, gas, stack, env.cfg, executeOptions{
+		historical:                  env.opts.Historical,
+		proof:                       env.proof,
+		traceHook:                   env.opts.TraceHook,
+		onCellLoad:                  env.opts.OnCellLoad,
+		signatureCheckAlwaysSucceed: env.opts.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:              env.cfg.sizeLimits.maxVMDataDepth,
+		libraryLoadLimit:            env.cfg.sizeLimits.maxTransactionLibraryLoads,
+	}, libraries...)
 }
 
 const transactionLTAlignment = uint64(1_000_000)

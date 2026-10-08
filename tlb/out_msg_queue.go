@@ -29,6 +29,18 @@ type OutMsgQueueExtra struct {
 type AccountDispatchQueue struct {
 	Messages *cell.Dictionary
 	Count    uint64
+
+	// TotalBalance selects account_dispatch_queue$000. Nil preserves the old
+	// account_dispatch_queue_old$1 constructor.
+	TotalBalance *CurrencyCollection
+}
+
+// DispatchQueueAugData stores the minimum message logical time and, for the
+// dispatch_queue_aug$10 constructor, the balance of the queued messages.
+type DispatchQueueAugData struct {
+	MinCreatedLT uint64
+	// Nil selects dispatch_queue_aug_old$0, which limits MinCreatedLT to uint63.
+	TotalBalance *CurrencyCollection
 }
 
 type EnqueuedMsg struct {
@@ -393,10 +405,22 @@ func (q *OutMsgQueueExtra) load(loader *cell.Slice, asProof bool) error {
 }
 
 func (q *AccountDispatchQueue) LoadFromCell(loader *cell.Slice) error {
-	messages, err := loader.LoadDict(64)
+	isOld, err := loader.LoadBoolBit()
+	if err != nil {
+		return fmt.Errorf("failed to load account dispatch queue tag: %w", err)
+	}
+	if !isOld {
+		tag, err := loader.LoadUInt(2)
+		if err != nil || tag != 0 {
+			return fmt.Errorf("invalid account dispatch queue tag")
+		}
+	}
+
+	root, err := loader.LoadRefCell()
 	if err != nil {
 		return fmt.Errorf("failed to load account dispatch messages: %w", err)
 	}
+	messages := root.AsDict(64)
 
 	count, err := loader.LoadUInt(48)
 	if err != nil {
@@ -406,8 +430,15 @@ func (q *AccountDispatchQueue) LoadFromCell(loader *cell.Slice) error {
 		return fmt.Errorf("account dispatch queue must contain messages and a non-zero count")
 	}
 
-	q.Messages = messages
-	q.Count = count
+	var totalBalance *CurrencyCollection
+	if !isOld {
+		totalBalance = new(CurrencyCollection)
+		if err = totalBalance.LoadFromCell(loader); err != nil {
+			return fmt.Errorf("failed to load account dispatch total balance: %w", err)
+		}
+	}
+
+	*q = AccountDispatchQueue{Messages: messages, Count: count, TotalBalance: totalBalance}
 	return nil
 }
 
@@ -423,12 +454,84 @@ func (q AccountDispatchQueue) ToCell() (*cell.Cell, error) {
 	}
 
 	builder := cell.BeginCell()
-	if err := builder.StoreDict(q.Messages); err != nil {
+	if q.TotalBalance == nil {
+		builder.MustStoreUInt(1, 1)
+	} else {
+		builder.MustStoreUInt(0, 3)
+	}
+	if err := builder.StoreRef(q.Messages.AsCell()); err != nil {
 		return nil, fmt.Errorf("failed to store account dispatch messages: %w", err)
 	}
-	// The count fits by the guard above and 49 bits always fit the builder.
 	builder.MustStoreUInt(q.Count, 48)
+	if q.TotalBalance != nil {
+		if err := storeCurrencyCollection(builder, *q.TotalBalance); err != nil {
+			return nil, fmt.Errorf("failed to store account dispatch total balance: %w", err)
+		}
+	}
 	return builder.EndCell(), nil
+}
+
+func (a *DispatchQueueAugData) LoadFromCell(loader *cell.Slice) error {
+	lt, isNew, err := loadDispatchQueueAugHeader(loader)
+	if err != nil {
+		return err
+	}
+
+	var totalBalance *CurrencyCollection
+	if isNew {
+		totalBalance = new(CurrencyCollection)
+		if err = totalBalance.LoadFromCell(loader); err != nil {
+			return fmt.Errorf("failed to load dispatch queue total balance: %w", err)
+		}
+	}
+	*a = DispatchQueueAugData{MinCreatedLT: lt, TotalBalance: totalBalance}
+	return nil
+}
+
+func loadDispatchQueueAugHeader(loader *cell.Slice) (uint64, bool, error) {
+	isNew, err := loader.LoadBoolBit()
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to load dispatch queue augmentation tag: %w", err)
+	}
+	ltBits := uint(63)
+	if isNew {
+		tag, err := loader.LoadBoolBit()
+		if err != nil || tag {
+			return 0, false, fmt.Errorf("invalid dispatch queue augmentation tag")
+		}
+		ltBits = 64
+	}
+	lt, err := loader.LoadUInt(ltBits)
+	if err != nil {
+		return 0, false, fmt.Errorf("failed to load dispatch queue minimum lt: %w", err)
+	}
+	return lt, isNew, nil
+}
+
+func (a DispatchQueueAugData) ToCell() (*cell.Cell, error) {
+	b := cell.BeginCell()
+	if err := storeDispatchQueueAugHeader(b, a.MinCreatedLT, a.TotalBalance != nil); err != nil {
+		return nil, err
+	}
+	if a.TotalBalance != nil {
+		if err := storeCurrencyCollection(b, *a.TotalBalance); err != nil {
+			return nil, fmt.Errorf("failed to store dispatch queue total balance: %w", err)
+		}
+	}
+	return b.EndCell(), nil
+}
+
+func storeDispatchQueueAugHeader(b *cell.Builder, lt uint64, hasBalance bool) error {
+	if !hasBalance {
+		if lt >= 1<<63 {
+			return fmt.Errorf("dispatch queue minimum lt %d does not fit uint63", lt)
+		}
+		return b.StoreUInt(lt, 64)
+	}
+	if err := b.StoreUInt(0b10, 2); err != nil {
+		return err
+	}
+	return b.StoreUInt(lt, 64)
 }
 
 func (m *EnqueuedMsg) LoadFromCell(loader *cell.Slice) error {

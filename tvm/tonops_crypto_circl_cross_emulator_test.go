@@ -46,7 +46,7 @@ func TestTVMCrossEmulatorTonOpsCryptoCirclVersionAuditShardSelection(t *testing.
 	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARDS", "4")
 	t.Setenv("TVM_TONOPS_CRYPTO_CIRCL_VERSION_AUDIT_SHARD", "1")
 	got := tonOpsCryptoCirclVersionCrossEmulatorVersions(t)
-	want := []int{1, 5, 9, 13}
+	want := []int{1, 5, 9, 13, 17}
 	if len(got) != len(want) {
 		t.Fatalf("sharded version selection = %v, want %v", got, want)
 	}
@@ -93,8 +93,7 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 		stack         []any
 		exit          int32
 		globalVersion int
-		skipReference string
-		goStack       []any
+		wantStack     []any
 	}
 
 	tests := []testCase{
@@ -255,8 +254,7 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			},
 			exit:          0,
 			globalVersion: 14,
-			skipReference: "bundled reference emulator predates upstream RIST255 v14 identity support",
-			goStack:       []any{int64(0)},
+			wantStack:     []any{int64(0)},
 		},
 		{
 			name: "rist255_qmul_invalid_zero_v13_succeeds",
@@ -277,8 +275,7 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			},
 			exit:          0,
 			globalVersion: 14,
-			skipReference: "bundled reference emulator predates upstream RIST255 v14 zero-scalar validation",
-			goStack:       []any{int64(0)},
+			wantStack:     []any{int64(0)},
 		},
 		{
 			name:          "bls_pushr",
@@ -931,13 +928,6 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			if tt.skipReference != "" {
-				if goRes.exitCode != tt.exit {
-					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
-				}
-				assertCrossSkippedGoStack(t, goRes.stack, tt.goStack)
-				t.Skip(tt.skipReference)
-			}
 			refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(tt.globalVersion)))
 			refRes, err := runReferenceCrossCodeViaEmulator(code, testEmptyCell(), refStack, *refCfg)
 			if err != nil {
@@ -952,6 +942,10 @@ func TestTVMCrossEmulatorTonOpsCryptoCircl(t *testing.T) {
 			}
 			if goRes.gasUsed != refRes.gasUsed {
 				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+			}
+			if tt.wantStack != nil {
+				assertCrossSkippedGoStack(t, goRes.stack, tt.wantStack)
+				assertCrossSkippedGoStack(t, refRes.stack, tt.wantStack)
 			}
 
 			goStackCell, err := normalizeStackCell(goRes.stack)

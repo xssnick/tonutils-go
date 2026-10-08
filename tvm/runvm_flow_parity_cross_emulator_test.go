@@ -18,7 +18,7 @@ import (
 // quit-continuation semantics, pass-all call gas, pre-v4 terminal gas checks,
 // get-method auto-commit) and now requires both emulators to agree exactly.
 
-func assertFlowParityCase(t *testing.T, name string, code *cell.Cell, stackVals []any, globalVersion int, gasLimit int64) {
+func assertFlowParityCase(t *testing.T, name string, code *cell.Cell, stackVals []any, globalVersion int, gasLimit int64) *crossRunResult {
 	t.Helper()
 
 	goStack, err := buildCrossStack(stackVals...)
@@ -52,6 +52,8 @@ func assertFlowParityCase(t *testing.T, name string, code *cell.Cell, stackVals 
 	if !bytes.Equal(goRes.stack.Hash(), refRes.stack.Hash()) {
 		t.Fatalf("%s: stack mismatch:\ngo:  %s\nref: %s", name, goRes.stack.Dump(), refRes.stack.Dump())
 	}
+
+	return goRes
 }
 
 func TestTVMCrossEmulatorChildVMExitCodeParity(t *testing.T) {

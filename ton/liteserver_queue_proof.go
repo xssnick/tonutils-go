@@ -286,9 +286,9 @@ func lookupNextDispatchQueueAccount(dispatchQueue *cell.AugmentedDictionary, add
 	if dispatchQueue == nil || dispatchQueue.IsEmpty() {
 		return nil, nil, cell.ErrNoSuchKeyInDict
 	}
-	// DispatchQueue is HashmapAugE 256 AccountDispatchQueue uint64, so a raw
-	// leaf carries the 64-bit min-lt augmentation ahead of the value and
-	// AccountDispatchQueue would parse it as its messages dictionary.
+	// A raw leaf carries DispatchQueueAugData ahead of AccountDispatchQueue.
+	// Its constructor and optional balance must be skipped before loading the
+	// account's messages dictionary.
 	key, value, _, err := dispatchQueue.LookupNearestKeyExtra(
 		cell.BeginCell().MustStoreSlice(addr, 256).EndCell(), true, allowEq, false)
 	if err != nil {

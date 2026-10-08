@@ -581,12 +581,9 @@ func TestAugForkVectors(t *testing.T) {
 	checkEmpty("ShardFees", AugShardFees{}, 10) // 2 x CC null
 }
 
-func TestAugDispatchQueueLeafBoundedView(t *testing.T) {
-	got, err := buildAugmentationLeafExtra(AugDispatchQueue{},
-		cell.BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse())
-	if err != nil {
-		t.Fatal(err)
+func TestAugDispatchQueueRejectsMissingMessages(t *testing.T) {
+	if _, err := buildAugmentationLeafExtra(AugDispatchQueue{},
+		cell.BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse()); err == nil {
+		t.Fatal("dispatch queue without a messages root was accepted")
 	}
-	mustCellHashEqual(t, "DispatchQueue absent messages leaf", got,
-		cell.BeginCell().MustStoreUInt(^uint64(0), 64).EndCell())
 }

@@ -597,6 +597,9 @@ func (d *Dictionary) lookupDelete(branch *Cell, pfx *Slice, keyOffset uint) (*Sl
 				return nil, nil, false, err
 			}
 		}
+		if err = otherNode.validateForkShape(nextKeyOffset, false); err != nil {
+			return nil, nil, false, fmt.Errorf("failed to load neighbour ref %d: %w", otherIdx, err)
+		}
 
 		otherLabel := otherNode.labelSlice()
 		mergedLabel, err := node.mergedEdgeLabel(uint64(otherIdx), &otherLabel, "neighbour")

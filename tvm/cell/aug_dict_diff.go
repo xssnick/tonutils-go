@@ -49,7 +49,7 @@ type AugDictDiffRawViewFunc func(AugDictDiffRawView) error
 // leaves in key order. Equal subtrees are skipped by hash. When
 // checkOtherAugmentation is set, every changed node in other has its stored
 // augmentation checked in the same traversal.
-func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc) error {
+func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
@@ -67,13 +67,13 @@ func (d *AugmentedDictionary) ScanDiff(other *AugmentedDictionary, checkOtherAug
 			newValueExtra = &view.NewValueExtra
 		}
 		return fn(key, oldValueExtra, newValueExtra)
-	})
+	}, options...)
 }
 
 // ScanDiffBorrowed is ScanDiff without materializing a key Cell for every
 // changed leaf. Every Slice in the view is borrowed and must not be retained
 // after the callback returns.
-func (d *AugmentedDictionary) ScanDiffBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc) error {
+func (d *AugmentedDictionary) ScanDiffBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
@@ -82,10 +82,11 @@ func (d *AugmentedDictionary) ScanDiffBorrowed(other *AugmentedDictionary, check
 	}
 
 	walk := augDictDiffWalk{
-		keySz:    d.keySz,
-		newAug:   other.aug,
-		checkNew: checkOtherAugmentation,
-		viewFn:   fn,
+		keySz:          d.keySz,
+		newAug:         other.aug,
+		checkNew:       checkOtherAugmentation,
+		viewFn:         fn,
+		checkCanonical: dictDiffChecksCanonicalLabels(options),
 	}
 	oldTrace := combinedCellTrace(d.root, d.trace)
 	newTrace := combinedCellTrace(other.root, other.trace)
@@ -97,7 +98,7 @@ func (d *AugmentedDictionary) ScanDiffBorrowed(other *AugmentedDictionary, check
 
 // ScanDiffRaw is ScanDiffBorrowed without materializing or hashing a key Cell.
 // The callback receives the key as borrowed packed bits.
-func (d *AugmentedDictionary) ScanDiffRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc) error {
+func (d *AugmentedDictionary) ScanDiffRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
@@ -106,10 +107,11 @@ func (d *AugmentedDictionary) ScanDiffRaw(other *AugmentedDictionary, checkOther
 	}
 
 	walk := augDictDiffWalk{
-		keySz:    d.keySz,
-		newAug:   other.aug,
-		checkNew: checkOtherAugmentation,
-		rawFn:    fn,
+		keySz:          d.keySz,
+		newAug:         other.aug,
+		checkNew:       checkOtherAugmentation,
+		rawFn:          fn,
+		checkCanonical: dictDiffChecksCanonicalLabels(options),
 	}
 	oldTrace := combinedCellTrace(d.root, d.trace)
 	newTrace := combinedCellTrace(other.root, other.trace)
@@ -134,25 +136,25 @@ func (d *AugmentedDictionary) ScanDiffRaw(other *AugmentedDictionary, checkOther
 // one goroutine. Like the account closure it splits by subtree, and for the
 // same reason pays off: the work is parsing and loading siblings the
 // collation never touched.
-func (d *AugmentedDictionary) ScanDiffParallel(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int) error {
-	return d.scanDiffParallelAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+func (d *AugmentedDictionary) ScanDiffParallel(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int, options ...DictDiffOption) error {
+	return d.scanDiffParallelAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits, options...)
 }
 
 // ScanDiffParallelBorrowed is the borrowed-view form of ScanDiffParallel. fn
 // can run concurrently and must not retain a view after that invocation
 // returns.
-func (d *AugmentedDictionary) ScanDiffParallelBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int) error {
-	return d.scanDiffParallelBorrowedAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+func (d *AugmentedDictionary) ScanDiffParallelBorrowed(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int, options ...DictDiffOption) error {
+	return d.scanDiffParallelBorrowedAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits, options...)
 }
 
 // ScanDiffParallelRaw is the raw-key form of ScanDiffParallelBorrowed.
-func (d *AugmentedDictionary) ScanDiffParallelRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int) error {
-	return d.scanDiffParallelRawAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits)
+func (d *AugmentedDictionary) ScanDiffParallelRaw(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int, options ...DictDiffOption) error {
+	return d.scanDiffParallelRawAt(other, checkOtherAugmentation, fn, workers, scanDiffFrontierBits, options...)
 }
 
 // scanDiffParallelAt is ScanDiffParallel with the frontier depth chosen by the
 // caller; tests use it on dictionaries with short keys.
-func (d *AugmentedDictionary) scanDiffParallelAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int, frontierBits uint) error {
+func (d *AugmentedDictionary) scanDiffParallelAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffFunc, workers int, frontierBits uint, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
@@ -170,26 +172,27 @@ func (d *AugmentedDictionary) scanDiffParallelAt(other *AugmentedDictionary, che
 			newValueExtra = &view.NewValueExtra
 		}
 		return fn(key, oldValueExtra, newValueExtra)
-	}, workers, frontierBits)
+	}, workers, frontierBits, options...)
 }
 
-func (d *AugmentedDictionary) scanDiffParallelBorrowedAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int, frontierBits uint) error {
+func (d *AugmentedDictionary) scanDiffParallelBorrowedAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffViewFunc, workers int, frontierBits uint, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
 	if workers < 2 {
-		return d.ScanDiffBorrowed(other, checkOtherAugmentation, fn)
+		return d.ScanDiffBorrowed(other, checkOtherAugmentation, fn, options...)
 	}
 	if d.keySz != other.keySz {
 		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
 	}
 	walk := augDictDiffWalk{
-		keySz:        d.keySz,
-		newAug:       other.aug,
-		checkNew:     checkOtherAugmentation,
-		viewFn:       fn,
-		frontierBits: frontierBits,
-		parallelism:  workers,
+		keySz:          d.keySz,
+		newAug:         other.aug,
+		checkNew:       checkOtherAugmentation,
+		viewFn:         fn,
+		frontierBits:   frontierBits,
+		parallelism:    workers,
+		checkCanonical: dictDiffChecksCanonicalLabels(options),
 	}
 	oldTrace := combinedCellTrace(d.root, d.trace)
 	newTrace := combinedCellTrace(other.root, other.trace)
@@ -199,23 +202,24 @@ func (d *AugmentedDictionary) scanDiffParallelBorrowedAt(other *AugmentedDiction
 	return nil
 }
 
-func (d *AugmentedDictionary) scanDiffParallelRawAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int, frontierBits uint) error {
+func (d *AugmentedDictionary) scanDiffParallelRawAt(other *AugmentedDictionary, checkOtherAugmentation bool, fn AugDictDiffRawViewFunc, workers int, frontierBits uint, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("augmented dictionary diff callback is required")
 	}
 	if workers < 2 {
-		return d.ScanDiffRaw(other, checkOtherAugmentation, fn)
+		return d.ScanDiffRaw(other, checkOtherAugmentation, fn, options...)
 	}
 	if d.keySz != other.keySz {
 		return fmt.Errorf("cannot compare augmented dictionaries with different key sizes")
 	}
 	walk := augDictDiffWalk{
-		keySz:        d.keySz,
-		newAug:       other.aug,
-		checkNew:     checkOtherAugmentation,
-		rawFn:        fn,
-		frontierBits: frontierBits,
-		parallelism:  workers,
+		keySz:          d.keySz,
+		newAug:         other.aug,
+		checkNew:       checkOtherAugmentation,
+		rawFn:          fn,
+		frontierBits:   frontierBits,
+		parallelism:    workers,
+		checkCanonical: dictDiffChecksCanonicalLabels(options),
 	}
 	oldTrace := combinedCellTrace(d.root, d.trace)
 	newTrace := combinedCellTrace(other.root, other.trace)
@@ -237,9 +241,10 @@ type augDictDiffWalk struct {
 	keyCell Cell
 	newAug  Augmentation
 
-	checkNew bool
-	viewFn   AugDictDiffViewFunc
-	rawFn    AugDictDiffRawViewFunc
+	checkNew       bool
+	viewFn         AugDictDiffViewFunc
+	rawFn          AugDictDiffRawViewFunc
+	checkCanonical bool
 
 	checker augmentedNodeChecker
 
@@ -270,11 +275,11 @@ func (w *augDictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *
 		return nil
 	}
 
-	oldNode, err := parseAugDictDiffNode(old, oldTrace, remaining+skipOld)
+	oldNode, err := parseAugDictDiffNode(old, oldTrace, remaining+skipOld, false)
 	if err != nil {
 		return fmt.Errorf("invalid old dictionary node: %w", err)
 	}
-	newNode, err := parseAugDictDiffNode(new, newTrace, remaining+skipNew)
+	newNode, err := parseAugDictDiffNode(new, newTrace, remaining+skipNew, w.checkCanonical)
 	if err != nil {
 		return fmt.Errorf("invalid new dictionary node: %w", err)
 	}
@@ -494,7 +499,7 @@ func (w *augDictDiffWalk) childWalk(keyBit uint, value byte, parallelism int) au
 }
 
 func (w *augDictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, oldOnly bool) error {
-	node, err := parseAugDictDiffNode(branch, trace, remaining)
+	node, err := parseAugDictDiffNode(branch, trace, remaining, !oldOnly && w.checkCanonical)
 	if err != nil {
 		return err
 	}
@@ -541,7 +546,7 @@ func (w *augDictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, ol
 	return nil
 }
 
-func parseAugDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDictNode, error) {
+func parseAugDictDiffNode(branch *Cell, trace *Trace, remaining uint, checkCanonical bool) (fixedDictNode, error) {
 	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
 	if err != nil {
 		return fixedDictNode{}, err
@@ -551,6 +556,15 @@ func parseAugDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDict
 	}
 	if err = node.validateForkShape(remaining, true); err != nil {
 		return fixedDictNode{}, err
+	}
+	if checkCanonical {
+		canonical, err := node.hasCanonicalLabel(remaining)
+		if err != nil {
+			return fixedDictNode{}, err
+		}
+		if !canonical {
+			return fixedDictNode{}, ErrNonCanonicalDictLabel
+		}
 	}
 	return node, nil
 }

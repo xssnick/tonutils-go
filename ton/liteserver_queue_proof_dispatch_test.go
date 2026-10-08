@@ -8,9 +8,8 @@ import (
 )
 
 // buildTestDispatchQueue returns a DispatchQueue holding one account with two
-// enqueued messages. DispatchQueue is `HashmapAugE 256 AccountDispatchQueue
-// uint64`, so every leaf carries a 64-bit min-lt augmentation ahead of the
-// value.
+// enqueued messages, using the old AccountDispatchQueue and DispatchQueueAugData
+// constructors with a 64-bit min-lt augmentation ahead of the value.
 func buildTestDispatchQueue(t *testing.T, addr []byte) *cell.AugmentedDictionary {
 	t.Helper()
 
@@ -49,8 +48,7 @@ func buildTestDispatchQueue(t *testing.T, addr []byte) *cell.AugmentedDictionary
 // TestLookupNextDispatchQueueAccountSkipsAugmentation pins that the dispatch
 // queue lookup returns the AccountDispatchQueue value, not the raw HashmapAug
 // leaf. The leaf is `extra ++ value`, so returning it raw hands the 64-bit
-// min-lt augmentation to AccountDispatchQueue.LoadFromCell, whose first read is
-// LoadDict(64).
+// min-lt augmentation to AccountDispatchQueue.LoadFromCell as its constructor.
 func TestLookupNextDispatchQueueAccountSkipsAugmentation(t *testing.T) {
 	addr := make([]byte, 32)
 	addr[31] = 0x42

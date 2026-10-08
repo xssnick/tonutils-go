@@ -1032,15 +1032,15 @@ func FuzzMessageEmulationBuildProofLibraryCodeCellStartupV9Boundary(f *testing.F
 		}
 
 		legacy := runMessageBuildProofLibraryStartup(t, 8, external, accountRoot, body, libraries)
-		direct := runMessageBuildProofLibraryStartup(t, 9, external, accountRoot, body, libraries)
+		current := runMessageBuildProofLibraryStartup(t, 9, external, accountRoot, body, libraries)
 		assertMessageBuildProofLibraryStartupResult(t, "v8", legacy, newData)
-		assertMessageBuildProofLibraryStartupResult(t, "v9", direct, newData)
+		assertMessageBuildProofLibraryStartupResult(t, "v9", current, newData)
 
-		if legacy.Steps <= direct.Steps {
-			t.Fatalf("message proof v8 steps = %d, v9 steps = %d; v8 should include an implicit jump through the code ref", legacy.Steps, direct.Steps)
+		if legacy.Steps != current.Steps {
+			t.Fatalf("message proof steps differ across v9: v8=%d v9=%d", legacy.Steps, current.Steps)
 		}
-		if legacy.GasUsed <= direct.GasUsed {
-			t.Fatalf("message proof v8 gas = %d, v9 gas = %d; v8 should charge the implicit code ref jump", legacy.GasUsed, direct.GasUsed)
+		if legacy.GasUsed != current.GasUsed {
+			t.Fatalf("message proof gas differs across v9: v8=%d v9=%d", legacy.GasUsed, current.GasUsed)
 		}
 	})
 }
@@ -2993,14 +2993,16 @@ func FuzzTransactionVersionedTickTockGasBoundaries(f *testing.F) {
 func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 	for _, version := range transactionFuzzAllVersions {
 		f.Add(byte(version), uint64(7), uint64(10), false)
+		f.Add(byte(version), uint64(7), uint64(10), true)
 	}
 	f.Add(byte(0), uint64(7), uint64(10), false)
 	f.Add(byte(13), uint64(7), uint64(10), false)
 	f.Add(byte(13), uint64(11), uint64(10), false)
+	f.Add(byte(13), uint64(11), uint64(10), true)
 	f.Add(byte(vmcore.MaxSupportedGlobalVersion), uint64(10), uint64(10), true)
 	f.Add(byte(vmcore.MaxSupportedGlobalVersion), uint64(0), uint64(0), false)
 
-	f.Fuzz(func(t *testing.T, rawVersion byte, rawUsage, rawLimit uint64, credit bool) {
+	f.Fuzz(func(t *testing.T, rawVersion byte, rawUsage, rawLimit uint64, external bool) {
 		version := transactionFuzzGlobalVersion(rawVersion)
 		usage := rawUsage % 1_000
 		limit := rawLimit % 1_000
@@ -3018,11 +3020,16 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 			Base:      int64(limit),
 			Remaining: int64(limit),
 		}
-		if credit {
+		msgType := tlb.MsgTypeInternal
+		if external {
+			msgType = tlb.MsgTypeExternalIn
+			gas.Limit = 0
 			gas.Credit = 1
+			gas.Base = 1
+			gas.Remaining = 1
 		}
 
-		env := &transactionExecEnv{}
+		env := &transactionExecEnv{msg: &tlb.Message{MsgType: msgType}}
 		nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, gas, env)
 		gotUsage := env.precompiledGasUsage
 		if gotUsage == nil || gotUsage.Uint64() != usage {
@@ -3040,12 +3047,12 @@ func FuzzTransactionVersionedPrecompiledGasConfig(f *testing.F) {
 		if skip != nil {
 			t.Fatalf("v%d skip = %v, want nil", version, skip)
 		}
-		wantLimit := int64(1_000_000)
-		wantCredit := int64(0)
-		if credit {
-			wantCredit = wantLimit
+		wantMax := int64(1_000_000)
+		wantLimit, wantCredit := wantMax, int64(0)
+		if external {
+			wantLimit, wantCredit = 0, wantMax
 		}
-		if nextGas.Limit != wantLimit || nextGas.Max != wantLimit || nextGas.Base != wantLimit+wantCredit || nextGas.Remaining != wantLimit+wantCredit || nextGas.Credit != wantCredit {
+		if nextGas.Limit != wantLimit || nextGas.Max != wantMax || nextGas.Base != wantMax || nextGas.Remaining != wantMax || nextGas.Credit != wantCredit {
 			t.Fatalf("v%d fallback gas = %+v, want limit=%d credit=%d", version, nextGas, wantLimit, wantCredit)
 		}
 	})
@@ -3094,7 +3101,7 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 				t.Fatal("overflow precompiled usage should fail")
 			}
 		case 4:
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, vmcore.Gas{Max: usage + 50, Limit: usage, Base: usage, Remaining: usage}, env)
 			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage || skip != nil {
 				t.Fatalf("config precompiled usage = %v skip %v, want %d nil", env.precompiledGasUsage, skip, usage)
@@ -3103,19 +3110,19 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 				t.Fatalf("config precompiled fallback gas = %+v, want raw config limit 1000000", nextGas)
 			}
 		case 5:
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, nil, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
 				t.Fatalf("nil-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 6:
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, otherCode, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {
 				t.Fatalf("missing-code precompiled config = gas %+v usage %v skip %v, want untouched", nextGas, env.precompiledGasUsage, skip)
 			}
 		case 7:
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			smallGas := vmcore.Gas{Max: usage - 1, Limit: usage - 1, Base: usage - 1, Remaining: usage - 1}
 			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, smallGas, env)
 			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Int64() != usage {
@@ -3125,7 +3132,7 @@ func FuzzTransactionVersionedPrecompiledGasUsageBoundaries(f *testing.F) {
 				t.Fatalf("above-limit precompiled config = gas %+v skip %v, want no_gas untouched", nextGas, skip)
 			}
 		case 8:
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			emptyCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{})
 			nextGas, skip := transactionApplyPrecompiledGasConfig(emptyCfg, code, tonopsTestAddr, false, gas, env)
 			if env.precompiledGasUsage != nil || skip != nil || nextGas != gas {

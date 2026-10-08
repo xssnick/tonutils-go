@@ -142,6 +142,7 @@ func (s *Server) Listen(addr string) error {
 	if err != nil {
 		return err
 	}
+	defer listener.Close()
 
 	return s.listen(listener)
 }
@@ -149,16 +150,10 @@ func (s *Server) Listen(addr string) error {
 // Serve accepts encrypted ADNL connections from listener until Close is
 // called. It lets applications bind the socket synchronously before starting
 // their lifecycle goroutine.
+// If the server is already started, the supplied listener is left open.
 func (s *Server) Serve(listener net.Listener) error {
 	if listener == nil {
 		return fmt.Errorf("listener is nil")
-	}
-
-	s.mx.Lock()
-	started := s.listener != nil
-	s.mx.Unlock()
-	if started {
-		return fmt.Errorf("already started")
 	}
 
 	return s.listen(listener)
@@ -166,6 +161,11 @@ func (s *Server) Serve(listener net.Listener) error {
 
 func (s *Server) listen(listener net.Listener) error {
 	s.mx.Lock()
+	if s.listener != nil {
+		s.mx.Unlock()
+		return fmt.Errorf("already started")
+	}
+
 	s.listener = listener
 	s.mx.Unlock()
 

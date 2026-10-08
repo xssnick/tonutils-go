@@ -7098,8 +7098,7 @@ func TestTVMCrossEmulatorTransactionFailedActionMessageBalanceGlobalVersion(t *t
 			assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, wantAction)
 			assertOrdinaryTransactionBouncePhase(t, "go", goRes.TransactionCell, wantBounceKind, wantOutCount)
 			if version >= 14 {
-				assertTransactionFailedActionMessageBalanceSkippedGoResult(t, goRes.TransactionCell)
-				t.Skip("bundled reference emulator predates upstream transaction v14 failed-action message-balance restore")
+				assertTransactionFailedActionMessageBalanceGoResult(t, goRes.TransactionCell)
 			}
 
 			refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
@@ -7197,8 +7196,7 @@ func assertTransactionFailedActionMessageBalanceVersionParity(t *testing.T, vers
 	assertOrdinaryTransactionActionPhase(t, "go", goRes.TransactionCell, wantAction)
 	assertOrdinaryTransactionBouncePhase(t, "go", goRes.TransactionCell, wantBounceKind, wantOutCount)
 	if mode != 0 && version >= 14 {
-		assertTransactionFailedActionMessageBalanceSkippedGoResult(t, goRes.TransactionCell)
-		t.Skip("bundled reference emulator predates upstream transaction v14 failed-action message-balance restore")
+		assertTransactionFailedActionMessageBalanceGoResult(t, goRes.TransactionCell)
 	}
 
 	refRes, err := runReferenceOrdinaryTransactionWithConfigRoot(shard, msg, now, uint64(transactionTestLogicalTime), tonopsTestSeed, configRoot)
@@ -7213,7 +7211,7 @@ func assertTransactionFailedActionMessageBalanceVersionParity(t *testing.T, vers
 	assertOrdinaryTransactionBouncePhase(t, "reference", refRes.txCell, wantBounceKind, wantOutCount)
 }
 
-func assertTransactionFailedActionMessageBalanceSkippedGoResult(t *testing.T, txCell *cell.Cell) {
+func assertTransactionFailedActionMessageBalanceGoResult(t *testing.T, txCell *cell.Cell) {
 	t.Helper()
 
 	assertOrdinaryTransactionSingleInternalOutDest(t, "go", txCell, internalEmulationSrcAddr)

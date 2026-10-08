@@ -1439,22 +1439,29 @@ func (AugOutMsgQueue) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.
 }
 
 // ===========================================================================
-// AugDispatchQueue: HashmapAugE 256 AccountDispatchQueue uint64
+// AugDispatchQueue: HashmapAugE 256 AccountDispatchQueue DispatchQueueAugData
 // ===========================================================================
 
 // AugDispatchQueue implements the augmentation of DispatchQueue
-// (block.tlb:255: _ (HashmapAugE 256 AccountDispatchQueue uint64)),
+// (_ (HashmapAugE 256 AccountDispatchQueue DispatchQueueAugData)),
 // mirroring C++ Aug_DispatchQueue (block-parse.cpp).
 //
-// Leaf rule: the minimal lt key of the account's messages dictionary, or
-// 2^64-1 when the dictionary is absent. Only the messages maybe-ref of the
-// AccountDispatchQueue value is read.
+// Leaf rule: the minimal lt key of the account's messages dictionary and its
+// total_balance when present in the account_dispatch_queue$000 constructor.
 //
-// Fork rule: min(left, right). Empty value: 0.
+// Fork rule: min(left, right), and add balances when both are present. A mixed
+// fork uses the old constructor. Empty value: the old constructor with lt = 0.
 type AugDispatchQueue struct{}
 
 func (AugDispatchQueue) SkipExtra(loader *cell.Slice) error {
-	return skipUint64Boundary(loader)
+	_, hasBalance, err := loadDispatchQueueAugHeader(loader)
+	if err != nil {
+		return err
+	}
+	if hasBalance {
+		return skipCurrencyCollectionBoundary(loader)
+	}
+	return nil
 }
 
 func (AugDispatchQueue) EmptyExtra(dst *cell.Builder) error {
@@ -1464,40 +1471,68 @@ func (AugDispatchQueue) EmptyExtra(dst *cell.Builder) error {
 func (AugDispatchQueue) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
 	var v cell.Slice
 	value.CopyInto(&v)
-	hasMessages, err := v.LoadBoolBit()
+	isOld, err := v.LoadBoolBit()
 	if err != nil {
-		return fmt.Errorf("failed to load account dispatch queue messages flag: %w", err)
+		return fmt.Errorf("failed to load account dispatch queue tag: %w", err)
 	}
-
-	minLT := ^uint64(0)
-	if hasMessages {
-		messages, err := v.LoadRefCell()
-		if err != nil {
-			return fmt.Errorf("failed to load account dispatch queue messages: %w", err)
+	if !isOld {
+		tag, err := v.LoadUInt(2)
+		if err != nil || tag != 0 {
+			return fmt.Errorf("invalid account dispatch queue tag")
 		}
-		key, _, err := messages.AsDict(64).LoadMinMax(false, false)
-		if err != nil {
-			return fmt.Errorf("failed to find minimal account dispatch queue lt: %w", err)
-		}
-		// LoadMinMax builds the key cell itself with exactly 64 bits.
-		minLT = key.MustBeginParse().MustLoadUInt(64)
 	}
-	return dst.StoreUInt(minLT, 64)
+	messages, err := v.LoadRefCell()
+	if err != nil {
+		return fmt.Errorf("failed to load account dispatch queue messages: %w", err)
+	}
+	if _, err = v.LoadUInt(48); err != nil {
+		return fmt.Errorf("failed to load account dispatch queue count: %w", err)
+	}
+	key, _, err := messages.AsDict(64).LoadMinMax(false, false)
+	if err != nil {
+		return fmt.Errorf("failed to find minimal account dispatch queue lt: %w", err)
+	}
+	minLT := key.MustBeginParse().MustLoadUInt(64)
+	if err = storeDispatchQueueAugHeader(dst, minLT, !isOld); err != nil {
+		return err
+	}
+	if !isOld {
+		return storeCanonicalCurrencyCollectionFromSlice(&v, dst)
+	}
+	return nil
 }
 
 func (AugDispatchQueue) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
-	l, err := leftExtra.LoadUInt(64)
+	l, leftHasBalance, err := loadDispatchQueueAugHeader(leftExtra)
 	if err != nil {
 		return fmt.Errorf("failed to load left lt: %w", err)
 	}
-	r, err := rightExtra.LoadUInt(64)
+	r, rightHasBalance, err := loadDispatchQueueAugHeader(rightExtra)
 	if err != nil {
 		return fmt.Errorf("failed to load right lt: %w", err)
 	}
 	if r < l {
 		l = r
 	}
-	return dst.StoreUInt(l, 64)
+	hasBalance := leftHasBalance && rightHasBalance
+	if err = storeDispatchQueueAugHeader(dst, l, hasBalance); err != nil {
+		return err
+	}
+	if hasBalance {
+		return addCurrencyCollectionSlices(dst, leftExtra, rightExtra)
+	}
+	if leftHasBalance {
+		_, err = loadCanonicalGrams(leftExtra)
+		if err == nil {
+			_, err = leftExtra.LoadDict(32)
+		}
+	} else if rightHasBalance {
+		_, err = loadCanonicalGrams(rightExtra)
+		if err == nil {
+			_, err = rightExtra.LoadDict(32)
+		}
+	}
+	return err
 }
 
 // ===========================================================================

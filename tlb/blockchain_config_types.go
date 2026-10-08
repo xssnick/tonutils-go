@@ -1,6 +1,10 @@
 package tlb
 
-import "github.com/xssnick/tonutils-go/tvm/cell"
+import (
+	"fmt"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
+)
 
 const (
 	ConfigParamConfigAddress               uint32 = 0
@@ -72,6 +76,8 @@ const (
 	defaultSizeLimitsMaxMsgExtraCurrencies       = 2
 	defaultSizeLimitsMaxAccFixedPrefixLength     = 8
 	defaultSizeLimitsAccStateCellsForStorageDict = 26
+	defaultSizeLimitsOutMsgQueueSizeHardLimit    = 18000
+	defaultSizeLimitsOutMsgQueueSizeSoftLimit    = 12000
 )
 
 func init() {
@@ -351,6 +357,8 @@ type SizeLimitsConfigV2 struct {
 	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
 }
 
+// SizeLimitsConfigV3 serializes the current #03 record, including queue limits.
+// Loading also accepts the historical #03 record without the final two fields.
 type SizeLimitsConfigV3 struct {
 	_                           Magic   `tlb:"#03"`
 	MaxMsgBits                  uint32  `tlb:"## 32"`
@@ -369,6 +377,73 @@ type SizeLimitsConfigV3 struct {
 	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
 	MaxTotalMsgBits             uint32  `tlb:"## 32"`
 	MaxTotalMsgCells            uint32  `tlb:"## 32"`
+	OutMsgQueueSizeHardLimit    uint32  `tlb:"## 32"`
+	OutMsgQueueSizeSoftLimit    uint32  `tlb:"## 32"`
+}
+
+func (v *SizeLimitsConfigV3) loadFromCell(loader *cell.Slice, skipMagic bool) error {
+	if !skipMagic {
+		tag, err := loader.LoadUInt(8)
+		if err != nil {
+			return err
+		}
+		if tag != 0x03 {
+			return fmt.Errorf("size limits v3 tag is %02x, want 03", tag)
+		}
+	}
+
+	// The v3 prefix is identical to v2 after its constructor tag.
+	var prefix SizeLimitsConfigV2
+	if err := LoadFromCell(&prefix, loader, true); err != nil {
+		return err
+	}
+	maxTotalMsgBits, err := loader.LoadUInt(32)
+	if err != nil {
+		return err
+	}
+	maxTotalMsgCells, err := loader.LoadUInt(32)
+	if err != nil {
+		return err
+	}
+
+	if loader.RefsNum() != 0 {
+		return fmt.Errorf("size limits v3 has unexpected references")
+	}
+	hardLimit := uint32(defaultSizeLimitsOutMsgQueueSizeHardLimit)
+	softLimit := uint32(defaultSizeLimitsOutMsgQueueSizeSoftLimit)
+	switch loader.BitsLeft() {
+	case 0:
+		// TON reused #03 when queue limits were added in September 2026.
+		// Historical configs use the same defaults as an absent param 43.
+	case 64:
+		hardLimit = uint32(loader.MustLoadUInt(32))
+		softLimit = uint32(loader.MustLoadUInt(32))
+	default:
+		return fmt.Errorf("size limits v3 queue limits tail has %d bits, want 0 or 64", loader.BitsLeft())
+	}
+
+	*v = SizeLimitsConfigV3{
+		MaxMsgBits:                  prefix.MaxMsgBits,
+		MaxMsgCells:                 prefix.MaxMsgCells,
+		MaxLibraryCells:             prefix.MaxLibraryCells,
+		MaxVMDataDepth:              prefix.MaxVMDataDepth,
+		MaxExtMsgSize:               prefix.MaxExtMsgSize,
+		MaxExtMsgDepth:              prefix.MaxExtMsgDepth,
+		MaxAccStateCells:            prefix.MaxAccStateCells,
+		MaxMCAccStateCells:          prefix.MaxMCAccStateCells,
+		MaxAccPublicLibraries:       prefix.MaxAccPublicLibraries,
+		DeferOutQueueSizeLimit:      prefix.DeferOutQueueSizeLimit,
+		MaxMsgExtraCurrencies:       prefix.MaxMsgExtraCurrencies,
+		MaxAccFixedPrefixLength:     prefix.MaxAccFixedPrefixLength,
+		AccStateCellsForStorageDict: prefix.AccStateCellsForStorageDict,
+		MaxTransactionLibraryLoads:  prefix.MaxTransactionLibraryLoads,
+		MaxTotalMsgBits:             uint32(maxTotalMsgBits),
+		MaxTotalMsgCells:            uint32(maxTotalMsgCells),
+		OutMsgQueueSizeHardLimit:    hardLimit,
+		OutMsgQueueSizeSoftLimit:    softLimit,
+	}
+
+	return nil
 }
 
 type SuspendedAddressList struct {

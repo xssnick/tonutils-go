@@ -40,7 +40,7 @@ func TestTVMCrossEmulatorMessageVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARDS", "4")
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARD", "1")
 	got := messageVersionCrossEmulatorVersions(t)
-	want := []int{1, 5, 9, 13}
+	want := []int{1, 5, 9, 13, 17}
 	if len(got) != len(want) {
 		t.Fatalf("sharded version selection = %v, want %v", got, want)
 	}
@@ -546,7 +546,6 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), newData.Hash()) {
 			t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, newData.Dump())
 		}
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	amount := uint64(0)
@@ -640,7 +639,6 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), newData.Hash()) {
 			t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, newData.Dump())
 		}
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	amount := uint64(0)

@@ -134,7 +134,18 @@ func (tvm *TVM) EmulateExternalMessage(code, data *cell.Cell, msg *tlb.ExternalM
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7In, defaultExternalMessageGas(cfg.Gas), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, nil, cfg.Config, cfg.Historical, ptrTo(dryRunLibraryLoadLimit(cfg.Config)), libraries...)
+	// SmartContract message dry-runs register libraries after code conversion,
+	// so a library root is resolved and charged during execution.
+	return tvm.executeMessageEmulation(code, data, c7In, defaultExternalMessageGas(cfg.Gas), stack, cfg.Config, executeOptions{
+		historical:                     cfg.Historical,
+		stopOnAccept:                   cfg.StopOnAccept,
+		proof:                          proof,
+		traceHook:                      cfg.TraceHook,
+		signatureCheckAlwaysSucceed:    cfg.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:                 cfg.Config.sizeLimits.maxVMDataDepth,
+		libraryLoadLimit:               ptrTo(dryRunLibraryLoadLimit(cfg.Config)),
+		codeConversionWithoutLibraries: true,
+	}, libraries...)
 }
 
 func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint64, cfg EmulateInternalMessageConfig) (*MessageExecutionResult, error) {
@@ -188,10 +199,19 @@ func (tvm *TVM) EmulateInternalMessage(code, data, body *cell.Cell, amount uint6
 		return nil, err
 	}
 
-	return tvm.executeMessageEmulation(code, data, c7In, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.StopOnAccept, cfg.SignatureCheckAlwaysSucceed, proof, cfg.TraceHook, nil, cfg.Config, cfg.Historical, ptrTo(dryRunLibraryLoadLimit(cfg.Config)), libraries...)
+	return tvm.executeMessageEmulation(code, data, c7In, defaultInternalMessageGas(cfg.Gas, amount), stack, cfg.Config, executeOptions{
+		historical:                     cfg.Historical,
+		stopOnAccept:                   cfg.StopOnAccept,
+		proof:                          proof,
+		traceHook:                      cfg.TraceHook,
+		signatureCheckAlwaysSucceed:    cfg.SignatureCheckAlwaysSucceed,
+		maxVMDataDepth:                 cfg.Config.sizeLimits.maxVMDataDepth,
+		libraryLoadLimit:               ptrTo(dryRunLibraryLoadLimit(cfg.Config)),
+		codeConversionWithoutLibraries: true,
+	}, libraries...)
 }
 
-func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7In emulationC7Input, gas vm.Gas, stack *vm.Stack, stopOnAccept bool, signatureCheckAlwaysSucceed bool, proof *cell.MerkleProofBuilder, traceHook vm.TraceHook, onCellLoad func(*cell.Cell), cfg *PreparedBlockchainConfig, historical vm.HistoricalConfig, libraryLoadLimit *uint32, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
+func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7In emulationC7Input, gas vm.Gas, stack *vm.Stack, cfg *PreparedBlockchainConfig, options executeOptions, libraries ...*cell.Cell) (*MessageExecutionResult, error) {
 	// the state is created before c7 so the context tuple can be built
 	// already bound to the state's gas trace: InitForExecution then skips the
 	// per-execution deep rebuild of c7
@@ -202,16 +222,7 @@ func (tvm *TVM) executeMessageEmulation(code, data *cell.Cell, c7In emulationC7I
 	}
 	state.Reg.C7 = c7
 
-	res, execErr := tvm.executeState(state, code, data, executeOptions{
-		historical:                  historical,
-		stopOnAccept:                stopOnAccept,
-		proof:                       proof,
-		traceHook:                   traceHook,
-		onCellLoad:                  onCellLoad,
-		signatureCheckAlwaysSucceed: signatureCheckAlwaysSucceed,
-		maxVMDataDepth:              cfg.sizeLimits.maxVMDataDepth,
-		libraryLoadLimit:            libraryLoadLimit,
-	})
+	res, execErr := tvm.executeState(state, code, data, options)
 	if execErr != nil {
 		if _, ok := vmerr.ErrorCode(execErr); !ok {
 			return nil, execErr

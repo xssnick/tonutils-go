@@ -1,6 +1,31 @@
 package cell
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// DictDiffOption enables an additional check on changed dictionary nodes.
+type DictDiffOption uint8
+
+// DictDiffCheckNewCanonicalLabels requires changed nodes in the new dictionary
+// to use the HmLabel encoding chosen by the dictionary writer. Old nodes and
+// equal subtrees skipped by hash are not checked.
+const DictDiffCheckNewCanonicalLabels DictDiffOption = 1
+
+// ErrNonCanonicalDictLabel means an opted-in diff check found a changed new
+// node whose label differs from the dictionary writer's canonical encoding.
+var ErrNonCanonicalDictLabel = errors.New("dictionary node label is not canonical")
+
+func dictDiffChecksCanonicalLabels(options []DictDiffOption) bool {
+	for _, option := range options {
+		if option == DictDiffCheckNewCanonicalLabels {
+			return true
+		}
+	}
+
+	return false
+}
 
 // DictDiffFunc receives changed leaves in key order. A nil oldValue or newValue
 // means that the key is absent from that side of the diff.
@@ -49,7 +74,7 @@ type DictDiffRawViewFunc func(DictDiffRawView) error
 // Both dictionaries are walked through their own traces. Special cells other
 // than a shared subtree skipped by hash fail the walk: a pruned boundary facing
 // a real subtree cannot be diffed.
-func (d *Dictionary) ScanDiff(other *Dictionary, fn DictDiffFunc) error {
+func (d *Dictionary) ScanDiff(other *Dictionary, fn DictDiffFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("dictionary diff callback is required")
 	}
@@ -67,13 +92,13 @@ func (d *Dictionary) ScanDiff(other *Dictionary, fn DictDiffFunc) error {
 			newValue = &view.NewValue
 		}
 		return fn(key, oldValue, newValue)
-	})
+	}, options...)
 }
 
 // ScanDiffBorrowed is ScanDiff without materializing a key Cell for every
 // changed leaf. Every Slice in the view is borrowed and must not be retained
 // after the callback returns.
-func (d *Dictionary) ScanDiffBorrowed(other *Dictionary, fn DictDiffViewFunc) error {
+func (d *Dictionary) ScanDiffBorrowed(other *Dictionary, fn DictDiffViewFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("dictionary diff callback is required")
 	}
@@ -96,7 +121,7 @@ func (d *Dictionary) ScanDiffBorrowed(other *Dictionary, fn DictDiffViewFunc) er
 		newTrace = combinedCellTrace(other.root, other.trace)
 	}
 
-	walk := dictDiffWalk{keySz: keySz, fn: fn}
+	walk := dictDiffWalk{keySz: keySz, fn: fn, checkCanonical: dictDiffChecksCanonicalLabels(options)}
 	if err := walk.node(oldRoot, oldTrace, newRoot, newTrace, keySz, 0, 0); err != nil {
 		return fmt.Errorf("failed to scan dictionary diff: %w", err)
 	}
@@ -105,7 +130,7 @@ func (d *Dictionary) ScanDiffBorrowed(other *Dictionary, fn DictDiffViewFunc) er
 
 // ScanDiffRaw is ScanDiffBorrowed without materializing or hashing a key Cell.
 // The callback receives the key as borrowed packed bits.
-func (d *Dictionary) ScanDiffRaw(other *Dictionary, fn DictDiffRawViewFunc) error {
+func (d *Dictionary) ScanDiffRaw(other *Dictionary, fn DictDiffRawViewFunc, options ...DictDiffOption) error {
 	if fn == nil {
 		return fmt.Errorf("dictionary diff callback is required")
 	}
@@ -128,7 +153,7 @@ func (d *Dictionary) ScanDiffRaw(other *Dictionary, fn DictDiffRawViewFunc) erro
 		newTrace = combinedCellTrace(other.root, other.trace)
 	}
 
-	walk := dictDiffWalk{keySz: keySz, rawFn: fn}
+	walk := dictDiffWalk{keySz: keySz, rawFn: fn, checkCanonical: dictDiffChecksCanonicalLabels(options)}
 	if err := walk.node(oldRoot, oldTrace, newRoot, newTrace, keySz, 0, 0); err != nil {
 		return fmt.Errorf("failed to scan dictionary diff: %w", err)
 	}
@@ -141,6 +166,8 @@ type dictDiffWalk struct {
 	keyCell Cell
 	fn      DictDiffViewFunc
 	rawFn   DictDiffRawViewFunc
+
+	checkCanonical bool
 }
 
 // node compares one aligned pair of subtrees. skipOld and skipNew are the label
@@ -170,11 +197,11 @@ func (w *dictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *Tra
 		return nil
 	}
 
-	oldNode, err := parseDictDiffNode(old, oldTrace, remaining+skipOld)
+	oldNode, err := parseDictDiffNode(old, oldTrace, remaining+skipOld, false)
 	if err != nil {
 		return fmt.Errorf("invalid old dictionary node: %w", err)
 	}
-	newNode, err := parseDictDiffNode(new, newTrace, remaining+skipNew)
+	newNode, err := parseDictDiffNode(new, newTrace, remaining+skipNew, w.checkCanonical)
 	if err != nil {
 		return fmt.Errorf("invalid new dictionary node: %w", err)
 	}
@@ -316,7 +343,7 @@ func (w *dictDiffWalk) node(old *Cell, oldTrace *Trace, new *Cell, newTrace *Tra
 
 // oneSide reports every leaf of a subtree that exists on only one side.
 func (w *dictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, oldOnly bool) error {
-	node, err := parseDictDiffNode(branch, trace, remaining)
+	node, err := parseDictDiffNode(branch, trace, remaining, !oldOnly && w.checkCanonical)
 	if err != nil {
 		return err
 	}
@@ -345,7 +372,7 @@ func (w *dictDiffWalk) oneSide(branch *Cell, trace *Trace, remaining uint, oldOn
 	return nil
 }
 
-func parseDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDictNode, error) {
+func parseDictDiffNode(branch *Cell, trace *Trace, remaining uint, checkCanonical bool) (fixedDictNode, error) {
 	node, err := parseFixedDictNodeWithTrace(branch, remaining, trace)
 	if err != nil {
 		return fixedDictNode{}, err
@@ -355,6 +382,15 @@ func parseDictDiffNode(branch *Cell, trace *Trace, remaining uint) (fixedDictNod
 	}
 	if err = node.validateForkShape(remaining, false); err != nil {
 		return fixedDictNode{}, err
+	}
+	if checkCanonical {
+		canonical, err := node.hasCanonicalLabel(remaining)
+		if err != nil {
+			return fixedDictNode{}, err
+		}
+		if !canonical {
+			return fixedDictNode{}, ErrNonCanonicalDictLabel
+		}
 	}
 	return node, nil
 }

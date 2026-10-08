@@ -311,7 +311,7 @@ func TestTransactionV13PrecompiledGasLoadedFromConfig(t *testing.T) {
 		{name: "special", addr: internalEmulationSrcAddr, special: true, wantLimit: 4_000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			env := &transactionExecEnv{}
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tc.addr, tc.special, gas, env)
 			if skip != nil {
 				t.Fatalf("unexpected skip reason: %v", skip)
@@ -333,7 +333,7 @@ func TestTransactionV13PrecompiledGasAboveLimitSkipsCompute(t *testing.T) {
 	}))
 	gas := vmcore.Gas{Max: 100, Limit: 10, Base: 10, Remaining: 10}
 
-	env := &transactionExecEnv{}
+	env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
 	_, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, gas, env)
 	if env.precompiledGasUsage == nil || env.precompiledGasUsage.Uint64() != 11 {
 		t.Fatalf("precompiled usage = %v, want 11", env.precompiledGasUsage)

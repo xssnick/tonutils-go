@@ -941,7 +941,7 @@ func TestTVMCrossEmulatorContExecScenariosAllGlobalVersionsSmoke(t *testing.T) {
 			for _, version := range versions {
 				version := version
 				t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
-					runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exitForVersion(version), "", nil)
+					runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exitForVersion(version))
 				})
 			}
 		})
@@ -968,7 +968,7 @@ func FuzzTVMCrossEmulatorContExecScenariosGlobalVersion(f *testing.F) {
 			t.Fatalf("cont/exec scenario case count = %d, want %d", len(tests), contExecScenarioVersionCaseCount)
 		}
 		tt := tests[int(rawCase)%len(tests)]
-		runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exitForVersion(version), "", nil)
+		runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exitForVersion(version))
 	})
 }
 

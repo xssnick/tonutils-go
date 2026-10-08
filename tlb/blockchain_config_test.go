@@ -412,6 +412,8 @@ func TestBlockchainConfigGetSizeLimitsConfig(t *testing.T) {
 			MaxTransactionLibraryLoads:  &maxTransactionLibraryLoads,
 			MaxTotalMsgBits:             0x32333435,
 			MaxTotalMsgCells:            0x36373839,
+			OutMsgQueueSizeHardLimit:    0x3a3b3c3d,
+			OutMsgQueueSizeSoftLimit:    0x3e3f4041,
 		}
 
 		paramCell := cell.BeginCell().
@@ -433,6 +435,8 @@ func TestBlockchainConfigGetSizeLimitsConfig(t *testing.T) {
 			MustStoreUInt(0x2e2f3031, 32).
 			MustStoreUInt(0x32333435, 32).
 			MustStoreUInt(0x36373839, 32).
+			MustStoreUInt(0x3a3b3c3d, 32).
+			MustStoreUInt(0x3e3f4041, 32).
 			EndCell()
 
 		cfg := BlockchainConfig{

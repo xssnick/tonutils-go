@@ -18,6 +18,12 @@ type Unmarshaler interface {
 	LoadFromCell(loader *cell.Slice) error
 }
 
+// magicUnmarshaler lets internal manual decoders honor LoadFromCell's
+// skipMagic option without changing the public Unmarshaler interface.
+type magicUnmarshaler interface {
+	loadFromCell(loader *cell.Slice, skipMagic bool) error
+}
+
 type ProofUnmarshaler interface {
 	LoadFromCellAsProof(loader *cell.Slice) error
 }
@@ -195,6 +201,13 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 			}
 			return nil
 		}
+	}
+
+	if ld, ok := v.(magicUnmarshaler); ok {
+		if err := ld.loadFromCell(slice, skipMagic); err != nil {
+			return fmt.Errorf("failed to load from cell for %s, using manual loader, err: %w", rv.Type().Name(), err)
+		}
+		return nil
 	}
 
 	if ld, ok := v.(Unmarshaler); ok {

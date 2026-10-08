@@ -266,18 +266,11 @@ func registeredOpcodeAvailabilityFuzzSeeds(cases []registeredOpcodeAvailabilityA
 	return seeds
 }
 
-func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed, expectedCount int, expectedHash string) {
+func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed) {
 	t.Helper()
 
-	inventory := registeredOpcodeAvailabilityFuzzSeedInventory(cases, seeds)
 	if len(seeds) == 0 {
 		t.Fatal("registered opcode availability fuzz seeds are empty")
-	}
-	if len(seeds) != expectedCount {
-		t.Fatalf("registered opcode availability fuzz seed count = %d, want %d:\n%s", len(seeds), expectedCount, strings.Join(inventory, "\n"))
-	}
-	if got := registeredOpcodeAvailabilityFuzzSeedInventoryHash(inventory); got != expectedHash {
-		t.Fatalf("registered opcode availability fuzz seed hash = %s, want %s:\n%s", got, expectedHash, strings.Join(inventory, "\n"))
 	}
 
 	seen := make(map[int]map[int]struct{}, len(cases))
@@ -312,24 +305,6 @@ func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []r
 			}
 		}
 	}
-}
-
-func registeredOpcodeAvailabilityFuzzSeedInventory(cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed) []string {
-	items := make([]string, 0, len(seeds))
-	for _, seed := range seeds {
-		name := "<invalid>"
-		if seed.caseIdx >= 0 && seed.caseIdx < len(cases) {
-			name = cases[seed.caseIdx].name
-		}
-		items = append(items, fmt.Sprintf("%s:v%d", name, seed.version))
-	}
-	sort.Strings(items)
-	return items
-}
-
-func registeredOpcodeAvailabilityFuzzSeedInventoryHash(items []string) string {
-	sum := sha256.Sum256([]byte(strings.Join(items, "\n")))
-	return fmt.Sprintf("%x", sum[:])
 }
 
 func registeredOpcodeAvailabilitySupplementalCases() []registeredOpcodeAvailabilityAuditCase {

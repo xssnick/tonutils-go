@@ -36,13 +36,6 @@ func TestTVMDifferentialLowGasBoundaryAudit(t *testing.T) {
 			for seed := uint64(start); seed < uint64(start+seeds); seed++ {
 				r := rand.New(rand.NewSource(int64(seed)))
 				tc := generateDifferentialFuzzCaseWithFamily(t, r, seed, family)
-				version := tc.globalVersion
-				if !tc.hasGlobalVersion && version == 0 {
-					version = referenceRawRunGlobalVersion
-				}
-				if differentialFuzzKnownReferenceMismatchReason(tc, version) != "" {
-					continue
-				}
 
 				baseOp := tc.op
 				for _, gasLimit := range gasLimits {

@@ -20,7 +20,7 @@ func TestReviewCoreTupleDAGCrossEmulator(t *testing.T) {
 	for _, flow := range []string{"local", "input", "output"} {
 		for _, depth := range []int{0, 1, 8, 12} {
 			t.Run(fmt.Sprintf("%s/depth_%d", flow, depth), func(t *testing.T) {
-				runContVersionedParityCase(t, reviewCoreTupleDAGCode(depth, flow), nil, 13, 0, "", nil)
+				runContVersionedParityCase(t, reviewCoreTupleDAGCode(depth, flow), nil, 13, 0)
 			})
 		}
 	}

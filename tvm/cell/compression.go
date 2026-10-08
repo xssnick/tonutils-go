@@ -336,7 +336,7 @@ func decompressBaselineLZ4(compressed []byte, maxSize int) ([]*Cell, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("lz4 decompression failed")
 	}
-	return FromBOCMultiRoot(dst[:n])
+	return FromBOCMultiRootWithOptions(dst[:n], BOCParseOptions{AllowNonZeroLevelRoot: true})
 }
 
 func storeBitSpan(builder *Builder, span bitSpan) error {
