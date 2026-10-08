@@ -3,6 +3,7 @@ package overlay
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"reflect"
@@ -84,11 +85,16 @@ func verifyBroadcastTwoStepSimpleSignature(source any, id, data, signature []byt
 }
 
 func signBroadcastTwoStepSimple(key ed25519.PrivateKey, id, data []byte) ([]byte, error) {
+	return signBroadcastTwoStepSimpleWithSigner(ed25519BroadcastSigner(key), id, data)
+}
+
+func signBroadcastTwoStepSimpleWithSigner(signer BroadcastSigner, id, data []byte) ([]byte, error) {
 	toSign, err := serializeBroadcastTwoStepSimpleToSign(id, data)
 	if err != nil {
 		return nil, err
 	}
-	return ed25519.Sign(key, toSign), nil
+
+	return signBroadcastTwoStepPayload(signer, toSign)
 }
 
 func verifyBroadcastTwoStepFECSignature(source any, id []byte, seqno uint32, part, signature []byte) error {
@@ -100,11 +106,28 @@ func verifyBroadcastTwoStepFECSignature(source any, id []byte, seqno uint32, par
 }
 
 func signBroadcastTwoStepFEC(key ed25519.PrivateKey, id []byte, seqno uint32, part []byte) ([]byte, error) {
+	return signBroadcastTwoStepFECWithSigner(ed25519BroadcastSigner(key), id, seqno, part)
+}
+
+func signBroadcastTwoStepFECWithSigner(signer BroadcastSigner, id []byte, seqno uint32, part []byte) ([]byte, error) {
 	toSign, err := serializeBroadcastTwoStepFECToSign(id, seqno, part)
 	if err != nil {
 		return nil, err
 	}
-	return ed25519.Sign(key, toSign), nil
+
+	return signBroadcastTwoStepPayload(signer, toSign)
+}
+
+func signBroadcastTwoStepPayload(signer BroadcastSigner, payload []byte) ([]byte, error) {
+	signature, err := signer.Sign(payload)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign broadcast: %w", err)
+	}
+	if len(signature) != ed25519.SignatureSize {
+		return nil, fmt.Errorf("broadcast signature should be %d bytes", ed25519.SignatureSize)
+	}
+
+	return signature, nil
 }
 
 func checkBroadcastTwoStepSignKey(source any, key ed25519.PrivateKey) error {
@@ -198,4 +221,18 @@ func (t *BroadcastTwoStepFEC) Sign(key ed25519.PrivateKey) error {
 	}
 	t.Signature, err = signBroadcastTwoStepFEC(key, id, t.Seqno, t.Part)
 	return nil
+}
+
+func broadcastTwoStepPartFingerprint(id, sourceKey []byte, seqno uint32, part, signature []byte) [32]byte {
+	hash := sha256.New()
+	hash.Write(id)
+	hash.Write(sourceKey)
+	var sequence [4]byte
+	binary.LittleEndian.PutUint32(sequence[:], seqno)
+	hash.Write(sequence[:])
+	hash.Write(part)
+	hash.Write(signature)
+	var result [32]byte
+	hash.Sum(result[:0])
+	return result
 }

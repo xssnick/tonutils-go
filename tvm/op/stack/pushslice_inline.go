@@ -87,6 +87,17 @@ func encodeInlineSlicePayload(value *cell.Slice, totalBits uint) *cell.Builder {
 func (op *OpPUSHSLICEINLINE) Deserialize(code *cell.Slice) error {
 	prefix, err := code.LoadUInt(8)
 	if err != nil {
+		// consensus-critical: gas for a truncated opcode follows the
+		// zero-padded opcode-table entry, and the three inline forms differ in
+		// total bit length
+		switch helpers.PeekZeroPaddedOpcode(code, 8) {
+		case 0x8C:
+			op.form = "REF"
+		case 0x8D:
+			op.form = "LONG"
+		default:
+			op.form = "SHORT"
+		}
 		return err
 	}
 

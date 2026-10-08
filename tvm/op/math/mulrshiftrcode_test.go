@@ -34,7 +34,7 @@ func TestMulrshiftrcodeOperation(t *testing.T) {
 			codeCell := cell.BeginCell().MustStoreBinarySnake(test.code).EndCell()
 			codeSlice := codeCell.MustBeginParse()
 
-			op := MULRSHIFTRCODE(0)
+			op := MULRSHIFTRCODE(1)
 			op.Deserialize(codeSlice)
 
 			err := op.Interpret(&vm.State{

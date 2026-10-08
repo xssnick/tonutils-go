@@ -2,16 +2,19 @@ package overlay
 
 import (
 	"context"
-	"encoding/hex"
+	"fmt"
+	"sync/atomic"
+
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
 
 type RLDPOverlayWrapper struct {
 	overlayId []byte
+	closed    atomic.Bool
 
-	queryHandler      func(transferId []byte, query *rldp.Query) error
-	disconnectHandler func()
+	queryHandler      atomic.Pointer[rldpQueryHandler]
+	disconnectHandler atomic.Pointer[rldpDisconnectHandler]
 
 	*RLDPWrapper
 }
@@ -20,14 +23,14 @@ func (r *RLDPWrapper) CreateOverlay(id []byte) *RLDPOverlayWrapper {
 	r.mx.Lock()
 	defer r.mx.Unlock()
 
-	strId := hex.EncodeToString(id)
+	strId := string(id)
 
 	w := r.overlays[strId]
-	if w != nil {
+	if w != nil && !w.closed.Load() {
 		return w
 	}
 	w = &RLDPOverlayWrapper{
-		overlayId:   id,
+		overlayId:   append([]byte(nil), id...),
 		RLDPWrapper: r,
 	}
 	r.overlays[strId] = w
@@ -35,25 +38,66 @@ func (r *RLDPWrapper) CreateOverlay(id []byte) *RLDPOverlayWrapper {
 	return w
 }
 
-func (r *RLDPWrapper) UnregisterOverlay(id []byte) {
+func (r *RLDPWrapper) detachOverlay(overlay *RLDPOverlayWrapper) {
 	r.mx.Lock()
 	defer r.mx.Unlock()
 
-	delete(r.overlays, hex.EncodeToString(id))
+	id := string(overlay.overlayId)
+	if r.overlays[id] == overlay {
+		delete(r.overlays, id)
+	}
 }
 
 func (r *RLDPOverlayWrapper) SetOnQuery(handler func(transferId []byte, query *rldp.Query) error) {
-	r.queryHandler = handler
+	storeRLDPQueryHandler(&r.queryHandler, handler)
 }
 
 func (r *RLDPOverlayWrapper) SetOnDisconnect(handler func()) {
-	r.disconnectHandler = handler
+	storeRLDPDisconnectHandler(&r.disconnectHandler, handler)
+}
+
+func (r *RLDPOverlayWrapper) overlayQueryHandler() func(transferId []byte, query *rldp.Query) error {
+	return loadRLDPQueryHandler(&r.queryHandler)
+}
+
+func (r *RLDPOverlayWrapper) overlayDisconnectHandler() func() {
+	return loadRLDPDisconnectHandler(&r.disconnectHandler)
 }
 
 func (r *RLDPOverlayWrapper) DoQuery(ctx context.Context, maxAnswerSize uint64, req, result tl.Serializable) error {
 	return r.RLDPWrapper.DoQuery(ctx, maxAnswerSize, []tl.Serializable{Query{Overlay: r.overlayId}, req}, result)
 }
 
+func (r *RLDPOverlayWrapper) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return r.RLDPWrapper.sendOverlayMessage(ctx, r.overlayId, req)
+}
+
+func (r *RLDPOverlayWrapper) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return r.RLDPWrapper.sendOverlayMessage(ctx, r.overlayId, tl.Raw(body))
+}
+
+func (r *RLDPWrapper) sendOverlayMessage(ctx context.Context, overlayID []byte, req tl.Serializable) error {
+	if r.messageSender == nil {
+		return ErrRLDPMessageUnsupported
+	}
+
+	return sendRLDPOverlayMessage(ctx, r.messageSender, overlayID, req)
+}
+
+func sendRLDPOverlayMessage(ctx context.Context, transport RLDPMessageSender, overlayID []byte, req tl.Serializable) error {
+	payload, err := tl.Append(
+		make([]byte, 0, tl.DefaultSerializeBufferSize),
+		[]tl.Serializable{Message{Overlay: overlayID}, req},
+		true,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to serialize overlay message: %w", err)
+	}
+
+	return transport.SendMessage(ctx, payload)
+}
+
 func (r *RLDPOverlayWrapper) Close() {
-	r.RLDPWrapper.UnregisterOverlay(r.overlayId)
+	r.closed.Store(true)
+	r.RLDPWrapper.detachOverlay(r)
 }

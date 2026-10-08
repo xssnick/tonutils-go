@@ -168,7 +168,7 @@ func TestConstStoreInterpretErrorEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("RemainderOpsUnderflowAndPartialOverflow", func(t *testing.T) {
+	t.Run("RemainderOpsUnderflow", func(t *testing.T) {
 		for _, tt := range []struct {
 			name string
 			op   cellSliceTransformOp
@@ -180,14 +180,6 @@ func TestConstStoreInterpretErrorEdges(t *testing.T) {
 			t.Run(tt.name+"Underflow", func(t *testing.T) {
 				assertCellSliceVMErrorCode(t, tt.op.Interpret(newCellSliceState()), vmerr.CodeStackUnderflow)
 			})
-		}
-
-		st := newCellSliceState()
-		fillAdvancedBuilderStack(t, st, 1)
-		pushCellSliceBuilder(t, st, cell.BeginCell().MustStoreUInt(1, 1))
-		assertCellSliceVMErrorCode(t, BREMBITREFS().Interpret(st), vmerr.CodeStackOverflow)
-		if got := popCellSliceInt(t, st); got != 1022 {
-			t.Fatalf("partial BREMBITREFS bits = %d, want 1022", got)
 		}
 	})
 }

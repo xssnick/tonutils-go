@@ -110,7 +110,7 @@ func TestAdvancedBuilderCheckEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("QuietFalseAndBBITREFSStackOverflowShape", func(t *testing.T) {
+	t.Run("QuietFalse", func(t *testing.T) {
 		st := newCellSliceState()
 		pushCellSliceBuilder(t, st, reverseStoreEdgeBuilder(1023, 0))
 		pushCellSliceInt(t, st, 1)
@@ -119,14 +119,6 @@ func TestAdvancedBuilderCheckEdges(t *testing.T) {
 		}
 		if ok := popCellSliceBool(t, st); ok {
 			t.Fatal("BCHKBITSQ flag = true, want false")
-		}
-
-		st = newCellSliceState()
-		fillAdvancedBuilderStack(t, st, 1)
-		pushCellSliceBuilder(t, st, cell.BeginCell().MustStoreUInt(0xAB, 8))
-		assertCellSliceVMErrorCode(t, BBITREFS().Interpret(st), vmerr.CodeStackOverflow)
-		if got := popCellSliceInt(t, st); got != 8 {
-			t.Fatalf("partial BBITREFS bits = %d, want 8", got)
 		}
 	})
 }

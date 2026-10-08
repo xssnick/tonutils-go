@@ -51,6 +51,39 @@ func BenchmarkBitopsStoreSliceReused(b *testing.B) {
 	}
 }
 
+func BenchmarkBitopsStoreSliceFromReused(b *testing.B) {
+	for _, tc := range []struct {
+		name              string
+		sourceOffset      uint
+		destinationOffset uint
+		bits              uint
+	}{
+		{name: "Aligned768", bits: 768},
+		{name: "SourceOffset768", sourceOffset: 3, bits: 768},
+		{name: "BothOffsets768", sourceOffset: 3, destinationOffset: 5, bits: 768},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			sourceBuilder := BeginCell().MustStoreUInt(0, tc.sourceOffset).MustStoreSlice(benchPayload768, tc.bits)
+			source := sourceBuilder.EndCell().MustBeginParse()
+			source.MustLoadUInt(tc.sourceOffset)
+
+			destination := BeginCell().MustStoreUInt(0, tc.destinationOffset)
+			base := destination.BitsUsed()
+
+			b.ReportAllocs()
+			b.SetBytes(int64(tc.bits / 8))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				view := *source
+				if err := destination.storeSliceFromSlice(&view, tc.bits); err != nil {
+					b.Fatal(err)
+				}
+				destination.truncateBits(base)
+			}
+		})
+	}
+}
+
 func BenchmarkBitopsStoreUIntReused(b *testing.B) {
 	bd := BeginCell()
 	bd.MustStoreUInt(0, 3) // misalign

@@ -36,12 +36,14 @@ func SENDRAWMSG() *helpers.SimpleOP {
 				},
 			}
 
+			// the cell-create charge happens before the cell is actually
+			// built, so a failure past that point still costs it
+			if err = state.Cells.RegisterCellCreate(); err != nil {
+				return err
+			}
 			res, err := tlb.ToCell(list)
 			if err != nil {
 				return vmerr.Error(vmerr.CodeCellOverflow, "cannot serialize raw output message into an output action cell; "+err.Error())
-			}
-			if err = state.Cells.RegisterCellCreate(); err != nil {
-				return err
 			}
 			state.Reg.D[1] = res
 			return nil

@@ -3,6 +3,7 @@ package tvm
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -74,18 +75,19 @@ func TestTVMMatchesF88111AsInMsgParams(t *testing.T) {
 	if getter == nil {
 		t.Fatal("expected F88111 opcode to be registered in trie")
 	}
-	op := getter()
-	if err := op.Deserialize(code); err != nil {
+	got, err := getter.decodeInstruction(nil, code)
+	if err != nil {
 		t.Fatalf("deserialize F88111: %v", err)
 	}
-	if got := op.SerializeText(); got != "INMSGPARAMS" {
+	if got != "INMSGPARAMS" {
 		t.Fatalf("F88111 matched %q, want INMSGPARAMS", got)
 	}
 }
 
 func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 	machine := &TVM{}
-	machine.dispatches[vm.MaxSupportedGlobalVersion] = newOpcodeDispatch()
+	dispatch := newOpcodeDispatch()
+	machine.dispatches[vm.MaxSupportedGlobalVersion] = dispatch
 	shortPrefix := cell.BeginCell().MustStoreUInt(0xa5, 8).EndCell().MustBeginParse()
 	longPrefix := cell.BeginCell().
 		MustStoreUInt(0xa5, 8).
@@ -94,8 +96,9 @@ func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 		EndCell().
 		MustBeginParse()
 
-	machine.addTriePrefix(shortPrefix, trieDispatchTestGetter("short"))
-	machine.addTriePrefix(longPrefix, trieDispatchTestGetter("long"))
+	dispatch.addPrefix(shortPrefix, &dispatchEntry{get: trieDispatchTestGetter("short")})
+	dispatch.addPrefix(longPrefix, &dispatchEntry{get: trieDispatchTestGetter("long")})
+	dispatch.buildFastTable()
 	if machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen <= 64 {
 		t.Fatalf("max prefix len = %d, want slow matcher path", machine.dispatches[vm.MaxSupportedGlobalVersion].maxPrefixLen)
 	}
@@ -123,7 +126,7 @@ func TestTVMOpcodeMatcherSlowPathLongestPrefix(t *testing.T) {
 func TestTVMOpcodeMatcherRegisteredPrefixesFastSlowParity(t *testing.T) {
 	machine := NewTVM()
 
-	for _, getOp := range vm.List {
+	for _, getOp := range vm.AllOps() {
 		op := getOp()
 		for _, prefix := range op.GetPrefixes() {
 			bits := prefix.BitsLeft()
@@ -148,9 +151,9 @@ func TestTVMOpcodeMatcherCompoundInvalidCatchAll(t *testing.T) {
 	}{
 		{name: "valid_adddivmod", code: opmath.ADDDIVMOD().Serialize().EndCell(), text: "ADDDIVMOD"},
 		{name: "invalid_divmod_suffix", code: cell.BeginCell().MustStoreUInt(0xa903, 16).EndCell(), text: "DIV/MOD<invalid>"},
-		{name: "valid_addrshift_code_mod", code: opmath.ADDRSHIFTCODEMOD(0).Serialize().EndCell(), text: "1 ADDRSHIFT#MOD"},
+		{name: "valid_addrshift_code_mod", code: opmath.ADDRSHIFTCODEMOD(1).Serialize().EndCell(), text: "1 ADDRSHIFT#MOD"},
 		{name: "invalid_addrshift_code_mod_suffix", code: cell.BeginCell().MustStoreUInt(0xa93300, 24).EndCell(), text: "SHR#/MOD<invalid>"},
-		{name: "valid_mulrshift_code_mod", code: opmath.MULRSHIFTCODEMOD(0).Serialize().EndCell(), text: "1 MULRSHIFT#MOD"},
+		{name: "valid_mulrshift_code_mod", code: opmath.MULRSHIFTCODEMOD(1).Serialize().EndCell(), text: "1 MULRSHIFT#MOD"},
 		{name: "invalid_mulrshift_code_mod_suffix", code: cell.BeginCell().MustStoreUInt(0xa9b300, 24).EndCell(), text: "MULSHR#/MOD<invalid>"},
 		{name: "valid_lshiftdivmod_code", code: cell.BeginCell().MustStoreUInt(0xa9dc00, 24).EndCell(), text: "1 LSHIFTDIVMOD#"},
 		{name: "invalid_lshiftdivmod_code_suffix", code: cell.BeginCell().MustStoreUInt(0xa9d300, 24).EndCell(), text: "SHLDIV#/MOD<invalid>"},
@@ -158,7 +161,8 @@ func TestTVMOpcodeMatcherCompoundInvalidCatchAll(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := trieDispatchMatchedName(t, machine.matchOpcode(tt.code.MustBeginParse()), tt.code); got != "*helpers.AdvancedOP:"+tt.text && got != "*helpers.SimpleOP:"+tt.text {
+			got := trieDispatchMatchedName(t, machine.matchOpcode(tt.code.MustBeginParse()), tt.code)
+			if _, name, ok := strings.Cut(got, ":"); !ok || name != tt.text {
 				t.Fatalf("matched %q, want %q", got, tt.text)
 			}
 		})
@@ -219,16 +223,15 @@ func (op trieDispatchTestOp) Interpret(*vm.State) error {
 	return nil
 }
 
-func trieDispatchMatchedName(t *testing.T, getter vm.OPGetter, code *cell.Cell) string {
+func trieDispatchMatchedName(t *testing.T, entry *dispatchEntry, code *cell.Cell) string {
 	t.Helper()
 
-	if getter == nil {
+	if entry == nil {
 		return "<nil>"
 	}
-	op := getter()
-	err := op.Deserialize(code.MustBeginParse())
+	text, err := entry.decodeInstruction(nil, code.MustBeginParse())
 	if err != nil {
-		return fmt.Sprintf("%T:%v", op, err)
+		return fmt.Sprintf("%T:%v", entry.instance(), err)
 	}
-	return fmt.Sprintf("%T:%s", op, op.SerializeText())
+	return fmt.Sprintf("%T:%s", entry.instance(), text)
 }

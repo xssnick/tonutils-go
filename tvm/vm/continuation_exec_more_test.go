@@ -8,6 +8,18 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+var continuationErrorSink error
+
+func TestQuitContinuationJumpAllocationFree(t *testing.T) {
+	quit := quitContinuation(0)
+	allocs := testing.AllocsPerRun(1_000, func() {
+		_, continuationErrorSink = quit.Jump(nil)
+	})
+	if allocs != 0 {
+		t.Fatalf("quit continuation jump allocs = %.1f, want 0", allocs)
+	}
+}
+
 func TestContinuationImplementations(t *testing.T) {
 	state := &State{Stack: NewStack()}
 
@@ -243,7 +255,7 @@ func TestJumpToVersionedNestedGasAndAdjust(t *testing.T) {
 			state := newVersionedJumpTestState(version)
 			pushInts(t, state.Stack, 1, 2, 3)
 			target := &OrdinaryContinuation{
-				Data: ControlData{NumArgs: 1, CP: CP},
+				Data: ControlData{NumArgs: 1, CP: state.CP},
 				Code: cell.BeginCell().EndCell().MustBeginParse(),
 			}
 
@@ -290,7 +302,7 @@ func FuzzJumpToVersionedNestedGasAndAdjust(f *testing.F) {
 		pushInts(t, state.Stack, 1, 2, 3, 4)
 		args := int(rawArgs % 4)
 		target := &OrdinaryContinuation{
-			Data: ControlData{NumArgs: args, CP: CP},
+			Data: ControlData{NumArgs: args, CP: state.CP},
 			Code: cell.BeginCell().EndCell().MustBeginParse(),
 		}
 		if err := state.JumpTo(&nestedJumpContinuation{next: target}); err != nil {
@@ -401,7 +413,7 @@ func TestExecHelpers(t *testing.T) {
 	}
 	pushInts(t, complexCallState.Stack, 1, 2)
 	if err := complexCallState.Call(&OrdinaryContinuation{
-		Data: ControlData{NumArgs: 1, CP: CP},
+		Data: ControlData{NumArgs: 1, CP: complexCallState.CP},
 		Code: cell.BeginCell().MustStoreUInt(0x35, 8).EndCell().MustBeginParse(),
 	}); err != nil {
 		t.Fatalf("complex call: %v", err)

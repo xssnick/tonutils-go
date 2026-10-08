@@ -3,7 +3,6 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -11,35 +10,26 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SETINDEXQ(0) })
+	vm.ArgList = append(vm.ArgList, setIndexQOp)
 }
 
-func SETINDEXQ(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     helpers.UIntPrefix(0x6f7, 12),
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d SETINDEXQ", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			if state.Stack.Len() < 2 {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
+var setIndexQOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f7, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d SETINDEXQ", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		if state.Stack.Len() < 2 {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
 
-			return execSetIndexQuiet(state, int(n))
-		},
-	}
+		return execSetIndexQuiet(state, int(uint8(args)))
+	},
+})
+
+func SETINDEXQ(n uint8) vm.OP {
+	return vm.Bind(setIndexQOp, uint64(n))
 }
 
 func execSetIndexQuiet(state *vm.State, idx int) error {

@@ -1,6 +1,9 @@
 package cell
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func buildVirtualizedProofBody(t *testing.T) (*Cell, *Cell, *Cell) {
 	t.Helper()
@@ -82,16 +85,8 @@ func TestUnwrapProofVirtualizedCreatesVisibleVirtualizedView(t *testing.T) {
 		t.Fatal("raw cell lookup should preserve the underlying raw graph")
 	}
 
-	serialized := body.ToBOC()
-	decoded, err := FromBOC(serialized)
-	if err != nil {
-		t.Fatalf("serialize virtualized body: %v", err)
-	}
-	if decoded.IsVirtualized() {
-		t.Fatal("serialized form should round-trip to an ordinary cell graph")
-	}
-	if decoded.HashKey() != unwrappedRaw.HashKey() {
-		t.Fatal("serializing a virtualized body should devirtualize back to the underlying raw graph")
+	if _, err = body.ToBOCWithOptionsErr(BOCSerializeOptions{}); !errors.Is(err, ErrVirtualizedCell) {
+		t.Fatalf("virtualized serialization error = %v, want ErrVirtualizedCell", err)
 	}
 }
 

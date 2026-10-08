@@ -52,9 +52,9 @@ func TestImmediateConstShortSuffixEdges(t *testing.T) {
 		{name: "PUSHPOW2", deserialize: PUSHPOW2(0).Deserialize},
 		{name: "PUSHPOW2DEC", deserialize: PUSHPOW2DEC(0).Deserialize},
 		{name: "PUSHNEGPOW2", deserialize: PUSHNEGPOW2(0).Deserialize},
-		{name: "MODPOW2#", deserialize: MODPOW2CODE(0).Deserialize},
-		{name: "MODPOW2R#", deserialize: MODPOW2RCODE(0).Deserialize},
-		{name: "MODPOW2C#", deserialize: MODPOW2CCODE(0).Deserialize},
+		{name: "MODPOW2#", deserialize: MODPOW2CODE(1).Deserialize},
+		{name: "MODPOW2R#", deserialize: MODPOW2RCODE(1).Deserialize},
+		{name: "MODPOW2C#", deserialize: MODPOW2CCODE(1).Deserialize},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.deserialize(cell.BeginCell().EndCell().MustBeginParse()); err == nil {

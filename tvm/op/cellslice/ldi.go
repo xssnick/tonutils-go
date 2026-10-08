@@ -2,50 +2,41 @@ package cellslice
 
 import (
 	"fmt"
-	"github.com/xssnick/tonutils-go/tvm/cell"
+
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return LDI(0) })
+	vm.ArgList = append(vm.ArgList, ldiOp)
 }
 
-func LDI(sz uint) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			s0, err := state.Stack.PopSlice()
-			if err != nil {
-				return err
-			}
+// The operand is the encoded width minus one, exactly as it sits in the code.
+var ldiOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xD2)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		s0, err := state.Stack.PopSlice()
+		if err != nil {
+			return err
+		}
 
-			i, err := s0.LoadBigInt(sz)
-			if err != nil {
-				return err
-			}
+		i, err := s0.LoadBigInt(uint(args) + 1)
+		if err != nil {
+			return err
+		}
 
-			err = state.Stack.PushOwnedInt(i)
-			if err != nil {
-				return err
-			}
-			return state.Stack.PushOwnedSlice(s0)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d LDI", sz)
-		},
-		BitPrefix:     helpers.BytesPrefix(0xD2),
-		FixedSizeBits: 8,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(sz-1), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			sz = uint(val) + 1
-			return nil
-		},
-	}
-	return op
+		err = state.Stack.PushOwnedInt(i)
+		if err != nil {
+			return err
+		}
+		return state.Stack.PushOwnedSlice(s0)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d LDI", uint(args)+1)
+	},
+})
+
+func LDI(sz uint) vm.OP {
+	return vm.Bind(ldiOp, uint64(sz-1))
 }

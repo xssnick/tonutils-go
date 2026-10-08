@@ -7,6 +7,7 @@ import (
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -85,10 +86,14 @@ func buildTransactionCell(params transactionBuildParams) (*cell.Cell, error) {
 	if err = storeTransactionCurrencyCollection(builder, params.totalFees, nil); err != nil {
 		return nil, err
 	}
-	return builder.
+	txCell := builder.
 		MustStoreRef(stateUpdateCell).
 		MustStoreRef(descriptionCell).
-		EndCell(), nil
+		EndCell()
+	if err = validateBuiltTransactionCell(txCell, params.inMsg, params.outMsgs); err != nil {
+		return nil, fmt.Errorf("built transaction failed TL-B validation: %w", err)
+	}
+	return txCell, nil
 }
 
 func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cell.Cell, prev *PreparedAccount, next *builtTransactionAccount, outMessages []OutMessage, startLT, endLT uint64) error {
@@ -101,12 +106,36 @@ func fillTransactionExecutionResult(out *TransactionExecutionResult, txCell *cel
 	if err != nil {
 		return fmt.Errorf("failed to prepare next account state: %w", err)
 	}
+	if !next.state.IsValid {
+		// Keep the reference account's in-block storage context separate from
+		// the serialized account_none exposed by State and ShardAccount.
+		nextAccount.runtime.storageInfo.LastPaid = next.lastPaid
+		nextAccount.runtime.storageInfo.DuePayment = next.duePayment
+	}
+	// account_none has no field for the last transaction end LT. Keep it in
+	// the prepared lane so another transaction cannot overlap this one.
+	nextAccount.runtime.storageLT = endLT
+	if next.storageStatBound {
+		// Bind the emitted storage-stat dict to the state it describes, so the
+		// next transaction of this account can apply it incrementally instead
+		// of re-walking the whole state. transactionAccountStorageInfo derives
+		// the same cell, preferring the extra-currency-free stat form.
+		statRoot := next.storageCellForStat
+		if statRoot == nil {
+			statRoot = next.storageCell
+		}
+		if statRoot != nil {
+			nextAccount.runtime.accountStorageStat = next.storageStat
+			nextAccount.runtime.statBoundTo = statRoot.HashKey()
+		}
+	}
 
 	out.TransactionCell = txCell
 	out.NextAccount = nextAccount
 	out.OutMessages = outMessages
 	out.EndLT = endLT
 	out.AccountStorageStat = next.storageStat
+	out.StorageStatRecomputed = next.storageStatRecomputed
 	return nil
 }
 
@@ -200,13 +229,10 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 	}
 
 	gasLimit := params.computeGas.Limit
-	if params.msg != nil && params.msg.MsgType == tlb.MsgTypeExternalIn {
-		gasLimit = 0
-	}
 
 	var gasCredit *big.Int
 	if params.computeGas.Credit > 0 {
-		gasCredit = big.NewInt(params.computeGas.Credit)
+		gasCredit = bigint.FromInt64(params.computeGas.Credit)
 	}
 
 	computeSuccess := transactionComputeSucceeded(params.computeResult)
@@ -218,13 +244,13 @@ func buildTransactionComputePhase(params transactionBuildDescriptionParams) tlb.
 			AccountActivated: false,
 			GasFees:          tlb.FromNanoTON(params.gasFees),
 			Details: tlb.ComputePhaseVMDetails{
-				GasUsed:          big.NewInt(params.computeResult.GasUsed),
-				GasLimit:         big.NewInt(gasLimit),
+				GasUsed:          bigint.FromInt64(params.computeResult.GasUsed),
+				GasLimit:         bigint.FromInt64(gasLimit),
 				GasCredit:        gasCredit,
 				Mode:             0,
 				ExitCode:         int32(params.computeResult.ExitCode),
 				ExitArg:          transactionComputeExitArg(params.computeResult),
-				VMSteps:          params.computeResult.Steps,
+				VMSteps:          uint32(params.computeResult.Steps),
 				VMInitStateHash:  make([]byte, 32),
 				VMFinalStateHash: make([]byte, 32),
 			},

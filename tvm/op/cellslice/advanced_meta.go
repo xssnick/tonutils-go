@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -14,11 +13,10 @@ func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return SDBEGINSX() },
 		func() vm.OP { return SDBEGINSXQ() },
-		func() vm.OP { return CHASHI(0) },
-		func() vm.OP { return CDEPTHI(0) },
 		func() vm.OP { return CHASHIX() },
 		func() vm.OP { return CDEPTHIX() },
 	)
+	vm.ArgList = append(vm.ArgList, chashiOp, cdepthiOp)
 }
 
 func sdbeginsXOp(quiet bool) *helpers.SimpleOP {
@@ -71,64 +69,42 @@ func sdbeginsXOp(quiet bool) *helpers.SimpleOP {
 func SDBEGINSX() *helpers.SimpleOP  { return sdbeginsXOp(false) }
 func SDBEGINSXQ() *helpers.SimpleOP { return sdbeginsXOp(true) }
 
-func CHASHI(i int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("CHASHI %d", i)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xD768>>2, 14),
-		FixedSizeBits: 2,
-		MinVersion:    6,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(2)
-			if err != nil {
-				return err
-			}
-			i = int(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			cl, err := state.Stack.PopCell()
-			if err != nil {
-				return err
-			}
-			hash := cl.HashKey(i)
-			return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
-		},
-	}
-}
+var chashiOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0xD768>>2, 14)),
+	ArgBits:    2,
+	MinVersion: 6,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("CHASHI %d", int(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		cl, err := state.Stack.PopCell()
+		if err != nil {
+			return err
+		}
+		hash := cl.HashKeyAt(int(args))
+		return state.Stack.PushOwnedInt(new(big.Int).SetBytes(hash[:]))
+	},
+})
 
-func CDEPTHI(i int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("CDEPTHI %d", i)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xD76C>>2, 14),
-		FixedSizeBits: 2,
-		MinVersion:    6,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 2)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(2)
-			if err != nil {
-				return err
-			}
-			i = int(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			cl, err := state.Stack.PopCell()
-			if err != nil {
-				return err
-			}
-			return pushSmallInt(state, int64(cl.Depth(i)))
-		},
-	}
-}
+var cdepthiOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(helpers.UIntPrefix(0xD76C>>2, 14)),
+	ArgBits:    2,
+	MinVersion: 6,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("CDEPTHI %d", int(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		cl, err := state.Stack.PopCell()
+		if err != nil {
+			return err
+		}
+		return pushSmallInt(state, int64(cl.Depth(int(args))))
+	},
+})
+
+func CHASHI(i int) vm.OP { return vm.Bind(chashiOp, uint64(i)) }
+
+func CDEPTHI(i int) vm.OP { return vm.Bind(cdepthiOp, uint64(i)) }
 
 func CHASHIX() *helpers.SimpleOP {
 	return &helpers.SimpleOP{

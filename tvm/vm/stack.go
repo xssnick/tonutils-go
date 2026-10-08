@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -25,25 +26,8 @@ type Stack struct {
 	trace *cell.Trace
 }
 
-type StackCheckpoint struct {
-	elems []any
-	trace *cell.Trace
-}
-
-func (s *Stack) Checkpoint() StackCheckpoint {
-	return StackCheckpoint{
-		elems: s.elems,
-		trace: s.trace,
-	}
-}
-
-func (s *Stack) RestoreCheckpoint(cp StackCheckpoint) {
-	s.elems = cp.elems
-	s.trace = cp.trace
-}
-
-var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
-var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
+var maxTVMInt = new(big.Int).Sub(new(big.Int).Lsh(bigint.FromInt64(1), 256), bigint.FromInt64(1))
+var minTVMInt = new(big.Int).Neg(new(big.Int).Lsh(bigint.FromInt64(1), 256))
 
 const (
 	defaultStackCapacity = 16
@@ -58,8 +42,6 @@ var stackIntMinusOne = stackStaticInt(-1)
 var stackIntZero = stackStaticInt(0)
 var stackIntOne = stackStaticInt(1)
 
-const maxStackDepth = 1 << 16
-
 func NewStack() *Stack {
 	return newStackWithCap(defaultStackCapacity)
 }
@@ -73,7 +55,7 @@ func newStackWithCap(capacity int) *Stack {
 func makeStackStaticInts() [stackStaticIntCount]*big.Int {
 	var vals [stackStaticIntCount]*big.Int
 	for i := range vals {
-		vals[i] = big.NewInt(int64(stackStaticIntMin + i))
+		vals[i] = bigint.FromInt64(int64(stackStaticIntMin + i))
 	}
 	return vals
 }
@@ -85,22 +67,64 @@ func stackStaticInt(val int64) *big.Int {
 	return stackStaticInts[val-stackStaticIntMin]
 }
 
+// StaticInt returns the VM's shared immutable instance for a small integer, or
+// nil when val is outside the pooled range. Hosts building c7 (or any other
+// value handed to the VM) may use it instead of allocating a fresh big.Int.
+//
+// The result MUST NOT be mutated, and MUST NOT be handed to anything that
+// mutates a *big.Int in place. That discipline is what makes sharing safe:
+//   - Tuple.Index clones every *big.Int leaf, so every read of a c7 slot
+//     (State.GetParam, State.GetGlobal, INDEX/UNTUPLE/EXPLODE...) yields a
+//     private copy;
+//   - Stack.PopInt copies whenever isStaticStackInt reports the popped value is
+//     a pooled instance, because opcodes mutate their operands in place.
+func StaticInt(val int64) *big.Int {
+	return stackStaticInt(val)
+}
+
+// StaticUint is the unsigned form of StaticInt.
+func StaticUint(val uint64) *big.Int {
+	if val > uint64(stackStaticIntMax) {
+		return nil
+	}
+	return stackStaticInt(int64(val))
+}
+
 func (s *Stack) SetTrace(trace *cell.Trace) {
 	s.trace = trace
 	if trace == nil {
 		return
 	}
+	copier := stackValueCopier{trace: trace}
 	for i, val := range s.elems {
-		s.elems[i] = BindValueTrace(val, trace)
+		s.elems[i] = copier.value(val)
 	}
+}
+
+// stackValueCopier snapshots or binds tuple DAGs without expanding shared
+// subtuples. A nil trace snapshots cursors; a non-nil trace also binds them.
+type stackValueCopier struct {
+	trace  *cell.Trace
+	tuples map[tuple.Tuple]tuple.Tuple
 }
 
 func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 	if trace == nil {
 		return t
 	}
-	if t.HasBindingID(trace) {
+	copier := stackValueCopier{trace: trace}
+	return copier.tuple(t)
+}
+
+func (c *stackValueCopier) tuple(t tuple.Tuple) tuple.Tuple {
+	if c.trace != nil && t.HasBindingID(c.trace) {
 		return t
+	}
+	if !t.NeedsValueSnapshot() {
+		return t
+	}
+	if copied, ok := c.tuples[t]; ok {
+		return copied
 	}
 
 	var vals []any
@@ -109,7 +133,7 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		if err != nil {
 			panic(err)
 		}
-		bound := BindValueTrace(val, trace)
+		bound := c.value(val)
 		if vals == nil && sameStackValue(bound, val) {
 			continue
 		}
@@ -119,10 +143,83 @@ func bindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
 		}
 		vals[i] = bound
 	}
+	var dst tuple.Tuple
 	if vals == nil {
-		return t.WithBindingID(trace)
+		dst = t.WithBindingID(c.trace)
+	} else {
+		dst = tuple.NewTupleOwnedBound(vals, c.trace)
 	}
-	return tuple.NewTupleOwnedBound(vals, trace)
+	if c.tuples == nil {
+		c.tuples = make(map[tuple.Tuple]tuple.Tuple)
+	}
+	c.tuples[t] = dst
+	return dst
+}
+
+func snapshotTupleValue(t tuple.Tuple) tuple.Tuple {
+	copier := stackValueCopier{}
+	return copier.tuple(t)
+}
+
+func (c *stackValueCopier) value(val any) any {
+	switch x := val.(type) {
+	case *big.Int:
+		if x == nil {
+			return nil
+		}
+		return x
+	case *cell.Cell:
+		return x
+	case *cell.Slice:
+		if x == nil {
+			return x
+		}
+		combined := cell.CombineTraces(x.Trace(), c.trace)
+		if c.trace != nil && combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
+	case *cell.Builder:
+		if x == nil {
+			return x
+		}
+		combined := cell.CombineTraces(x.Trace(), c.trace)
+		if c.trace != nil && combined == x.Trace() {
+			return x
+		}
+		return x.Copy().SetTrace(combined)
+	case tuple.Tuple:
+		return c.tuple(x)
+	default:
+		return val
+	}
+}
+
+// bindClonedValueTrace binds a value returned by tuple.Index. Direct mutable
+// leaves have already been copied by Index and can be updated in place; nested
+// tuples still go through the defensive recursive binder.
+func bindClonedValueTrace(val any, trace *cell.Trace) any {
+	if trace == nil {
+		return val
+	}
+
+	switch x := val.(type) {
+	case *cell.Slice:
+		if x != nil {
+			x.SetTrace(cell.CombineTraces(x.Trace(), trace))
+		}
+		return x
+	case *cell.Builder:
+		if x == nil {
+			return x
+		}
+		x.SetTrace(cell.CombineTraces(x.Trace(), trace))
+		return x
+	case tuple.Tuple:
+		return bindTupleTrace(x, trace)
+	default:
+		return val
+	}
 }
 
 func sameStackValue(a, b any) bool {
@@ -148,146 +245,43 @@ func copyTuplePrefix(dst []any, src tuple.Tuple, end int) {
 
 // BindValueTrace returns val ready to live on a stack or in c7 bound to the
 // given cell trace: slices and builders are copied with the trace attached
-// (snapshotting their cursor), tuples are rebound recursively and typed nil
-// pointers collapse to plain nil, except a null slice reference whose slice
-// tag is observable in legacy TVM behavior. Values that already carry the
-// trace are returned as-is. A nil trace returns val unchanged.
+// (snapshotting their cursor), and tuples are rebound recursively. Typed nil
+// TVM references retain their stack type. Values that already carry the trace
+// are returned as-is. A nil trace returns val unchanged.
 func BindValueTrace(val any, trace *cell.Trace) any {
 	if trace == nil {
 		return val
 	}
 
-	switch x := val.(type) {
-	case *big.Int:
-		// normalize typed nils coming from user-built tuples
-		if x == nil {
-			return nil
-		}
-		return x
-	case *cell.Cell:
-		if x == nil {
-			return nil
-		}
-		return x
-	case *cell.Slice:
-		if x == nil {
-			return x
-		}
-		combined := cell.CombineTraces(x.Trace(), trace)
-		if combined == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(combined)
-	case *cell.Builder:
-		if x == nil {
-			return nil
-		}
-		combined := cell.CombineTraces(x.Trace(), trace)
-		if combined == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(combined)
-	case tuple.Tuple:
-		return bindTupleTrace(x, trace)
-	default:
-		return val
-	}
-}
-
-func unbindTupleTrace(t tuple.Tuple, trace *cell.Trace) tuple.Tuple {
-	if trace == nil || t.IsNull() {
-		return t
-	}
-
-	var vals []any
-	for i := 0; i < t.Len(); i++ {
-		val, err := t.RawIndex(i)
-		if err != nil {
-			panic(err)
-		}
-		unbound := unbindValueTrace(val, trace)
-		if vals == nil && sameStackValue(unbound, val) {
-			continue
-		}
-		if vals == nil {
-			vals = make([]any, t.Len())
-			copyTuplePrefix(vals, t, i)
-		}
-		vals[i] = unbound
-	}
-	if vals == nil {
-		return t.WithBindingID(nil)
-	}
-	return tuple.NewTupleOwned(vals)
-}
-
-func unbindValueTrace(val any, trace *cell.Trace) any {
-	if trace == nil {
-		return val
-	}
-
-	switch x := val.(type) {
-	case *cell.Cell:
-		if x == nil {
-			return nil
-		}
-		return x.WithTrace(x.Trace().WithoutTrace(trace))
-	case *cell.Slice:
-		if x == nil {
-			return x
-		}
-		next := x.Trace().WithoutTrace(trace)
-		if next == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(next)
-	case *cell.Builder:
-		if x == nil {
-			return nil
-		}
-		next := x.Trace().WithoutTrace(trace)
-		if next == x.Trace() {
-			return x
-		}
-		return x.Copy().SetTrace(next)
-	case tuple.Tuple:
-		return unbindTupleTrace(x, trace)
-	default:
-		return val
-	}
+	copier := stackValueCopier{trace: trace}
+	return copier.value(val)
 }
 
 func (s *Stack) WithoutTrace(trace *cell.Trace) *Stack {
 	if s == nil || trace == nil {
 		return s
 	}
-	cp := &Stack{
-		elems: make([]any, len(s.elems)),
-		trace: s.trace.WithoutTrace(trace),
-	}
-	for i, val := range s.elems {
-		cp.elems[i] = unbindValueTrace(val, trace)
-	}
-	return cp
+	copier := continuationTraceCopier{trace: trace}
+	return copier.stack(s)
 }
 
 func shareStackValue(val any, trace *cell.Trace) (any, error) {
 	switch t := val.(type) {
 	case *big.Int:
 		if t == nil {
+			// C++ Stack::push_int requires a non-null RefInt256. Treat a Go
+			// typed nil at the host boundary as absence, not as the malformed
+			// t_int/null StackEntry constructible only through generic C++ APIs.
 			return nil, nil
 		}
 		return canonicalStackInt(t), nil
 	case NaN:
 		return NaN{}, nil
 	case *cell.Cell:
-		if t == nil {
-			return nil, nil
-		}
 		return t, nil
 	case *cell.Builder:
 		if t == nil {
-			return nil, nil
+			return t, nil
 		}
 		cp := t.Copy()
 		if trace != nil {
@@ -304,6 +298,9 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		}
 		return cp, nil
 	case tuple.Tuple:
+		if trace == nil {
+			return snapshotTupleValue(t), nil
+		}
 		return bindTupleTrace(t, trace), nil
 	case nil:
 		return nil, nil
@@ -312,8 +309,33 @@ func shareStackValue(val any, trace *cell.Trace) (any, error) {
 		if !ok {
 			return nil, vmerr.Error(vmerr.CodeTypeCheck, "type check failed: "+reflect.TypeOf(val).String())
 		}
+		if isNilContinuationValue(c) {
+			return nullContinuationValue, nil
+		}
 		return c.Copy(), nil
 	}
+}
+
+// isNilContinuationValue is the reflection fallback behind IsNullContinuation,
+// used directly where only a typed nil pointer counts as null and the shared
+// nullContinuation instance does not.
+func isNilContinuationValue(cont Continuation) bool {
+	v := reflect.ValueOf(cont)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
+}
+
+func canonicalOwnedContinuation(cont Continuation) Continuation {
+	// nullContinuation is unexported and has a single package-level instance,
+	// so every null reference canonicalizes to exactly that instance.
+	if IsNullContinuation(cont) {
+		return nullContinuationValue
+	}
+	return cont
 }
 
 func (s *Stack) PushBool(val bool) error {
@@ -324,10 +346,6 @@ func (s *Stack) PushBool(val bool) error {
 }
 
 func (s *Stack) pushStaticInt(val *big.Int) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	s.elems = append(s.elems, val)
 	return nil
 }
@@ -344,7 +362,7 @@ func canonicalStackInt(val *big.Int) *big.Int {
 			return stackIntOne
 		}
 	}
-	return new(big.Int).Set(val)
+	return bigint.Set(val)
 }
 
 func canonicalOwnedStackInt(val *big.Int) *big.Int {
@@ -392,11 +410,8 @@ func (s *Stack) PushBuilder(val *cell.Builder) error {
 // PushOwnedBuilder pushes a builder the caller no longer shares elsewhere.
 // Unlike PushBuilder, it binds stack trace in-place and skips a defensive copy.
 func (s *Stack) PushOwnedBuilder(val *cell.Builder) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
 	if val == nil {
-		s.elems = append(s.elems, nil)
+		s.elems = append(s.elems, val)
 		return nil
 	}
 	if s.trace != nil {
@@ -413,9 +428,6 @@ func (s *Stack) PushSlice(val *cell.Slice) error {
 // PushOwnedSlice pushes a slice the caller no longer shares elsewhere.
 // Unlike PushSlice, it binds stack trace in-place and skips a defensive copy.
 func (s *Stack) PushOwnedSlice(val *cell.Slice) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
 	if val == nil {
 		s.elems = append(s.elems, val)
 		return nil
@@ -431,8 +443,26 @@ func (s *Stack) PushCell(val *cell.Cell) error {
 	return s.PushAny(val)
 }
 
+func (s *Stack) PushMaybeCell(val *cell.Cell) error {
+	if val == nil {
+		return s.PushAny(nil)
+	}
+	return s.PushCell(val)
+}
+
 func (s *Stack) PushContinuation(val Continuation) error {
+	if val == nil {
+		s.elems = append(s.elems, nullContinuationValue)
+		return nil
+	}
 	return s.PushAny(val)
+}
+
+// PushOwnedContinuation pushes a continuation the caller no longer shares,
+// avoiding the defensive continuation copy made by PushContinuation.
+func (s *Stack) PushOwnedContinuation(val Continuation) error {
+	s.elems = append(s.elems, canonicalOwnedContinuation(val))
+	return nil
 }
 
 func fitsTVMInt(val *big.Int) bool {
@@ -474,14 +504,10 @@ func (s *Stack) PushSmallInt(val int64) error {
 	if static := stackStaticInt(val); static != nil {
 		return s.pushStaticInt(static)
 	}
-	return s.PushOwnedInt(big.NewInt(val))
+	return s.PushOwnedInt(bigint.FromInt64(val))
 }
 
 func (s *Stack) PushAny(val any) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	var err error
 	val, err = shareStackValue(val, s.trace)
 	if err != nil {
@@ -494,9 +520,41 @@ func (s *Stack) PushAny(val any) error {
 
 // PushOwnedValue pushes a value that was already removed from this VM stack.
 func (s *Stack) PushOwnedValue(val any) error {
-	if len(s.elems) >= maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
+	if v, ok := val.(*big.Int); ok &&
+		(v == stackIntMinusOne || v == stackIntZero || v == stackIntOne) {
+		s.elems = append(s.elems, v)
+		return nil
 	}
+
+	return s.pushOwnedValueChecked(val)
+}
+
+func (s *Stack) pushOwnedValueChecked(val any) error {
+	switch v := val.(type) {
+	case nil, NaN:
+	case *big.Int:
+		if v == nil {
+			// Match PushAny's host-boundary convention; TVM execution never
+			// produces a null RefInt256 through Stack::push_int.
+			val = nil
+		} else if !fitsTVMInt(v) {
+			return vmerr.Error(vmerr.CodeIntOverflow)
+		} else {
+			val = canonicalOwnedStackInt(v)
+		}
+	case *cell.Cell:
+	case *cell.Builder:
+	case *cell.Slice:
+		// Typed nil TVM references retain their stack type.
+	case tuple.Tuple:
+	case Continuation:
+		if isNilContinuationValue(v) {
+			return vmerr.Error(vmerr.CodeTypeCheck, "nil continuation")
+		}
+	default:
+		return vmerr.Error(vmerr.CodeTypeCheck, "unsupported stack value")
+	}
+
 	s.elems = append(s.elems, val)
 	return nil
 }
@@ -508,6 +566,7 @@ func (s *Stack) SplitTop(top, drop int) (*Stack, error) {
 	}
 
 	newStack := newStackWithCap(top)
+	newStack.trace = s.trace
 	if top != 0 {
 		if err := newStack.MoveFrom(s, top); err != nil {
 			return nil, err
@@ -531,10 +590,6 @@ func (s *Stack) MoveFrom(from *Stack, num int) error {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 
-	if len(s.elems)+num > maxStackDepth {
-		return vmerr.Error(vmerr.CodeStackOverflow)
-	}
-
 	fromStart := len(from.elems) - num
 	s.elems = append(s.elems, from.elems[fromStart:]...)
 	from.elems = from.elems[:fromStart]
@@ -554,15 +609,16 @@ func (s *Stack) PushAt(at int) error {
 }
 
 func (s *Stack) Drop(num int) error {
-	if len(s.elems) < num {
+	if uint(num) > uint(len(s.elems)) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
+
 	s.elems = s.elems[:len(s.elems)-num]
 	return nil
 }
 
 func (s *Stack) DropMany(num, offs int) error {
-	if num < 0 || offs < 0 || len(s.elems) < num+offs {
+	if uint(num) > uint(len(s.elems)) || uint(offs) > uint(len(s.elems)-num) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	if num == 0 {
@@ -576,9 +632,10 @@ func (s *Stack) DropMany(num, offs int) error {
 }
 
 func (s *Stack) DropAfter(num int) error {
-	if len(s.elems) < num {
+	if uint(num) > uint(len(s.elems)) {
 		return vmerr.Error(vmerr.CodeStackUnderflow)
 	}
+
 	s.elems = s.elems[len(s.elems)-num:]
 	return nil
 }
@@ -613,7 +670,7 @@ func (s *Stack) PopInt() (*big.Int, error) {
 		return nil, nil
 	case *big.Int:
 		if isStaticStackInt(v) {
-			return new(big.Int).Set(v), nil
+			return bigint.Set(v), nil
 		}
 		return v, nil
 	default:
@@ -684,7 +741,7 @@ func (s *Stack) PopCell() (*cell.Cell, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(*cell.Cell); !ok {
+	if v, ok := e.(*cell.Cell); !ok || v == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -699,7 +756,7 @@ func (s *Stack) PopMaybeCell() (*cell.Cell, error) {
 	if e == nil {
 		return nil, nil
 	}
-	if v, ok := e.(*cell.Cell); !ok {
+	if v, ok := e.(*cell.Cell); !ok || v == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -711,7 +768,7 @@ func (s *Stack) PopContinuation() (Continuation, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(Continuation); !ok {
+	if v, ok := e.(Continuation); !ok || v == nullContinuationValue {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -723,7 +780,7 @@ func (s *Stack) PopBuilder() (*cell.Builder, error) {
 	if err != nil {
 		return nil, err
 	}
-	if v, ok := e.(*cell.Builder); !ok {
+	if v, ok := e.(*cell.Builder); !ok || v == nil {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	} else {
 		return v, nil
@@ -747,7 +804,7 @@ func (s *Stack) PopTuple() (tuple.Tuple, error) {
 	if err != nil {
 		return tuple.Tuple{}, err
 	}
-	if v, ok := e.(tuple.Tuple); ok {
+	if v, ok := e.(tuple.Tuple); ok && !v.IsNull() {
 		return v, nil
 	}
 	return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple")
@@ -759,7 +816,7 @@ func (s *Stack) PopTupleRange(max int, min ...int) (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	t, ok := e.(tuple.Tuple)
-	if !ok {
+	if !ok || t.IsNull() {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 	}
 
@@ -784,7 +841,7 @@ func (s *Stack) PopMaybeTupleRange(max int) (*tuple.Tuple, error) {
 		return nil, nil
 	}
 	v, ok := e.(tuple.Tuple)
-	if !ok {
+	if !ok || v.IsNull() {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck, "not a tuple of valid size")
 	}
 	if max >= 0 && v.Len() > max {
@@ -798,7 +855,7 @@ func (s *Stack) PushTuple(t tuple.Tuple) error {
 }
 
 func (s *Stack) PushMaybeTuple(t *tuple.Tuple) error {
-	if t == nil {
+	if t == nil || t.IsNull() {
 		return s.PushAny(nil)
 	}
 	return s.PushAny(*t)
@@ -895,10 +952,25 @@ func (s *Stack) String() string {
 			}
 		case *cell.Builder:
 			typ = "builder"
-			val = x.WithoutTrace().EndCell().Dump()
+			if x == nil {
+				val = "null"
+			} else {
+				val = x.WithoutTrace().EndCell().Dump()
+			}
 		case *cell.Cell:
 			typ = "cell"
-			val = x.WithoutTrace().Dump()
+			if x == nil {
+				val = "null"
+			} else {
+				val = x.WithoutTrace().Dump()
+			}
+		case Continuation:
+			typ = "continuation"
+			if x == nullContinuationValue {
+				val = "null"
+			} else {
+				val = fmt.Sprintf("%T", x)
+			}
 		}
 
 		fmt.Fprintf(&res, "s%d = %s [%s]\n", i, val, typ)
@@ -935,7 +1007,7 @@ func (s *Stack) Snapshot() *Stack {
 
 func (s *Stack) FromTop(offset int) (int, error) {
 	stackLen := len(s.elems)
-	if stackLen < offset {
+	if uint(offset) >= uint(stackLen) {
 		return 0, vmerr.Error(vmerr.CodeStackUnderflow)
 	}
 	return stackLen - 1 - offset, nil

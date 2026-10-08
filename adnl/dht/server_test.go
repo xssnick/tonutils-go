@@ -562,10 +562,10 @@ func TestServer_HandleMessage_ReversePingContIgnored(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()
 
-	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	server.gateway.(*MockGateway).setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		t.Fatalf("unexpected outgoing reverse ping to %s", addr)
 		return nil, nil
-	}
+	})
 
 	err := server.handleMessage(&mockPeer{}, &adnl.MessageCustom{
 		Data: RequestReversePingCont{
@@ -754,7 +754,7 @@ func TestServer_StoreAddressReturnsADNLID(t *testing.T) {
 	}
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	addrList := address.List{
 		Addresses: []address.Address{
@@ -799,10 +799,10 @@ func TestServer_StoreAddressSucceedsWithOnlyLocalStore(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()
 
-	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	server.gateway.(*MockGateway).setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		t.Fatalf("unexpected outgoing DHT connection to %s", addr)
 		return nil, nil
-	}
+	})
 
 	pub, key, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -882,10 +882,10 @@ func TestServer_StoreOverlayNodesSucceedsWithOnlyLocalStore(t *testing.T) {
 	server := newTestServer(t)
 	defer server.Close()
 
-	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	server.gateway.(*MockGateway).setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		t.Fatalf("unexpected outgoing DHT connection to %s", addr)
 		return nil, nil
-	}
+	})
 
 	overlayKey := []byte("test-overlay-local")
 	nodes, overlayID, _ := newTestOverlayNodes(t, overlayKey)
@@ -934,7 +934,7 @@ func TestServer_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
 	nodes, overlayID, dhtKey := newTestOverlayNodes(t, overlayKey)
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	stored, gotID, err := server.StoreOverlayNodes(context.Background(), overlayKey, nodes, time.Minute)
 	if err != nil {
@@ -1047,7 +1047,7 @@ func TestServer_RepublishOwnedValueEvenWhenNotClosest(t *testing.T) {
 	}
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	server.mx.Lock()
 	server.ourValues[string(keyID)] = cloneValue(&val)
@@ -1071,7 +1071,7 @@ func TestServer_RepublishStoredSignatureValueWhenClosest(t *testing.T) {
 	}
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	if err := server.store.Put(keyID, &val); err != nil {
 		t.Fatal(err)
@@ -1100,7 +1100,7 @@ func TestServer_RepublishStoredValuesIncrementally(t *testing.T) {
 	}
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	if err := server.store.Put(firstKeyID, &firstValue); err != nil {
 		t.Fatal(err)
@@ -1138,7 +1138,7 @@ func TestServer_RepublishStoredSkipsFarValuesWithoutStarvingTick(t *testing.T) {
 	}
 
 	var storeCalls int32
-	server.gateway.(*MockGateway).reg = dhtStoreQueryMock(t, &storeCalls)
+	server.gateway.(*MockGateway).setReg(dhtStoreQueryMock(t, &storeCalls))
 
 	if err := server.store.Put(farKeyID, &nearValue); err != nil {
 		t.Fatal(err)
@@ -1176,7 +1176,7 @@ func TestServer_FillBucketsRunsFindNode(t *testing.T) {
 	}
 
 	var findNodeCalls int32
-	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	server.gateway.(*MockGateway).setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		return MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				raw, ok := req.(tl.Raw)
@@ -1199,7 +1199,7 @@ func TestServer_FillBucketsRunsFindNode(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	server.fillBuckets()
 	if got := atomic.LoadInt32(&findNodeCalls); got == 0 {
@@ -1263,7 +1263,7 @@ func TestServer_StartupFillBucketsRunsBroadFindNode(t *testing.T) {
 	}
 
 	var findNodeCalls int32
-	server.gateway.(*MockGateway).reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	server.gateway.(*MockGateway).setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		return MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				raw, ok := req.(tl.Raw)
@@ -1286,7 +1286,7 @@ func TestServer_StartupFillBucketsRunsBroadFindNode(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	server.startupFillBuckets()
 	if got := atomic.LoadInt32(&findNodeCalls); got < 2 {
@@ -1594,7 +1594,7 @@ func TestServer_RefreshNodesUsesParallelWorkers(t *testing.T) {
 			ReinitDate: 1,
 		},
 	}
-	gw.reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	gw.setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				cur := atomic.AddInt32(&current, 1)
@@ -1627,7 +1627,7 @@ func TestServer_RefreshNodesUsesParallelWorkers(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	server, err := NewServer(gw, key, nil, nil)
 	if err != nil {

@@ -35,7 +35,7 @@ func TestWorkchainDescrLoadBasic(t *testing.T) {
 
 func TestWorkchainDescrLoadExtended(t *testing.T) {
 	var descr WorkchainDescr
-	if err := LoadFromCell(&descr, testExtendedWorkchainDescrCell(0xa7).MustBeginParse()); err != nil {
+	if err := LoadFromCell(&descr, testExtendedWorkchainDescrV2Cell().MustBeginParse()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,6 +56,64 @@ func TestWorkchainDescrLoadExtended(t *testing.T) {
 	}
 	if format.MinAddrLen != 64 || format.MaxAddrLen != 256 || format.AddrLenStep != 32 || format.WorkchainTypeID != 1 {
 		t.Fatalf("unexpected extended format: %+v", format)
+	}
+
+	v2, ok := descr.Descr.(WorkchainDescrV2)
+	if !ok {
+		t.Fatalf("unexpected descriptor type %T", descr.Descr)
+	}
+	if v2.SplitMergeTimings.SplitMergeDelay != 20 ||
+		v2.SplitMergeTimings.SplitMergeInterval != 20 ||
+		v2.SplitMergeTimings.MinSplitMergeInterval != 10 ||
+		v2.SplitMergeTimings.MaxSplitMergeDelay != 1000 ||
+		v2.PersistentStateSplitDepth != 5 {
+		t.Fatalf("unexpected v2 fields: %+v", v2)
+	}
+}
+
+func TestWorkchainDescrV2RoundTrip(t *testing.T) {
+	want := WorkchainDescr{Descr: WorkchainDescrV2{
+		WorkchainDescrFields: WorkchainDescrFields{
+			EnabledSince:      123,
+			ActualMinSplit:    0,
+			MinSplit:          0,
+			MaxSplit:          4,
+			Basic:             true,
+			Active:            true,
+			AcceptMsgs:        true,
+			ZeroStateRootHash: make([]byte, 32),
+			ZeroStateFileHash: make([]byte, 32),
+			Version:           7,
+			Format: WorkchainFormatBasic{
+				VMVersion: -1,
+				VMMode:    3,
+			},
+		},
+		SplitMergeTimings: WorkchainSplitMergeTimings{
+			SplitMergeDelay:       20,
+			SplitMergeInterval:    20,
+			MinSplitMergeInterval: 10,
+			MaxSplitMergeDelay:    1000,
+		},
+		PersistentStateSplitDepth: 5,
+	}}
+
+	encoded, err := ToCell(&want)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got WorkchainDescr
+	if err = LoadFromCell(&got, encoded.MustBeginParse()); err != nil {
+		t.Fatal(err)
+	}
+
+	v2, ok := got.Descr.(WorkchainDescrV2)
+	if !ok {
+		t.Fatalf("unexpected descriptor type %T", got.Descr)
+	}
+	if v2.PersistentStateSplitDepth != 5 || v2.SplitMergeTimings.MaxSplitMergeDelay != 1000 {
+		t.Fatalf("unexpected round-trip descriptor: %+v", v2)
 	}
 }
 
@@ -124,5 +182,17 @@ func testExtendedWorkchainDescrCell(tag uint64) *cell.Cell {
 		MustStoreUInt(256, 12).
 		MustStoreUInt(32, 12).
 		MustStoreUInt(1, 32).
+		EndCell()
+}
+
+func testExtendedWorkchainDescrV2Cell() *cell.Cell {
+	return cell.BeginCell().
+		MustStoreBuilder(testExtendedWorkchainDescrCell(0xa7).ToBuilder()).
+		MustStoreUInt(0, 4).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(10, 32).
+		MustStoreUInt(1000, 32).
+		MustStoreUInt(5, 8).
 		EndCell()
 }

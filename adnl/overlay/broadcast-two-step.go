@@ -6,9 +6,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/xssnick/raptorq"
@@ -19,13 +21,20 @@ import (
 const DefaultTwoStepBroadcastMaxActiveStreams = 128
 const DefaultTwoStepBroadcastMaxActiveBytes = 256 << 20
 const DefaultTwoStepDeliveredCacheSize = 4096
+const DefaultTwoStepRelayQueueSize = 1024
+const DefaultTwoStepRelayConcurrency = 64
+const DefaultTwoStepRelayMaxActiveBytes int64 = DefaultTwoStepBroadcastMaxActiveBytes
+
+const DefaultTwoStepRelayPeerTimeout = 750 * time.Millisecond
 
 const broadcastTwoStepDateSkew = 20 * time.Second
 const broadcastTwoStepStreamTTL = 25 * time.Second
 
 type broadcastTwoStepStream struct {
 	decoder           *raptorq.Decoder
-	seenParts         map[uint32]struct{}
+	decodeBuffer      []byte
+	seenParts         map[uint32][32]byte
+	admission         *broadcastAdmission
 	budgetBytes       int64
 	date              uint32
 	dataHash          []byte
@@ -36,9 +45,23 @@ type broadcastTwoStepStream struct {
 	trusted           bool
 	extra             []byte
 	rebroadcastedPart bool
-	delivered         bool
 	lastMessageAt     time.Time
 	mx                sync.Mutex
+	// removed is set under state.mx before the stream leaves state.streams, so
+	// a lookup can release state.mx before taking stream.mx and still notice an
+	// eviction that happened while it waited.
+	removed atomic.Bool
+}
+
+// lockLiveTwoStepStream takes stream.mx and reports whether the stream is still
+// registered. A false return leaves the mutex unlocked.
+func lockLiveTwoStepStream(stream *broadcastTwoStepStream) bool {
+	stream.mx.Lock()
+	if stream.removed.Load() {
+		stream.mx.Unlock()
+		return false
+	}
+	return true
 }
 
 type broadcastTwoStepIDKey [32]byte
@@ -53,10 +76,295 @@ type BroadcastTwoStepStats struct {
 	DeliveredCacheHitsTotal uint64
 }
 
+// BroadcastTwoStepRelayStats is a per-receiver snapshot of asynchronous
+// two-step peer fanout. All totals count peer sends, not broadcasts.
+type BroadcastTwoStepRelayStats struct {
+	QueueDepth         int
+	ActiveBytes        int64
+	EnqueuedTotal      uint64
+	QueueFullTotal     uint64
+	ByteFullTotal      uint64
+	ClosedTotal        uint64
+	CanceledTotal      uint64
+	PrepareFailedTotal uint64
+	SentTotal          uint64
+	FailedTotal        uint64
+	TimedOutTotal      uint64
+}
+
+type broadcastTwoStepRelayTask struct {
+	peer    BroadcastPeer
+	payload *broadcastTwoStepRelayPayload
+}
+
+type broadcastTwoStepRelayPayload struct {
+	message tl.Serializable
+	body    *PreparedBroadcastMessage
+	bytes   int64
+	refs    atomic.Int64
+	state   *BroadcastFECRelayState
+	fec     bool
+}
+
+type broadcastTwoStepRelaySubmitStatus uint8
+
+const (
+	broadcastTwoStepRelayQueued broadcastTwoStepRelaySubmitStatus = iota
+	broadcastTwoStepRelayQueueFull
+	broadcastTwoStepRelayClosed
+)
+
+// broadcastTwoStepRelayDispatcher owns a fixed worker pool, also reused by
+// ordinary FEC and simple relays. Peer sends are
+// bounded by queue slots, while shared serialized bodies are independently
+// bounded by bytes so large broadcasts cannot hide behind small task objects.
+type broadcastTwoStepRelayDispatcher struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
+	queue          chan broadcastTwoStepRelayTask
+	ordinary       *broadcastOrdinaryRelayScheduler
+	peerTimeout    time.Duration
+	maxActiveBytes int64
+
+	closed   bool
+	submitMx sync.RWMutex
+	close    sync.Once
+	workers  sync.WaitGroup
+
+	enqueued          atomic.Uint64
+	queueFull         atomic.Uint64
+	byteFull          atomic.Uint64
+	closedSubmissions atomic.Uint64
+	canceled          atomic.Uint64
+	prepareFailed     atomic.Uint64
+	sent              atomic.Uint64
+	failed            atomic.Uint64
+	timedOut          atomic.Uint64
+	activeBytes       atomic.Int64
+}
+
+func newBroadcastRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration, ordinary bool) *broadcastTwoStepRelayDispatcher {
+	if queueSize < 1 {
+		queueSize = DefaultTwoStepRelayQueueSize
+	}
+	if concurrency < 1 {
+		concurrency = DefaultTwoStepRelayConcurrency
+	}
+	if peerTimeout <= 0 {
+		peerTimeout = DefaultTwoStepRelayPeerTimeout
+	}
+	if maxActiveBytes < 1 {
+		maxActiveBytes = DefaultTwoStepRelayMaxActiveBytes
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &broadcastTwoStepRelayDispatcher{
+		ctx:            ctx,
+		cancel:         cancel,
+		peerTimeout:    peerTimeout,
+		maxActiveBytes: maxActiveBytes,
+	}
+	if ordinary {
+		d.ordinary = &broadcastOrdinaryRelayScheduler{
+			peers:        make(map[broadcastExternalPeerIDKey]*broadcastOrdinaryRelayPeer),
+			ready:        make(chan *broadcastOrdinaryRelayPeer, queueSize),
+			slots:        make([]broadcastOrdinaryRelaySlot, queueSize),
+			perPeerLimit: queueSize / max(2, concurrency),
+		}
+		for index := range d.ordinary.slots {
+			d.ordinary.slots[index].next = index + 1
+		}
+		d.ordinary.slots[queueSize-1].next = -1
+	} else {
+		d.queue = make(chan broadcastTwoStepRelayTask, queueSize)
+	}
+	d.workers.Add(concurrency)
+	for range concurrency {
+		go d.runWorker()
+	}
+	return d
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Submit(task broadcastTwoStepRelayTask) broadcastTwoStepRelaySubmitStatus {
+	d.submitMx.RLock()
+	defer d.submitMx.RUnlock()
+
+	if d.closed {
+		d.closedSubmissions.Add(1)
+		if task.payload != nil && task.payload.state != nil {
+			task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+		}
+		d.releasePayload(task.payload)
+		return broadcastTwoStepRelayClosed
+	}
+
+	queued := false
+	if d.ordinary != nil {
+		queued = d.ordinary.submit(task)
+	} else {
+		select {
+		case d.queue <- task:
+			queued = true
+		default:
+		}
+	}
+	if queued {
+		d.enqueued.Add(1)
+		return broadcastTwoStepRelayQueued
+	}
+
+	d.queueFull.Add(1)
+	if task.payload.state != nil {
+		task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+	}
+	d.releasePayload(task.payload)
+	return broadcastTwoStepRelayQueueFull
+}
+
+func (d *broadcastTwoStepRelayDispatcher) reservePayload(message tl.Serializable, body *PreparedBroadcastMessage, refs int) (*broadcastTwoStepRelayPayload, bool) {
+	// The slice retains its complete backing allocation while any peer task is
+	// alive, so charge capacity rather than only the serialized length.
+	bodyBytes := int64(cap(body.Body()))
+	if frame := body.frame.Load(); frame != nil {
+		bodyBytes += int64(cap(frame.message.Wire())) + int64(cap(frame.overlayID))
+	}
+	for {
+		active := d.activeBytes.Load()
+		if bodyBytes > d.maxActiveBytes || active > d.maxActiveBytes-bodyBytes {
+			d.byteFull.Add(uint64(refs))
+			return nil, false
+		}
+		if d.activeBytes.CompareAndSwap(active, active+bodyBytes) {
+			break
+		}
+	}
+
+	payload := &broadcastTwoStepRelayPayload{
+		message: message,
+		body:    body,
+		bytes:   bodyBytes,
+	}
+	payload.refs.Store(int64(refs))
+	return payload, true
+}
+
+func (d *broadcastTwoStepRelayDispatcher) releasePayload(payload *broadcastTwoStepRelayPayload) {
+	if payload != nil && payload.refs.Add(-1) == 0 {
+		d.activeBytes.Add(-payload.bytes)
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Close() {
+	d.close.Do(func() {
+		d.submitMx.Lock()
+		d.closed = true
+		d.cancel()
+		d.submitMx.Unlock()
+
+		d.workers.Wait()
+		if d.ordinary != nil {
+			for _, task := range d.ordinary.drain() {
+				d.canceled.Add(1)
+				task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+				d.releasePayload(task.payload)
+			}
+			return
+		}
+		for {
+			select {
+			case task := <-d.queue:
+				d.canceled.Add(1)
+				if task.payload.state != nil {
+					task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+				}
+				d.releasePayload(task.payload)
+			default:
+				return
+			}
+		}
+	})
+}
+
+func (d *broadcastTwoStepRelayDispatcher) runWorker() {
+	defer d.workers.Done()
+
+	if d.ordinary != nil {
+		d.runOrdinaryWorker()
+		return
+	}
+
+	for {
+		// Give shutdown priority over queued work. A task accepted before Close
+		// may be abandoned, but an in-flight peer gets its context cancelled and
+		// Close waits for every worker to return.
+		select {
+		case <-d.ctx.Done():
+			return
+		default:
+		}
+
+		select {
+		case <-d.ctx.Done():
+			return
+		case task := <-d.queue:
+			d.send(task)
+		}
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) send(task broadcastTwoStepRelayTask) {
+	defer d.releasePayload(task.payload)
+
+	ctx, cancel := context.WithTimeout(d.ctx, d.peerTimeout)
+	err := SendPreparedBroadcast(ctx, task.peer, task.payload.message, task.payload.body)
+	cancel()
+	if err == nil {
+		if task.payload.state != nil {
+			task.payload.state.addRelayStats(task.payload.fec, 1, 0)
+		}
+		d.sent.Add(1)
+		return
+	}
+
+	if task.payload.state != nil {
+		task.payload.state.addRelayStats(task.payload.fec, 0, 1)
+	}
+	d.failed.Add(1)
+	if errors.Is(err, context.Canceled) && d.ctx.Err() != nil {
+		d.canceled.Add(1)
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		d.timedOut.Add(1)
+	}
+}
+
+func (d *broadcastTwoStepRelayDispatcher) Stats() BroadcastTwoStepRelayStats {
+	queueDepth := len(d.queue)
+	if d.ordinary != nil {
+		d.ordinary.mx.Lock()
+		queueDepth = d.ordinary.queued
+		d.ordinary.mx.Unlock()
+	}
+	return BroadcastTwoStepRelayStats{
+		QueueDepth:         queueDepth,
+		ActiveBytes:        d.activeBytes.Load(),
+		EnqueuedTotal:      d.enqueued.Load(),
+		QueueFullTotal:     d.queueFull.Load(),
+		ByteFullTotal:      d.byteFull.Load(),
+		ClosedTotal:        d.closedSubmissions.Load(),
+		CanceledTotal:      d.canceled.Load(),
+		PrepareFailedTotal: d.prepareFailed.Load(),
+		SentTotal:          d.sent.Load(),
+		FailedTotal:        d.failed.Load(),
+		TimedOutTotal:      d.timedOut.Load(),
+	}
+}
+
 type BroadcastTwoStepState struct {
-	streams       map[broadcastTwoStepIDKey]*broadcastTwoStepStream
-	delivered     map[broadcastTwoStepIDKey]*list.Element
-	deliveredList *list.List
+	streams          map[broadcastTwoStepIDKey]*broadcastTwoStepStream
+	simpleAdmissions map[broadcastTwoStepIDKey]*broadcastAdmission
+	delivered        map[broadcastTwoStepIDKey]*list.Element
+	deliveredList    *list.List
 
 	maxActiveStreams int
 	maxActiveBytes   int64
@@ -75,12 +383,58 @@ type BroadcastTwoStepState struct {
 func NewBroadcastTwoStepState() *BroadcastTwoStepState {
 	return &BroadcastTwoStepState{
 		streams:          map[broadcastTwoStepIDKey]*broadcastTwoStepStream{},
+		simpleAdmissions: map[broadcastTwoStepIDKey]*broadcastAdmission{},
 		delivered:        map[broadcastTwoStepIDKey]*list.Element{},
 		deliveredList:    list.New(),
 		maxActiveStreams: DefaultTwoStepBroadcastMaxActiveStreams,
 		maxActiveBytes:   DefaultTwoStepBroadcastMaxActiveBytes,
 		deliveredMax:     DefaultTwoStepDeliveredCacheSize,
 	}
+}
+
+func (s *BroadcastTwoStepState) beginSimpleAdmission(id broadcastTwoStepIDKey, now time.Time) broadcastAdmissionAttempt {
+	s.mx.Lock()
+	s.cleanupLocked(now, false)
+	if s.isDeliveredLocked(id) {
+		s.deliveredCacheHits++
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{status: broadcastAdmissionCommitted}
+	}
+	if admission := s.simpleAdmissions[id]; admission != nil {
+		if admission.standby > 0 {
+			s.mx.Unlock()
+			return broadcastAdmissionAttempt{status: broadcastAdmissionDuplicate}
+		}
+		admission.standby++
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionWait}
+	}
+	if len(s.simpleAdmissions) >= DefaultBroadcastMaxConcurrentAdmissions {
+		s.dropped++
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{status: broadcastAdmissionOverloaded}
+	}
+
+	admission := &broadcastAdmission{done: make(chan struct{})}
+	s.simpleAdmissions[id] = admission
+	s.mx.Unlock()
+	return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionOwner}
+}
+
+func (s *BroadcastTwoStepState) finishSimpleAdmission(id broadcastTwoStepIDKey, admission *broadcastAdmission, disposition BroadcastDisposition) {
+	s.mx.Lock()
+	if s.simpleAdmissions[id] != admission {
+		s.mx.Unlock()
+		return
+	}
+	if disposition == BroadcastDispositionAcceptAndRelay || disposition == BroadcastDispositionIgnore {
+		s.registerDeliveredLocked(id)
+		s.completed++
+	}
+	delete(s.simpleAdmissions, id)
+	admission.disposition = disposition
+	close(admission.done)
+	s.mx.Unlock()
 }
 
 func newBroadcastTwoStepIDKey(id []byte) (key broadcastTwoStepIDKey) {
@@ -137,8 +491,13 @@ func (s *BroadcastTwoStepState) cleanupLocked(now time.Time, force bool) {
 	s.nextCleanupAt = now.Add(fecBroadcastCleanupInterval)
 
 	for id, stream := range s.streams {
-		stream.mx.Lock()
-		stale := stream.lastMessageAt.Add(broadcastTwoStepStreamTTL).Before(now)
+		// TryLock, never Lock: this runs under s.mx and stream.mx is held
+		// across RaptorQ decode. A busy stream is being worked on, so it is not
+		// idle; the next sweep reconsiders it.
+		if !stream.mx.TryLock() {
+			continue
+		}
+		stale := stream.admission == nil && stream.lastMessageAt.Add(broadcastTwoStepStreamTTL).Before(now)
 		stream.mx.Unlock()
 		if !stale {
 			continue
@@ -172,6 +531,9 @@ func (s *BroadcastTwoStepState) removeStreamLocked(id broadcastTwoStepIDKey, str
 		return
 	}
 
+	// Marked before the delete becomes visible, so a lookup already holding
+	// this pointer and waiting for stream.mx notices the eviction.
+	stream.removed.Store(true)
 	delete(s.streams, id)
 	s.releaseLocked(stream.budgetBytes)
 	if delivered {
@@ -217,12 +579,7 @@ func (s *BroadcastTwoStepState) trimDeliveredLocked() {
 }
 
 func (a *ADNLOverlayWrapper) cleanupTwoStepBroadcasts(now time.Time, force bool) {
-	a.mx.RLock()
-	state := a.twoStepState
-	a.mx.RUnlock()
-	if state == nil {
-		return
-	}
+	state := a.activeTwoStepState()
 
 	state.mx.Lock()
 	state.cleanupLocked(now, force)
@@ -246,8 +603,10 @@ func estimateTwoStepBroadcastBudgetBytes(dataSize, partSize uint32) int64 {
 	}
 
 	symbols := broadcastTwoStepSymbolsNeeded(dataSize, partSize)
-	symbolBytes := multiplyFECBroadcastBudgetEstimate(symbols, partSize)
-	hashBytes := multiplyFECBroadcastBudgetEstimate(symbols, 16)
+	symbolBytes := multiplyFECBroadcastBudgetEstimate(uint64(symbols), uint64(partSize))
+	// Each allowed seqno can retain one verified digest. Include map capacity
+	// and growth overhead, rather than charging only the 32-byte hash.
+	hashBytes := multiplyFECBroadcastBudgetEstimate(uint64(broadcastTwoStepSeqnoLimit(dataSize, partSize)), 128)
 	return addFECBroadcastBudgetEstimate(int64(dataSize), symbolBytes, hashBytes, 4096)
 }
 
@@ -276,7 +635,7 @@ func broadcastTwoStepSourceInfo(source any) (keys.PublicKeyED25519, []byte, erro
 		return keys.PublicKeyED25519{}, nil, fmt.Errorf("invalid signer key format")
 	}
 
-	sourceID, err := tl.Hash(source)
+	sourceID, err := tl.Hash(&sourceKey)
 	if err != nil {
 		return keys.PublicKeyED25519{}, nil, fmt.Errorf("source key id serialize failed: %w", err)
 	}
@@ -284,13 +643,19 @@ func broadcastTwoStepSourceInfo(source any) (keys.PublicKeyED25519, []byte, erro
 }
 
 func (a *ADNLOverlayWrapper) runBroadcastPrecheck(info BroadcastPrecheckInfo) error {
-	if a.broadcastPrecheckHandler == nil {
+	handler := a.precheckHandler()
+	if handler == nil {
 		return nil
 	}
-	return a.broadcastPrecheckHandler(cloneBroadcastPrecheckInfo(info))
+	return handler(cloneBroadcastPrecheckInfo(info))
 }
 
-func (a *ADNLOverlayWrapper) deliverTwoStepBroadcast(data []byte, info BroadcastInfo) error {
+type twoStepDeliveryResult struct {
+	disposition BroadcastDisposition
+	err         error
+}
+
+func (a *ADNLOverlayWrapper) deliverTwoStepBroadcast(data []byte, info BroadcastInfo) twoStepDeliveryResult {
 	var res any
 	parseStarted := time.Time{}
 	if info.DecodeTime > 0 {
@@ -298,40 +663,52 @@ func (a *ADNLOverlayWrapper) deliverTwoStepBroadcast(data []byte, info Broadcast
 	}
 	_, err := tl.ParseNoCopy(&res, data, true)
 	if err != nil {
-		return fmt.Errorf("failed to parse two-step broadcast message: %w", err)
+		// The signed payload is deterministic for this broadcast ID. Treating a
+		// parse failure as terminal prevents every replay from spending parse CPU.
+		return twoStepDeliveryResult{
+			disposition: BroadcastDispositionIgnore,
+			err:         fmt.Errorf("failed to parse two-step broadcast message: %w", err),
+		}
 	}
 	if !parseStarted.IsZero() {
 		info.DecodeTime += time.Since(parseStarted)
 	}
 
-	if !info.Trusted && a.broadcastCheckHandler != nil {
-		if err = a.broadcastCheckHandler(res, cloneBroadcastInfo(info)); err != nil {
-			return fmt.Errorf("failed to check two-step broadcast message: %w", err)
+	disposition := BroadcastDispositionAcceptAndRelay
+	if handler := a.broadcastHandler(); handler != nil {
+		disposition = handler(res, cloneBroadcastInfo(info))
+	}
+	switch disposition {
+	case BroadcastDispositionAcceptAndRelay, BroadcastDispositionIgnore:
+		return twoStepDeliveryResult{disposition: disposition}
+	case BroadcastDispositionRetry:
+		return twoStepDeliveryResult{disposition: disposition, err: ErrBroadcastRejected}
+	case BroadcastDispositionUnknown:
+		return twoStepDeliveryResult{
+			disposition: BroadcastDispositionRetry,
+			err:         fmt.Errorf("broadcast handler returned an unknown disposition"),
+		}
+	default:
+		return twoStepDeliveryResult{
+			disposition: BroadcastDispositionRetry,
+			err:         fmt.Errorf("broadcast handler returned invalid disposition %d", disposition),
 		}
 	}
-
-	if bHandler := a.broadcastHandlerWithInfo; bHandler != nil {
-		if err = bHandler(res, cloneBroadcastInfo(info)); err != nil {
-			return fmt.Errorf("failed to process broadcast message: %w", err)
-		}
-	} else if bHandler := a.broadcastHandler; bHandler != nil {
-		if err = bHandler(res, info.Trusted); err != nil {
-			return fmt.Errorf("failed to process broadcast message: %w", err)
-		}
-	}
-	return nil
 }
 
 func cloneBroadcastInfo(info BroadcastInfo) BroadcastInfo {
 	return BroadcastInfo{
-		SourceID:    append([]byte(nil), info.SourceID...),
-		SourceKey:   append(ed25519.PublicKey(nil), info.SourceKey...),
-		Trusted:     info.Trusted,
-		OverlayID:   append([]byte(nil), info.OverlayID...),
-		BroadcastID: append([]byte(nil), info.BroadcastID...),
-		Extra:       append([]byte(nil), info.Extra...),
-		TwoStep:     info.TwoStep,
-		DecodeTime:  info.DecodeTime,
+		SourceID:        append([]byte(nil), info.SourceID...),
+		SourceKey:       append(ed25519.PublicKey(nil), info.SourceKey...),
+		SourceADNL:      append([]byte(nil), info.SourceADNL...),
+		ImmediatePeerID: append([]byte(nil), info.ImmediatePeerID...),
+		Trusted:         info.Trusted,
+		OverlayID:       append([]byte(nil), info.OverlayID...),
+		BroadcastID:     append([]byte(nil), info.BroadcastID...),
+		Extra:           append([]byte(nil), info.Extra...),
+		Delivery:        info.Delivery,
+		DecodeTime:      info.DecodeTime,
+		Payload:         info.Payload,
 	}
 }
 
@@ -339,58 +716,152 @@ func cloneBroadcastPrecheckInfo(info BroadcastPrecheckInfo) BroadcastPrecheckInf
 	return BroadcastPrecheckInfo{
 		SourceID:         append([]byte(nil), info.SourceID...),
 		SourceKey:        append(ed25519.PublicKey(nil), info.SourceKey...),
+		SourceADNL:       append([]byte(nil), info.SourceADNL...),
+		ImmediatePeerID:  append([]byte(nil), info.ImmediatePeerID...),
 		Trusted:          info.Trusted,
 		OverlayID:        append([]byte(nil), info.OverlayID...),
 		BroadcastID:      append([]byte(nil), info.BroadcastID...),
 		Extra:            append([]byte(nil), info.Extra...),
+		Delivery:         info.Delivery,
 		SignatureChecked: info.SignatureChecked,
 	}
 }
 
-func (a *ADNLOverlayWrapper) twoStepPrecheckInfo(sourceID []byte, sourceKey ed25519.PublicKey, trusted bool, broadcastID, extra []byte, signatureChecked bool) BroadcastPrecheckInfo {
+func (a *ADNLOverlayWrapper) twoStepPrecheckInfo(sourceID []byte, sourceKey ed25519.PublicKey, sourceADNL, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery, signatureChecked bool) BroadcastPrecheckInfo {
 	return BroadcastPrecheckInfo{
 		SourceID:         sourceID,
 		SourceKey:        sourceKey,
+		SourceADNL:       sourceADNL,
+		ImmediatePeerID:  immediatePeerID,
 		Trusted:          trusted,
 		OverlayID:        a.overlayId,
 		BroadcastID:      broadcastID,
 		Extra:            extra,
+		Delivery:         delivery,
 		SignatureChecked: signatureChecked,
 	}
 }
 
-func (a *ADNLOverlayWrapper) twoStepBroadcastInfo(sourceID []byte, sourceKey ed25519.PublicKey, trusted bool, broadcastID, extra []byte) BroadcastInfo {
+func (a *ADNLOverlayWrapper) twoStepBroadcastInfo(sourceID []byte, sourceKey ed25519.PublicKey, sourceADNL, immediatePeerID []byte, trusted bool, broadcastID, extra []byte, delivery BroadcastDelivery) BroadcastInfo {
 	return BroadcastInfo{
-		SourceID:    sourceID,
-		SourceKey:   sourceKey,
-		Trusted:     trusted,
-		OverlayID:   a.overlayId,
-		BroadcastID: broadcastID,
-		Extra:       extra,
-		TwoStep:     true,
+		SourceID:        sourceID,
+		SourceKey:       sourceKey,
+		SourceADNL:      sourceADNL,
+		ImmediatePeerID: immediatePeerID,
+		Trusted:         trusted,
+		OverlayID:       a.overlayId,
+		BroadcastID:     broadcastID,
+		Extra:           extra,
+		Delivery:        delivery,
 	}
 }
 
-func (a *ADNLOverlayWrapper) rebroadcastTwoStep(ctx context.Context, sourceADNL []byte, msg tl.Serializable) error {
-	a.mx.RLock()
-	peerSet := a.twoStepPeerSet
-	localID := append([]byte(nil), a.twoStepLocalID...)
-	a.mx.RUnlock()
-	if peerSet == nil {
+func (r *BroadcastReceiver) ensureBroadcastTwoStepRelayDispatcher() *broadcastTwoStepRelayDispatcher {
+	r.twoStepRelayMx.Lock()
+	defer r.twoStepRelayMx.Unlock()
+
+	if r.closed.Load() {
 		return nil
 	}
+	if relay := r.twoStepRelay.Load(); relay != nil {
+		return relay
+	}
 
-	var sendErr error
-	for _, peer := range peerSet.Peers() {
+	relay := newBroadcastRelayDispatcher(
+		DefaultTwoStepRelayQueueSize,
+		DefaultTwoStepRelayConcurrency,
+		DefaultTwoStepRelayMaxActiveBytes,
+		DefaultTwoStepRelayPeerTimeout,
+		false,
+	)
+	r.twoStepRelay.Store(relay)
+	return relay
+}
+
+// enqueueRebroadcastTwoStep preserves diffuse-before-admission ordering by
+// completing every bounded queue submission before returning to local
+// application delivery. Network sends happen on the owned worker pool, so a
+// slow peer cannot delay decoding or validation. Queue saturation deliberately
+// drops only the affected relay send; it never rejects an otherwise valid
+// candidate that can still be relayed by other overlay members.
+func (a *ADNLOverlayWrapper) enqueueRebroadcastTwoStep(sourceADNL []byte, msg tl.Serializable) {
+	peerSet, localID := a.twoStepRelayConfig()
+	if peerSet == nil {
+		return
+	}
+
+	peers := peerSet.Peers()
+	targets := make([]BroadcastPeer, 0, len(peers))
+	needsLegacyMessage := false
+	for _, peer := range peers {
 		peerID := peer.ID()
 		if bytes.Equal(peerID, sourceADNL) || (len(localID) > 0 && bytes.Equal(peerID, localID)) {
 			continue
 		}
-		if err := peer.SendCustomMessage(ctx, msg); err != nil && sendErr == nil {
-			sendErr = fmt.Errorf("failed to rebroadcast two-step message to peer %x: %w", peerID, err)
+
+		targets = append(targets, peer)
+		if _, ok := peer.(PreparedBroadcastPeer); !ok {
+			needsLegacyMessage = true
 		}
 	}
-	return sendErr
+	if len(targets) == 0 {
+		return
+	}
+
+	relay := a.ensureBroadcastTwoStepRelayDispatcher()
+	if relay == nil {
+		return
+	}
+
+	// Incoming TL slices may alias the pooled datagram buffer. Serialize before
+	// local delivery returns, then let every async prepared send share this
+	// immutable owned body.
+	body, err := PrepareBroadcastMessage(msg)
+	if err != nil {
+		relay.prepareFailed.Add(uint64(len(targets)))
+		return
+	}
+
+	var stableMessage tl.Serializable
+	if needsLegacyMessage {
+		// Released BroadcastPeer implementations may still use the reflective
+		// message API. Reparse the owned body once so those async calls never
+		// retain pooled receive memory, while preserving the original pointer form.
+		var parsed any
+		if _, err = tl.Parse(&parsed, body.Body(), true); err != nil {
+			relay.prepareFailed.Add(uint64(len(targets)))
+			return
+		}
+		switch msg.(type) {
+		case *BroadcastTwoStepSimple:
+			parsedMessage, ok := parsed.(BroadcastTwoStepSimple)
+			if !ok {
+				relay.prepareFailed.Add(uint64(len(targets)))
+				return
+			}
+			stableMessage = &parsedMessage
+		case *BroadcastTwoStepFEC:
+			parsedMessage, ok := parsed.(BroadcastTwoStepFEC)
+			if !ok {
+				relay.prepareFailed.Add(uint64(len(targets)))
+				return
+			}
+			stableMessage = &parsedMessage
+		default:
+			stableMessage = parsed
+		}
+	}
+	payload, ok := relay.reservePayload(stableMessage, body, len(targets))
+	if !ok {
+		return
+	}
+
+	for _, peer := range targets {
+		relay.Submit(broadcastTwoStepRelayTask{
+			peer:    peer,
+			payload: payload,
+		})
+	}
 }
 
 func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSimple, srcPeerID []byte) error {
@@ -414,19 +885,43 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSi
 	}
 	id := newBroadcastTwoStepIDKey(broadcastID)
 
-	a.mx.RLock()
-	state := a.twoStepState
-	a.mx.RUnlock()
-	if state != nil {
-		state.mx.Lock()
-		state.cleanupLocked(now, false)
-		if state.isDeliveredLocked(id) {
-			state.deliveredCacheHits++
-			state.mx.Unlock()
+	state := a.activeTwoStepState()
+	for {
+		attempt := state.beginSimpleAdmission(id, time.Now())
+		switch attempt.status {
+		case broadcastAdmissionCommitted, broadcastAdmissionOverloaded, broadcastAdmissionDuplicate:
 			return nil
+		case broadcastAdmissionWait:
+			<-attempt.admission.done
+			switch attempt.admission.disposition {
+			case BroadcastDispositionAcceptAndRelay, BroadcastDispositionIgnore:
+				return nil
+			case BroadcastDispositionRetry:
+				continue
+			default:
+				return fmt.Errorf("two-step simple admission completed with invalid disposition %d", attempt.admission.disposition)
+			}
+		case broadcastAdmissionOwner:
+			return a.processBroadcastTwoStepSimpleAdmission(t, srcPeerID, sourceID, sourceKey.Key, broadcastID, id, state, attempt.admission)
+		default:
+			return fmt.Errorf("invalid two-step simple admission status %d", attempt.status)
 		}
-		state.mx.Unlock()
 	}
+}
+
+func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimpleAdmission(
+	t *BroadcastTwoStepSimple,
+	srcPeerID, sourceID []byte,
+	sourceKey ed25519.PublicKey,
+	broadcastID []byte,
+	id broadcastTwoStepIDKey,
+	state *BroadcastTwoStepState,
+	admission *broadcastAdmission,
+) error {
+	disposition := BroadcastDispositionRetry
+	defer func() {
+		state.finishSimpleAdmission(id, admission, disposition)
+	}()
 
 	checkRes, err := a.checkBroadcastSourceRules(sourceID, t.Certificate, uint32(len(t.Data)), true)
 	if err != nil {
@@ -434,7 +929,7 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSi
 	}
 
 	trusted := checkRes == CertCheckResultTrusted
-	precheck := a.twoStepPrecheckInfo(sourceID, sourceKey.Key, trusted, broadcastID, t.Extra, false)
+	precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple, false)
 	if err = a.runBroadcastPrecheck(precheck); err != nil {
 		return fmt.Errorf("two-step broadcast precheck failed: %w", err)
 	}
@@ -449,28 +944,21 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepSimple(t *BroadcastTwoStepSi
 		return err
 	}
 
-	if state != nil {
-		state.mx.Lock()
-		if state.isDeliveredLocked(id) {
-			state.deliveredCacheHits++
-			state.mx.Unlock()
-			return nil
-		}
-		state.registerDeliveredLocked(id)
-		state.completed++
-		state.mx.Unlock()
-	}
-
-	var rebroadcastErr error
 	if bytes.Equal(srcPeerID, t.SourceADNL) {
-		rebroadcastErr = a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
+		// Match the C++ node: an authorized, signed two-step message is relayed
+		// before application admission. Retry only rolls back local admission;
+		// relay work already accepted by the bounded queue cannot be rolled back.
+		a.enqueueRebroadcastTwoStep(t.SourceADNL, t)
 	}
 
-	info := a.twoStepBroadcastInfo(sourceID, sourceKey.Key, trusted, broadcastID, t.Extra)
-	if err = a.deliverTwoStepBroadcast(t.Data, info); err != nil {
-		return err
+	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepSimple)
+	info.Payload = t.Data
+	delivery := a.deliverTwoStepBroadcast(t.Data, info)
+	disposition = delivery.disposition
+	if delivery.err != nil {
+		return delivery.err
 	}
-	return rebroadcastErr
+	return nil
 }
 
 func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, srcPeerID []byte) error {
@@ -503,49 +991,82 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 		return err
 	}
 	id := newBroadcastTwoStepIDKey(broadcastID)
+	state := a.activeTwoStepState()
 
-	a.mx.RLock()
-	state := a.twoStepState
-	a.mx.RUnlock()
-	if state == nil {
-		return fmt.Errorf("two-step state is nil")
+	for {
+		result := a.processBroadcastTwoStepFECPart(t, srcPeerID, sourceID, sourceKey.Key, broadcastID, id, state)
+		if !result.recontend {
+			return result.err
+		}
 	}
+}
+
+type twoStepFECPartResult struct {
+	recontend bool
+	err       error
+}
+
+func (a *ADNLOverlayWrapper) processBroadcastTwoStepFECPart(
+	t *BroadcastTwoStepFEC,
+	srcPeerID, sourceID []byte,
+	sourceKey ed25519.PublicKey,
+	broadcastID []byte,
+	id broadcastTwoStepIDKey,
+	state *BroadcastTwoStepState,
+) twoStepFECPartResult {
+	now := time.Now()
+	partSize := uint32(len(t.Part))
 
 	state.mx.Lock()
 	state.cleanupLocked(now, false)
 	if state.isDeliveredLocked(id) {
 		state.deliveredCacheHits++
 		state.mx.Unlock()
-		return nil
+		return twoStepFECPartResult{}
 	}
 	stream := state.streams[id]
 	state.mx.Unlock()
 
+	checkedNewStream := false
 	var trusted bool
 	if stream == nil {
-		checkRes, checkErr := a.checkBroadcastSourceRules(sourceID, t.Certificate, t.DataSize, true)
-		if checkErr != nil {
-			return checkErr
+		checkRes, err := a.checkBroadcastSourceRules(sourceID, t.Certificate, t.DataSize, true)
+		if err != nil {
+			return twoStepFECPartResult{err: err}
 		}
 
 		trusted = checkRes == CertCheckResultTrusted
-		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey.Key, trusted, broadcastID, t.Extra, false)
+		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, false)
 		if err = a.runBroadcastPrecheck(precheck); err != nil {
-			return fmt.Errorf("two-step broadcast precheck failed: %w", err)
+			return twoStepFECPartResult{err: fmt.Errorf("two-step broadcast precheck failed: %w", err)}
+		}
+		checkedNewStream = true
+	}
+
+	// The identity binds every signed broadcast parameter, including part size.
+	// Only an exact match with bytes verified earlier in this live stream can
+	// bypass serialization and Ed25519 verification. A changed signature or
+	// symbol still takes the ordinary verification path.
+	fingerprint := broadcastTwoStepPartFingerprint(broadcastID, sourceKey, t.Seqno, t.Part, t.Signature)
+	verified := false
+	if stream != nil && lockLiveTwoStepStream(stream) {
+		previous, seen := stream.seenParts[t.Seqno]
+		verified = seen && previous == fingerprint
+		stream.mx.Unlock()
+	}
+	if !verified {
+		if err := verifyBroadcastTwoStepFECSignature(t.Source, broadcastID, t.Seqno, t.Part, t.Signature); err != nil {
+			return twoStepFECPartResult{err: err}
 		}
 	}
 
-	if err = verifyBroadcastTwoStepFECSignature(t.Source, broadcastID, t.Seqno, t.Part, t.Signature); err != nil {
-		return err
-	}
-
-	if stream == nil {
-		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey.Key, trusted, broadcastID, t.Extra, true)
-		if err = a.runBroadcastPrecheck(precheck); err != nil {
-			return fmt.Errorf("two-step broadcast precheck failed: %w", err)
+	if checkedNewStream {
+		precheck := a.twoStepPrecheckInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, trusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC, true)
+		if err := a.runBroadcastPrecheck(precheck); err != nil {
+			return twoStepFECPartResult{err: fmt.Errorf("two-step broadcast precheck failed: %w", err)}
 		}
-		if err = checkBroadcastTwoStepDate(t.Date, time.Now()); err != nil {
-			return err
+		if err := checkBroadcastTwoStepDate(t.Date, time.Now()); err != nil {
+			return twoStepFECPartResult{err: err}
 		}
 	}
 
@@ -553,40 +1074,50 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 	if state.isDeliveredLocked(id) {
 		state.deliveredCacheHits++
 		state.mx.Unlock()
-		return nil
+		return twoStepFECPartResult{}
 	}
 	stream = state.streams[id]
+	if stream == nil && !checkedNewStream {
+		state.mx.Unlock()
+		return twoStepFECPartResult{recontend: true}
+	}
 	if stream == nil {
 		budgetBytes := estimateTwoStepBroadcastBudgetBytes(t.DataSize, partSize)
 		if !state.reserveLocked(now, budgetBytes) {
 			state.mx.Unlock()
-			return fmt.Errorf("two-step broadcast receiver budget exceeded")
+			return twoStepFECPartResult{err: fmt.Errorf("two-step broadcast receiver budget exceeded")}
 		}
 
-		decoder, decErr := raptorq.NewRaptorQ(partSize).CreateDecoder(t.DataSize)
-		if decErr != nil {
+		decoder, err := raptorq.NewRaptorQ(partSize).CreateDecoder(t.DataSize)
+		if err != nil {
 			state.releaseLocked(budgetBytes)
 			state.mx.Unlock()
-			return fmt.Errorf("failed to init raptorq decoder: %w", decErr)
+			return twoStepFECPartResult{err: fmt.Errorf("failed to init raptorq decoder: %w", err)}
 		}
 
 		stream = &broadcastTwoStepStream{
 			decoder:       decoder,
-			seenParts:     map[uint32]struct{}{},
+			seenParts:     map[uint32][32]byte{},
 			budgetBytes:   budgetBytes,
 			date:          t.Date,
 			dataHash:      append([]byte(nil), t.DataHash...),
 			dataSize:      t.DataSize,
 			partSize:      partSize,
 			sourceID:      append([]byte(nil), sourceID...),
-			sourceKey:     append(ed25519.PublicKey(nil), sourceKey.Key...),
+			sourceKey:     append(ed25519.PublicKey(nil), sourceKey...),
 			trusted:       trusted,
 			extra:         append([]byte(nil), t.Extra...),
 			lastMessageAt: now,
 		}
 		state.streams[id] = stream
 	}
+	// state.mx is released before stream.mx: stream.mx is held across the
+	// RaptorQ decode, so holding both would serialize the whole overlay behind
+	// one decode. stream.removed covers the eviction race instead.
 	state.mx.Unlock()
+	if !lockLiveTwoStepStream(stream) {
+		return twoStepFECPartResult{recontend: true}
+	}
 
 	var (
 		decodedData    []byte
@@ -594,84 +1125,135 @@ func (a *ADNLOverlayWrapper) processBroadcastTwoStepFEC(t *BroadcastTwoStepFEC, 
 		decodeTime     time.Duration
 		rebroadcastNow bool
 		deliverTrusted bool
+		waitAdmission  *broadcastAdmission
+		admission      *broadcastAdmission
 	)
 
-	stream.mx.Lock()
-	if !bytes.Equal(stream.sourceKey, sourceKey.Key) || !bytes.Equal(stream.sourceID, sourceID) {
+	if !bytes.Equal(stream.sourceKey, sourceKey) || !bytes.Equal(stream.sourceID, sourceID) {
 		stream.mx.Unlock()
-		return fmt.Errorf("malformed source")
+		return twoStepFECPartResult{err: fmt.Errorf("malformed source")}
 	}
 	if stream.date != t.Date || stream.dataSize != t.DataSize || stream.partSize != partSize || !bytes.Equal(stream.dataHash, t.DataHash) || !bytes.Equal(stream.extra, t.Extra) {
 		stream.mx.Unlock()
-		return fmt.Errorf("malformed broadcast parameters")
+		return twoStepFECPartResult{err: fmt.Errorf("malformed broadcast parameters")}
 	}
 	deliverTrusted = stream.trusted
-	if _, ok := stream.seenParts[t.Seqno]; ok {
-		stream.mx.Unlock()
-		return nil
-	}
 
-	stream.seenParts[t.Seqno] = struct{}{}
-	stream.lastMessageAt = now
-	if bytes.Equal(srcPeerID, t.SourceADNL) && !stream.rebroadcastedPart {
-		stream.rebroadcastedPart = true
-		rebroadcastNow = true
-	}
-
-	if stream.delivered {
-		stream.mx.Unlock()
-		if rebroadcastNow {
-			return a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
-		}
-		return nil
-	}
-
-	canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Part)
-	if err != nil {
-		delete(stream.seenParts, t.Seqno)
-		stream.mx.Unlock()
-		return fmt.Errorf("failed to add two-step raptorq symbol %d: %w", t.Seqno, err)
-	}
-
-	if canTryDecode {
-		decodeStarted := time.Now()
-		decodedNow, data, decErr := stream.decoder.Decode()
-		if decErr != nil {
-			stream.mx.Unlock()
-			return fmt.Errorf("failed to decode two-step raptorq packet: %w", decErr)
-		}
-		if decodedNow {
-			dHash := sha256.Sum256(data)
-			if !bytes.Equal(dHash[:], t.DataHash) {
-				stream.mx.Unlock()
-				return fmt.Errorf("broadcast data hash mismatch")
+	if stream.admission != nil {
+		waitAdmission = stream.admission
+		if _, seen := stream.seenParts[t.Seqno]; !seen {
+			stream.seenParts[t.Seqno] = fingerprint
+			stream.lastMessageAt = now
+			if bytes.Equal(srcPeerID, t.SourceADNL) && !stream.rebroadcastedPart {
+				stream.rebroadcastedPart = true
+				rebroadcastNow = true
 			}
-
-			stream.delivered = true
-			stream.decoder = nil
-			decodedData = data
-			decodeTime = time.Since(decodeStarted)
-			decoded = true
 		}
-	}
-	stream.mx.Unlock()
+		stream.mx.Unlock()
+	} else {
+		if _, seen := stream.seenParts[t.Seqno]; seen {
+			stream.mx.Unlock()
+			return twoStepFECPartResult{}
+		}
 
-	var rebroadcastErr error
+		stream.seenParts[t.Seqno] = fingerprint
+		stream.lastMessageAt = now
+		if bytes.Equal(srcPeerID, t.SourceADNL) && !stream.rebroadcastedPart {
+			stream.rebroadcastedPart = true
+			rebroadcastNow = true
+		}
+
+		canTryDecode, err := stream.decoder.AddSymbol(t.Seqno, t.Part)
+		if err != nil {
+			delete(stream.seenParts, t.Seqno)
+			stream.mx.Unlock()
+			return twoStepFECPartResult{err: fmt.Errorf("failed to add two-step raptorq symbol %d: %w", t.Seqno, err)}
+		}
+
+		if canTryDecode {
+			decodeStarted := time.Now()
+			if stream.decodeBuffer == nil {
+				stream.decodeBuffer = make([]byte, stream.dataSize)
+			}
+			decodedNow, err := stream.decoder.DecodeInto(stream.decodeBuffer)
+			if err != nil {
+				stream.mx.Unlock()
+				return twoStepFECPartResult{err: fmt.Errorf("failed to decode two-step raptorq packet: %w", err)}
+			}
+			if decodedNow {
+				data := stream.decodeBuffer
+				dHash := sha256.Sum256(data)
+				if !bytes.Equal(dHash[:], t.DataHash) {
+					stream.mx.Unlock()
+					return twoStepFECPartResult{err: fmt.Errorf("broadcast data hash mismatch")}
+				}
+
+				admission = &broadcastAdmission{done: make(chan struct{})}
+				stream.admission = admission
+				stream.decoder = nil
+				stream.decodeBuffer = nil
+				decodedData = data
+				decodeTime = time.Since(decodeStarted)
+				decoded = true
+			}
+		}
+		stream.mx.Unlock()
+	}
+
 	if rebroadcastNow {
-		rebroadcastErr = a.rebroadcastTwoStep(context.Background(), t.SourceADNL, t)
+		// As in the C++ node, valid two-step FEC traffic is diffused before
+		// application admission. Submission to the bounded relay queue happens
+		// here; a later Retry only forgets local decode state, while accepted
+		// relay work remains accepted.
+		a.enqueueRebroadcastTwoStep(t.SourceADNL, t)
 	}
 
-	if decoded {
-		state.mx.Lock()
-		state.removeStreamLocked(id, stream, true)
-		state.completed++
-		state.mx.Unlock()
-
-		info := a.twoStepBroadcastInfo(sourceID, sourceKey.Key, deliverTrusted, broadcastID, t.Extra)
-		info.DecodeTime = decodeTime
-		if err = a.deliverTwoStepBroadcast(decodedData, info); err != nil {
-			return err
+	if waitAdmission != nil {
+		<-waitAdmission.done
+		switch waitAdmission.disposition {
+		case BroadcastDispositionAcceptAndRelay, BroadcastDispositionIgnore:
+			return twoStepFECPartResult{}
+		case BroadcastDispositionRetry:
+			return twoStepFECPartResult{recontend: true}
+		default:
+			return twoStepFECPartResult{err: fmt.Errorf("two-step fec admission completed with invalid disposition %d", waitAdmission.disposition)}
 		}
 	}
-	return rebroadcastErr
+	if !decoded {
+		return twoStepFECPartResult{}
+	}
+
+	info := a.twoStepBroadcastInfo(sourceID, sourceKey, t.SourceADNL, srcPeerID, deliverTrusted, broadcastID, t.Extra, BroadcastDeliveryTwoStepFEC)
+	info.DecodeTime = decodeTime
+	info.Payload = decodedData
+	delivery := a.deliverTwoStepBroadcast(decodedData, info)
+	state.finishFECAdmission(id, stream, admission, delivery.disposition)
+	if delivery.err != nil {
+		return twoStepFECPartResult{err: delivery.err}
+	}
+	return twoStepFECPartResult{}
+}
+
+func (s *BroadcastTwoStepState) finishFECAdmission(id broadcastTwoStepIDKey, stream *broadcastTwoStepStream, admission *broadcastAdmission, disposition BroadcastDisposition) {
+	// stream.mx first: a concurrent part of the same broadcast may be holding
+	// it across a decode, and waiting for that while holding s.mx would stall
+	// every other broadcast in the overlay. Nothing takes these in the opposite
+	// order blockingly -- cleanupLocked only ever TryLocks a stream.
+	stream.mx.Lock()
+	s.mx.Lock()
+	if s.streams[id] != stream || stream.admission != admission {
+		s.mx.Unlock()
+		stream.mx.Unlock()
+		return
+	}
+
+	committed := disposition == BroadcastDispositionAcceptAndRelay || disposition == BroadcastDispositionIgnore
+	s.removeStreamLocked(id, stream, committed)
+	if committed {
+		s.completed++
+	}
+	admission.disposition = disposition
+	close(admission.done)
+	s.mx.Unlock()
+	stream.mx.Unlock()
 }

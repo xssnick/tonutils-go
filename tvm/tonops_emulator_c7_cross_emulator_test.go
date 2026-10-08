@@ -217,7 +217,7 @@ func runTonOpsEmulatorC7PathVersionCase(t *testing.T, tt tonOpsEmulatorC7Case, v
 		Now:        uint32(tonopsTestTime.Unix()),
 		Balance:    new(big.Int).Set(tonopsTestBalance),
 		RandSeed:   append([]byte(nil), tonopsTestSeed...),
-		Config:     MustPrepareBlockchainConfig(configRoot),
+		Config:     mustPrepareLenientTestConfig(configRoot),
 		GlobalID:   tonopsTestGlobalID,
 		PrevBlocks: tt.prevBlocks,
 	}, new(big.Int).Set(tonopsTestBalance), uint32(version))
@@ -232,6 +232,16 @@ func runTonOpsEmulatorC7PathVersionCase(t *testing.T, tt tonOpsEmulatorC7Case, v
 	goRes, err := runGoCrossCodeWithVersionGasAndLibs(tt.code, cell.BeginCell().EndCell(), c7, nil, goStack, version, gasLimit)
 	if err != nil {
 		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	if tt.name == "globalid_from_config" && (version == 4 || version == 5) {
+		if goRes.exitCode != 0 {
+			t.Fatalf("historical GLOBALID exit=%d, want 0", goRes.exitCode)
+		}
+		assertCrossSkippedGoStack(t, goRes.stack, []any{big.NewInt(int64(tonopsTestGlobalID))})
+		// TON 9f93888cf402f8421fef38406b67886be043ac58 uses c7[0][9].
+		// The bundled current C++ fallback incorrectly uses c7[0][19]; the
+		// historical transaction replay separately checks the resulting gas.
+		t.Skip("bundled C++ GLOBALID v4/v5 fallback reads the wrong c7 slot; historical Go result checked")
 	}
 	refRes, err := runReferenceCrossCodeViaEmulator(tt.code, cell.BeginCell().EndCell(), refStack, referenceGetMethodConfig{
 		Address:    tonopsTestAddr,

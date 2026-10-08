@@ -99,6 +99,24 @@ func popCellSliceSlice(t *testing.T, st *vm.State) *cell.Slice {
 	return v
 }
 
+func cellSliceInstructionBits(t *testing.T, op vm.OP) int64 {
+	t.Helper()
+	gasOp, ok := op.(vm.GasPricedOp)
+	if !ok {
+		t.Fatalf("op %T does not report an instruction length", op)
+	}
+	return gasOp.InstructionBits()
+}
+
+func cellSliceMinGlobalVersion(t *testing.T, op vm.OP) int {
+	t.Helper()
+	versioned, ok := op.(vm.VersionedOp)
+	if !ok {
+		t.Fatalf("op %T does not report a minimum global version", op)
+	}
+	return versioned.MinGlobalVersion()
+}
+
 func sameCellHash(a, b *cell.Cell) bool {
 	if a == nil || b == nil {
 		return a == b

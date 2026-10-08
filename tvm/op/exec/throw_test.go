@@ -11,28 +11,27 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-func setThrowImmediate(t *testing.T, op *helpers.AdvancedOP, bits uint, value uint64) {
+// setThrowImmediate pairs a shared opcode with the immediate encoded in bits so
+// a test can drive one instruction without going through dispatch.
+func setThrowImmediate(t *testing.T, op *helpers.ArgOP, bits uint, value uint64) vm.OP {
 	t.Helper()
 
 	slice := cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
-	if err := op.DeserializeSuffix(slice); err != nil {
-		t.Fatalf("set immediate: %v", err)
-	}
-}
-
-func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode int, withArg bool) *opThrowFixed {
-	return &opThrowFixed{cfg: newThrowFixedCfg(name, prefix, prefixBits, immBits, mode, withArg)}
-}
-
-func setThrowFixedImmediate(t *testing.T, op *opThrowFixed, bits uint, value uint64) {
-	t.Helper()
-
-	slice := cell.BeginCell().MustStoreUInt(value, bits).EndCell().MustBeginParse()
-	val, err := slice.LoadUInt(op.cfg.immBits)
+	val, err := slice.LoadUInt(bits)
 	if err != nil {
 		t.Fatalf("set immediate: %v", err)
 	}
-	op.exc = val
+	return vm.Bind(op, val)
+}
+
+func newThrowFixed(name string, prefix []byte, prefixBits, immBits uint, mode int, withArg bool) *helpers.ArgOP {
+	return newThrowFixedOp(newThrowFixedCfg(name, prefix, prefixBits, immBits, mode, withArg))
+}
+
+func setThrowFixedImmediate(t *testing.T, op *helpers.ArgOP, bits uint, value uint64) vm.OP {
+	t.Helper()
+
+	return setThrowImmediate(t, op, bits, value)
 }
 
 func mustStackInt(t *testing.T, stack *vm.Stack, index int) *big.Int {
@@ -74,8 +73,7 @@ type throwRecorder struct {
 
 func TestThrowFixedSerialization(t *testing.T) {
 	t.Run("short", func(t *testing.T) {
-		op := newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false)
-		setThrowFixedImmediate(t, op, 6, 0x37)
+		op := setThrowFixedImmediate(t, newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false), 6, 0x37)
 
 		if got := op.SerializeText(); got != "THROW 55" {
 			t.Fatalf("unexpected mnemonic: %s", got)
@@ -88,8 +86,7 @@ func TestThrowFixedSerialization(t *testing.T) {
 	})
 
 	t.Run("long", func(t *testing.T) {
-		op := newThrowFixed("THROWARG", []byte{0xF2, 0xC8, 0x00}, 13, 11, 0, true)
-		setThrowFixedImmediate(t, op, 11, 0x345)
+		op := setThrowFixedImmediate(t, newThrowFixed("THROWARG", []byte{0xF2, 0xC8, 0x00}, 13, 11, 0, true), 11, 0x345)
 
 		if got := op.SerializeText(); got != "THROWARG 837" {
 			t.Fatalf("unexpected mnemonic: %s", got)
@@ -133,16 +130,14 @@ func TestThrowFixedDecodeAndErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("TruncatedSuffix", func(t *testing.T) {
-		op := newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false)
-		prefixOnly := cell.BeginCell().MustStoreSlice(op.cfg.prefix.Data, op.cfg.prefix.Bits).EndCell()
-		if err := op.Deserialize(prefixOnly.MustBeginParse()); err == nil {
+		op := vm.Bind(newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false), 0)
+		if err := op.Deserialize(op.GetPrefixes()[0]); err == nil {
 			t.Fatal("expected truncated THROW suffix to fail")
 		}
 	})
 
 	t.Run("BadConditionConsumesConditionOnly", func(t *testing.T) {
-		op := newThrowFixed("THROWIF", []byte{0xF2, 0x40}, 10, 6, 3, false)
-		setThrowFixedImmediate(t, op, 6, 0x21)
+		op := setThrowFixedImmediate(t, newThrowFixed("THROWIF", []byte{0xF2, 0x40}, 10, 6, 3, false), 6, 0x21)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
@@ -163,8 +158,7 @@ func TestThrowFixedDecodeAndErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("BadArgConditionLeavesArg", func(t *testing.T) {
-		op := newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true)
-		setThrowFixedImmediate(t, op, 11, 0x155)
+		op := setThrowFixedImmediate(t, newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true), 11, 0x155)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
@@ -193,8 +187,7 @@ func TestThrowFixedDecodeAndErrorStackEffects(t *testing.T) {
 }
 
 func TestThrowUnconditional(t *testing.T) {
-	op := newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false)
-	setThrowFixedImmediate(t, op, 6, 0x12)
+	op := setThrowFixedImmediate(t, newThrowFixed("THROW", []byte{0xF2, 0x00}, 10, 6, 0, false), 6, 0x12)
 
 	state, recorder := newThrowRecorderState()
 
@@ -245,8 +238,7 @@ func TestThrowUnconditional(t *testing.T) {
 }
 
 func TestThrowArgUnconditional(t *testing.T) {
-	op := newThrowFixed("THROWARG", []byte{0xF2, 0xC8, 0x00}, 13, 11, 0, true)
-	setThrowFixedImmediate(t, op, 11, 0x345)
+	op := setThrowFixedImmediate(t, newThrowFixed("THROWARG", []byte{0xF2, 0xC8, 0x00}, 13, 11, 0, true), 11, 0x345)
 
 	state, recorder := newThrowRecorderState()
 
@@ -288,7 +280,7 @@ func TestThrowArgUnconditional(t *testing.T) {
 func TestThrowIfVariants(t *testing.T) {
 	cases := []struct {
 		name        string
-		op          *opThrowFixed
+		op          *helpers.ArgOP
 		immBits     uint
 		imm         uint64
 		cond        bool
@@ -330,7 +322,7 @@ func TestThrowIfVariants(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			setThrowFixedImmediate(t, tc.op, tc.immBits, tc.imm)
+			op := setThrowFixedImmediate(t, tc.op, tc.immBits, tc.imm)
 
 			state, recorder := newThrowRecorderState()
 
@@ -343,7 +335,7 @@ func TestThrowIfVariants(t *testing.T) {
 				t.Fatalf("push cond: %v", err)
 			}
 
-			if err := tc.op.Interpret(state); err != nil {
+			if err := op.Interpret(state); err != nil {
 				t.Fatalf("interpret: %v", err)
 			}
 
@@ -391,7 +383,7 @@ func TestThrowIfVariants(t *testing.T) {
 func TestThrowArgIfVariants(t *testing.T) {
 	cases := []struct {
 		name        string
-		op          *opThrowFixed
+		op          *helpers.ArgOP
 		immBits     uint
 		imm         uint64
 		cond        bool
@@ -433,7 +425,7 @@ func TestThrowArgIfVariants(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			setThrowFixedImmediate(t, tc.op, tc.immBits, tc.imm)
+			op := setThrowFixedImmediate(t, tc.op, tc.immBits, tc.imm)
 
 			state, recorder := newThrowRecorderState()
 
@@ -451,7 +443,7 @@ func TestThrowArgIfVariants(t *testing.T) {
 				t.Fatalf("push cond: %v", err)
 			}
 
-			if err := tc.op.Interpret(state); err != nil {
+			if err := op.Interpret(state); err != nil {
 				t.Fatalf("interpret: %v", err)
 			}
 
@@ -524,8 +516,7 @@ func TestThrowAnyUnconditional(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			op := newThrowAny()
-			setThrowImmediate(t, op, 3, tc.args)
+			op := setThrowImmediate(t, throwAnyOp, 3, tc.args)
 
 			if got := op.SerializeText(); got != tc.expectName {
 				t.Fatalf("unexpected mnemonic %s", got)
@@ -598,8 +589,7 @@ func TestThrowAnyConditional(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			op := newThrowAny()
-			setThrowImmediate(t, op, 3, tc.args)
+			op := setThrowImmediate(t, throwAnyOp, 3, tc.args)
 
 			if got := op.SerializeText(); got != tc.expectName {
 				t.Fatalf("unexpected mnemonic %s", got)
@@ -683,8 +673,7 @@ func TestThrowAnyConditional(t *testing.T) {
 
 func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
 	t.Run("SerializeSuffix", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 5)
+		op := setThrowImmediate(t, throwAnyOp, 3, 5)
 
 		raw := op.Serialize().EndCell().MustBeginParse().MustLoadUInt(16)
 		if raw != 0xF2F5 {
@@ -693,16 +682,14 @@ func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("TruncatedSuffix", func(t *testing.T) {
-		op := newThrowAny()
-		prefixOnly := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell()
-		if err := op.DeserializeMatched(prefixOnly.MustBeginParse()); err == nil {
+		prefixOnly := cell.BeginCell().MustStoreSlice(throwAnyBitPrefix.Data, throwAnyBitPrefix.Bits).EndCell()
+		if _, err := throwAnyOp.DecodeArgs(nil, prefixOnly.MustBeginParse()); err == nil {
 			t.Fatal("expected truncated THROWANY suffix to fail")
 		}
 	})
 
 	t.Run("BadConditionConsumesConditionOnly", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 2)
+		op := setThrowImmediate(t, throwAnyOp, 3, 2)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(0x222)); err != nil {
@@ -723,8 +710,7 @@ func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("BadExceptionConsumesConditionAndException", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 2)
+		op := setThrowImmediate(t, throwAnyOp, 3, 2)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
@@ -748,8 +734,7 @@ func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
 	})
 
 	t.Run("ExceptionRangeConsumesException", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 0)
+		op := setThrowImmediate(t, throwAnyOp, 3, 0)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(11)); err != nil {
@@ -772,8 +757,7 @@ func TestThrowAnyDecodeAndErrorStackEffects(t *testing.T) {
 
 func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {
 	t.Run("fixed conditional arg", func(t *testing.T) {
-		op := newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true)
-		setThrowFixedImmediate(t, op, 11, 7)
+		op := setThrowFixedImmediate(t, newThrowFixed("THROWARGIF", []byte{0xF2, 0xD8, 0x00}, 13, 11, 3, true), 11, 7)
 
 		state := newTestState()
 		if err := state.Stack.PushBool(true); err != nil {
@@ -791,8 +775,7 @@ func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {
 	})
 
 	t.Run("throwargany", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 1)
+		op := setThrowImmediate(t, throwAnyOp, 3, 1)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(0x123)); err != nil {
@@ -810,8 +793,7 @@ func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {
 	})
 
 	t.Run("throwarganyif", func(t *testing.T) {
-		op := newThrowAny()
-		setThrowImmediate(t, op, 3, 3)
+		op := setThrowImmediate(t, throwAnyOp, 3, 3)
 
 		state := newTestState()
 		if err := state.Stack.PushInt(big.NewInt(0x456)); err != nil {
@@ -838,9 +820,8 @@ func TestThrowUnderflowDoesNotConsumeOperands(t *testing.T) {
 func TestThrowAnyRejectsInvalidDuplicateEncodings(t *testing.T) {
 	for _, suffix := range []uint64{6, 7} {
 		t.Run(big.NewInt(int64(suffix)).String(), func(t *testing.T) {
-			op := newThrowAny()
 			code := cell.BeginCell().MustStoreUInt(0xf2f0|suffix, 16).EndCell().MustBeginParse()
-			if err := op.Deserialize(code); !errors.Is(err, vm.ErrCorruptedOpcode) {
+			if _, err := throwAnyOp.DecodeArgs(nil, code); !errors.Is(err, vm.ErrCorruptedOpcode) {
 				t.Fatalf("deserialize suffix %d = %v, want corrupted opcode", suffix, err)
 			}
 		})

@@ -167,24 +167,24 @@ func (testRefValueAug) SkipExtra(loader *Slice) error {
 	return err
 }
 
-func (testRefValueAug) EmptyExtra() (*Cell, error) {
-	return BeginCell().MustStoreUInt(0, 8).EndCell(), nil
+func (testRefValueAug) EmptyExtra(dst *Builder) error {
+	return dst.StoreUInt(0, 8)
 }
 
-func (testRefValueAug) LeafExtra(*Slice) (*Cell, error) {
-	return BeginCell().MustStoreUInt(1, 8).EndCell(), nil
+func (testRefValueAug) LeafExtra(_ *Slice, dst *Builder) error {
+	return dst.StoreUInt(1, 8)
 }
 
-func (testRefValueAug) CombineExtra(left, right *Slice) (*Cell, error) {
+func (testRefValueAug) CombineExtra(left, right *Slice, dst *Builder) error {
 	l, err := left.LoadUInt(8)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	r, err := right.LoadUInt(8)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return BeginCell().MustStoreUInt((l+r)&0xff, 8).EndCell(), nil
+	return dst.StoreUInt((l+r)&0xff, 8)
 }
 
 func skipOneRefValue(loader *Slice) error {

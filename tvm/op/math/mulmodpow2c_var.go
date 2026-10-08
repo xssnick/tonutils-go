@@ -36,7 +36,7 @@ func MULMODPOW2C_VAR() *helpers.SimpleOP {
 
 			return state.Stack.PushInt(r)
 		},
-		Name:      "MULMODPOW2C_VAR",
+		Name:      "MULMODPOW2C",
 		BitPrefix: helpers.BytesPrefix(0xA9, 0xAA),
 	}
 }

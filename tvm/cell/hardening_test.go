@@ -3,6 +3,7 @@ package cell
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"testing"
@@ -154,18 +155,125 @@ func TestFromBOCRejectsOverlongPartialByteEncoding(t *testing.T) {
 	}
 }
 
-func TestFromBOCAcceptsOrdinaryLevelMaskMismatchForCompat(t *testing.T) {
+func TestFromBOCRejectsOrdinaryLevelMaskMismatch(t *testing.T) {
+	// ordinary root with descriptor mask 0 whose leaf claims mask 1: the
+	// structural mask differs from both descriptors; the root level is 0, so
+	// the independent root-level rule does not reject it first
 	boc := []byte{
 		0xB5, 0xEE, 0x9C, 0x72,
 		0x01, 0x01,
 		0x02, 0x01, 0x00, 0x05,
 		0x00,
-		0x21, 0x00, 0x01,
-		0x00, 0x00,
+		0x01, 0x00, 0x01,
+		0x20, 0x00,
 	}
 
-	if _, err := FromBOC(boc); err != nil {
-		t.Fatalf("generic BOC parser should accept ordinary level masks without an allow_nonzero_level API split: %v", err)
+	if _, err := FromBOC(boc); err == nil {
+		t.Fatal("ordinary level mask mismatch was accepted")
+	}
+	if _, err := FromBOCWithOptions(boc, BOCParseOptions{Lazy: true}); err == nil {
+		t.Fatal("lazy parser accepted an ordinary level mask mismatch")
+	}
+}
+
+func TestBOCViewRejectsOrdinaryLevelMaskMismatch(t *testing.T) {
+	body := BeginCell().MustStoreRef(BeginCell().MustStoreUInt(0xAB, 8).EndCell()).EndCell()
+	pruned, err := createPrunedBranchFromCell(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := BeginCell().MustStoreRef(pruned).EndCell()
+	if root.Level() == 0 || pruned.Level() == 0 {
+		t.Fatalf("invalid level-mask fixture: root=%d pruned=%d", root.Level(), pruned.Level())
+	}
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithIndex: true})
+	mutated := append([]byte(nil), boc...)
+	rootOffset := firstBOCCellOffset(t, mutated)
+	mutated[rootOffset] &^= 0b111 << 5
+
+	if _, err = OpenBOCView(bytes.NewReader(mutated), int64(len(mutated)), BOCViewOptions{RequireIndex: true}); err == nil {
+		t.Fatal("BOC view accepted an ordinary level mask mismatch")
+	}
+}
+
+func TestFromBOCAllowNonZeroLevelRootOption(t *testing.T) {
+	body := BeginCell().MustStoreRef(BeginCell().MustStoreUInt(0xAB, 8).EndCell()).EndCell()
+	pruned, err := createPrunedBranchFromCell(body, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := BeginCell().MustStoreRef(pruned).EndCell()
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithIndex: true})
+
+	if _, err = FromBOC(boc); err == nil {
+		t.Fatal("default parse accepted a non-zero-level root")
+	}
+	if _, err := FromBOCWithOptions(boc, BOCParseOptions{}); err == nil {
+		t.Fatal("zero-value parse options accepted a non-zero-level root")
+	}
+	if _, err := FromBOCWithOptions(boc, BOCParseOptions{AllowNonZeroLevelRoot: true}); err != nil {
+		t.Fatalf("AllowNonZeroLevelRoot rejected a non-zero-level root: %v", err)
+	}
+}
+
+func TestFromBOCRejectsLibraryLevelMask(t *testing.T) {
+	// RW-14: reference DataCell computes a zero level mask for library cells
+	// and BoC deserialization rejects a descriptor that disagrees
+	builder := BeginCell()
+	if err := builder.StoreUInt(uint64(LibraryCellType), 8); err != nil {
+		t.Fatal(err)
+	}
+	if err := builder.StoreSlice(bytes.Repeat([]byte{0x11}, hashSize), hashSize*8); err != nil {
+		t.Fatal(err)
+	}
+	lib, err := finalizeCellFromBuilder(builder, true)
+	if err != nil {
+		t.Fatalf("failed to build library cell: %v", err)
+	}
+
+	boc := lib.ToBOC()
+	if _, err = FromBOC(boc); err != nil {
+		t.Fatalf("valid library boc parse failed: %v", err)
+	}
+
+	corrupted := append([]byte(nil), boc...)
+	corrupted[firstBOCCellOffset(t, corrupted)] |= 0b001 << 5 // descriptor level mask 1
+
+	if _, err = FromBOCWithOptions(corrupted, BOCParseOptions{}); err == nil {
+		t.Fatal("expected library cell with non-zero level mask descriptor to be rejected")
+	}
+	if _, err = FromBOC(corrupted); err == nil {
+		t.Fatal("expected library cell with non-zero level mask descriptor to be rejected by default")
+	}
+}
+
+func TestFromBOCAllowNonZeroLevelRootPruned(t *testing.T) {
+	body := BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+		EndCell()
+	pruned, err := createPrunedBranchFromCell(body, 1)
+	if err != nil {
+		t.Fatalf("failed to create pruned branch: %v", err)
+	}
+	if pruned.Level() == 0 {
+		t.Fatal("expected non-zero-level pruned root")
+	}
+	boc := pruned.ToBOC()
+
+	if _, err = FromBOCWithOptions(boc, BOCParseOptions{}); err == nil {
+		t.Fatal("expected pruned root boc to be rejected by default")
+	}
+	if _, err = FromBOCWithOptions(boc, BOCParseOptions{Lazy: true}); err == nil {
+		t.Fatal("expected pruned root boc to be rejected by the lazy parser too")
+	}
+
+	root, err := FromBOCWithOptions(boc, BOCParseOptions{AllowNonZeroLevelRoot: true})
+	if err != nil {
+		t.Fatalf("default lenient parse failed: %v", err)
+	}
+	if root.HashKey() != pruned.HashKey() {
+		t.Fatalf("unexpected parsed pruned root hash: got=%x want=%x", root.Hash(), pruned.Hash())
 	}
 }
 
@@ -407,16 +515,33 @@ func TestStoreBigIntDoesNotMutateInput(t *testing.T) {
 	}
 }
 
-func TestStoreBigIntSupportsSigned257Boundary(t *testing.T) {
-	min := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
+func TestStoreBigIntSignedBoundaries(t *testing.T) {
+	for _, width := range []uint{1, 8, 256, 257} {
+		t.Run(fmt.Sprintf("width_%d", width), func(t *testing.T) {
+			limit := new(big.Int).Lsh(big.NewInt(1), width-1)
+			min := new(big.Int).Neg(new(big.Int).Set(limit))
+			max := new(big.Int).Sub(new(big.Int).Set(limit), big.NewInt(1))
 
-	cell := BeginCell().MustStoreBigInt(min, 257).EndCell()
-	got, err := cell.MustBeginParse().LoadBigInt(257)
-	if err != nil {
-		t.Fatalf("failed to load signed 257-bit value: %v", err)
-	}
-	if got.Cmp(min) != 0 {
-		t.Fatalf("unexpected signed 257-bit roundtrip: got %v want %v", got, min)
+			for _, value := range []*big.Int{min, max} {
+				stored := BeginCell().MustStoreBigInt(value, width).EndCell()
+				got, err := stored.MustBeginParse().LoadBigInt(width)
+				if err != nil {
+					t.Fatalf("load %s: %v", value, err)
+				}
+				if got.Cmp(value) != 0 {
+					t.Fatalf("roundtrip = %s, want %s", got, value)
+				}
+			}
+
+			below := new(big.Int).Sub(new(big.Int).Set(min), big.NewInt(1))
+			if err := BeginCell().StoreBigInt(below, width); !errors.Is(err, ErrTooBigValue) {
+				t.Fatalf("value below minimum error = %v, want ErrTooBigValue", err)
+			}
+			above := new(big.Int).Add(new(big.Int).Set(max), big.NewInt(1))
+			if err := BeginCell().StoreBigInt(above, width); !errors.Is(err, ErrTooBigValue) {
+				t.Fatalf("value above maximum error = %v, want ErrTooBigValue", err)
+			}
+		})
 	}
 }
 

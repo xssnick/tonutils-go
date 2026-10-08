@@ -1,10 +1,13 @@
 package ton
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"hash/crc32"
+	"testing"
+
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"testing"
 )
 
 func TestLoadShardsFromHashes(t *testing.T) {
@@ -13,7 +16,20 @@ func TestLoadShardsFromHashes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cl, err := cell.FromBOC(data)
+	opts := cell.BOCParseOptions{AllowNonZeroLevelRoot: true}
+	if _, err = cell.FromBOCWithOptions(data, opts); err == nil {
+		t.Fatal("legacy fixture with an ordinary root level-mask mismatch must be rejected")
+	}
+
+	// The root references a level-1 dictionary but its historical descriptor
+	// declares mask 0. Normalize only the test copy and keep production strict.
+	if data[12] != 0x01 {
+		t.Fatalf("unexpected legacy root descriptor: %x", data[12])
+	}
+	data[12] = 0x21
+	binary.LittleEndian.PutUint32(data[len(data)-4:], crc32.Checksum(data[:len(data)-4], crc32.MakeTable(crc32.Castagnoli)))
+
+	cl, err := cell.FromBOCWithOptions(data, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

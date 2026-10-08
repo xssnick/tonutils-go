@@ -3,6 +3,11 @@ package tvm
 import (
 	"errors"
 	"fmt"
+	"math/big"
+	"os"
+	"runtime/debug"
+	"sync"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	_ "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	_ "github.com/xssnick/tonutils-go/tvm/op/dict"
@@ -14,15 +19,24 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
-	"os"
-	"runtime/debug"
-	"sync"
 )
 
 type trieNode struct {
 	next [2]*trieNode
-	op   vm.OPGetter
+	op   *dispatchEntry
+}
+
+// dispatchEntry is what a matched prefix resolves to. Which of the two shapes
+// an opcode has is decided once, when the table is built, so the step loop
+// picks between them on a nil check instead of a type assertion per
+// instruction.
+type dispatchEntry struct {
+	// arg is set for operand-carrying opcodes: a single shared instance that
+	// executes without allocating.
+	arg vm.ArgOP
+	// get builds an instance per instruction, for opcodes that still keep
+	// their decoded operand inside themselves.
+	get vm.OPGetter
 }
 
 const opcodeDispatchIndexBits = 16
@@ -35,15 +49,11 @@ type opcodeDispatch struct {
 
 type opcodeDispatchPrefix struct {
 	node    *trieNode
-	matched vm.OPGetter
+	matched *dispatchEntry
 }
 
 type matchedDeserializer interface {
 	DeserializeMatched(code *cell.Slice) error
-}
-
-type reusableOP interface {
-	Reusable() bool
 }
 
 type TVM struct {
@@ -53,19 +63,23 @@ type TVM struct {
 var (
 	sharedOpcodeDispatchesOnce sync.Once
 	sharedOpcodeDispatches     [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
-	sharedOpcodeDispatchesLen  int
+	frozenOpcodeRegistry       []vm.OPGetter
+	frozenArgRegistry          []vm.ArgOP
 )
 
-func NewTVM() *TVM {
-	return &TVM{dispatches: getOpcodeDispatches()}
+func init() {
+	// All opcode packages have completed their init functions before tvm is
+	// initialized. Keep that registry snapshot immutable, like the finalized
+	// cp0 table in the reference VM.
+	frozenOpcodeRegistry = append([]vm.OPGetter(nil), vm.List...)
+	frozenArgRegistry = append([]vm.ArgOP(nil), vm.ArgList...)
 }
 
-func getOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
-	dispatches := getSharedOpcodeDispatches()
-	if len(vm.List) == sharedOpcodeDispatchesLen {
-		return dispatches
-	}
-	return buildOpcodeDispatches()
+func NewTVM() *TVM {
+	return newTVM(
+		vm.List,
+		frozenOpcodeRegistry,
+	)
 }
 
 func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
@@ -74,46 +88,143 @@ func getSharedOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispat
 }
 
 func buildSharedOpcodeDispatches() {
-	sharedOpcodeDispatches = buildOpcodeDispatches()
-	sharedOpcodeDispatchesLen = len(vm.List)
+	sharedOpcodeDispatches = buildOpcodeDispatches(frozenOpcodeRegistry, frozenArgRegistry)
 }
 
-func buildOpcodeDispatches() [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
+func buildOpcodeDispatches(registry []vm.OPGetter, argRegistry []vm.ArgOP) [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch {
 	var dispatches [vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch
 	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 		dispatches[ver] = newOpcodeDispatch()
 	}
 
-	for _, opGetter := range vm.List {
+	for _, opGetter := range registry {
 		op := opGetter()
-		getter := opGetter
-		if reusable, ok := op.(reusableOP); ok && reusable.Reusable() {
-			getter = cachedOPGetter(op)
+
+		// Implementing ArgOP is what makes an opcode shareable: it keeps no
+		// decoded operand of its own, so one instance serves every execution
+		// and a step allocates nothing. Everything else still gets a fresh
+		// instance per instruction.
+		entry := &dispatchEntry{get: opGetter}
+		invalid := func() *dispatchEntry {
+			return &dispatchEntry{get: historicalInvalidOpcodeGetter(op)}
 		}
-		prefixes := op.GetPrefixes()
-		minVersion := opcodeMinVersion(op)
-		if minVersion < 0 {
-			minVersion = 0
-		}
-		var invalidGetter vm.OPGetter
-		for _, s := range prefixes {
-			if minVersion > 0 && opcodeIsHistoricalQuietCompoundPrefix(s) {
-				if invalidGetter == nil {
-					invalidGetter = historicalInvalidOpcodeGetter(op)
-				}
-				for ver := 0; ver < minVersion && ver <= vm.MaxSupportedGlobalVersion; ver++ {
-					dispatches[ver].addPrefix(s, invalidGetter)
-				}
-			}
-			for ver := minVersion; ver <= vm.MaxSupportedGlobalVersion; ver++ {
-				dispatches[ver].addPrefix(s, getter)
+		if arg, ok := op.(vm.ArgOP); ok {
+			entry = &dispatchEntry{arg: arg}
+			invalid = func() *dispatchEntry {
+				return &dispatchEntry{arg: historicalInvalidArgOP{ArgOP: arg}}
 			}
 		}
+
+		registerOpcodePrefixes(&dispatches, op.GetPrefixes(), opcodeMinVersion(op), entry, invalid)
 	}
+
+	for _, argOp := range argRegistry {
+		entry := &dispatchEntry{arg: argOp}
+		minVersion := 0
+		if versioned, ok := argOp.(vm.VersionedOp); ok {
+			minVersion = versioned.MinGlobalVersion()
+		}
+		registerOpcodePrefixes(&dispatches, argOp.GetPrefixes(), minVersion, entry, func() *dispatchEntry {
+			return &dispatchEntry{arg: historicalInvalidArgOP{ArgOP: argOp}}
+		})
+	}
+
 	for ver := 0; ver <= vm.MaxSupportedGlobalVersion; ver++ {
 		dispatches[ver].buildFastTable()
 	}
 	return dispatches
+}
+
+// registerOpcodePrefixes installs an opcode for every global version it exists
+// in. Below its minimum version a handful of quiet compound prefixes are not
+// simply absent: they were dispatched and charged for, then rejected, so they
+// keep an entry that fails the same way rather than falling through to the
+// generic unknown-opcode path.
+func registerOpcodePrefixes(
+	dispatches *[vm.MaxSupportedGlobalVersion + 1]*opcodeDispatch,
+	prefixes []*cell.Slice,
+	minVersion int,
+	entry *dispatchEntry,
+	invalid func() *dispatchEntry,
+) {
+	if minVersion < 0 {
+		minVersion = 0
+	}
+	var invalidEntry *dispatchEntry
+	for _, s := range prefixes {
+		if minVersion > 0 && opcodeIsHistoricalQuietCompoundPrefix(s) {
+			if invalidEntry == nil {
+				invalidEntry = invalid()
+			}
+			for ver := 0; ver < minVersion && ver <= vm.MaxSupportedGlobalVersion; ver++ {
+				dispatches[ver].addPrefix(s, invalidEntry)
+			}
+		}
+		for ver := minVersion; ver <= vm.MaxSupportedGlobalVersion; ver++ {
+			dispatches[ver].addPrefix(s, entry)
+		}
+	}
+}
+
+// historicalInvalidArgOP decodes and charges exactly as the real opcode does,
+// then rejects it — the behaviour of a global version that did not have it yet.
+type historicalInvalidArgOP struct {
+	vm.ArgOP
+}
+
+func (op historicalInvalidArgOP) InterpretArgs(*vm.State, uint64) error {
+	return vmerr.Error(vmerr.CodeInvalidOpcode)
+}
+
+// decodeInstruction decodes one instruction from code and returns its text
+// form. It is how anything that reads the table without executing — a
+// disassembler, the dispatch tests — gets at an entry regardless of its shape.
+func (e *dispatchEntry) decodeInstruction(state *vm.State, code *cell.Slice) (string, error) {
+	_, text, err := e.decodeAndEncode(state, code, false)
+	return text, err
+}
+
+// decodeAndEncode additionally re-encodes the decoded instruction, for the
+// round-trip checks. Encoding is opt-in because some opcodes only serialize
+// once their operand has been filled in for real.
+func (e *dispatchEntry) decodeAndEncode(state *vm.State, code *cell.Slice, encode bool) (*cell.Builder, string, error) {
+	if e.arg != nil {
+		args, err := e.arg.DecodeArgs(state, code)
+		if err != nil {
+			return nil, "", err
+		}
+		var encoded *cell.Builder
+		if encode {
+			encoded = e.arg.SerializeArgs(args)
+		}
+		return encoded, e.arg.SerializeArgsText(args), nil
+	}
+
+	op := e.get()
+	if fast, ok := op.(matchedDeserializer); ok {
+		if err := fast.DeserializeMatched(code); err != nil {
+			return nil, "", err
+		}
+	} else if err := op.Deserialize(code); err != nil {
+		return nil, "", err
+	}
+	var encoded *cell.Builder
+	if encode {
+		encoded = op.Serialize()
+	}
+	return encoded, op.SerializeText(), nil
+}
+
+// instance returns the underlying opcode, shared or freshly built, for callers
+// that only want to inspect it. The two shapes have no common interface — an
+// ArgOP deliberately has no Deserialize/Interpret pair — and every caller only
+// looks at the dynamic type anyway, so it stays untyped rather than binding the
+// shared instance to a dummy operand.
+func (e *dispatchEntry) instance() any {
+	if e.arg != nil {
+		return e.arg
+	}
+	return e.get()
 }
 
 func cachedOPGetter(op vm.OP) vm.OPGetter {
@@ -199,17 +310,9 @@ func (op historicalInvalidOpcodeGas) InstructionBits() int64 {
 	return op.op.(vm.GasPricedOp).InstructionBits()
 }
 
-// AllowHigherVersionExecUsingLatest allows preparing configs with a global
-// version higher than vm.MaxSupportedGlobalVersion. When enabled, execution
-// uses the latest supported version.
-var AllowHigherVersionExecUsingLatest = true
-
 func validateGlobalVersion(version int) error {
 	if version < 0 {
 		return fmt.Errorf("unsupported global version %d, minimum supported is %d", version, 0)
-	}
-	if version > vm.MaxSupportedGlobalVersion && !AllowHigherVersionExecUsingLatest {
-		return fmt.Errorf("unsupported global version %d, maximum supported is %d", version, vm.MaxSupportedGlobalVersion)
 	}
 	return nil
 }
@@ -224,14 +327,18 @@ func effectiveGlobalVersion(version uint32) uint32 {
 type ExecutionResult struct {
 	ExitCode  int64
 	GasUsed   int64
-	Steps     uint32
+	Steps     uint64
 	Gas       vm.Gas
 	Stack     *vm.Stack
 	Code      *cell.Cell
 	Data      *cell.Cell
 	Actions   *cell.Cell
 	Committed bool
-	Proof     *cell.Cell
+	// MissingLibrary is the hash from the last library lookup that searched
+	// every registered collection without finding a matching cell.
+	MissingLibrary *cell.Hash
+	Proof          *cell.Cell
+	loadedCells    vm.LoadedCells
 }
 
 type ExecutionConfig struct {
@@ -239,6 +346,8 @@ type ExecutionConfig struct {
 	Libraries                   []*cell.Cell
 	SignatureCheckAlwaysSucceed bool
 	Config                      *PreparedBlockchainConfig
+	// Historical explicitly selects historical VM rules for archive replay.
+	Historical vm.HistoricalConfig
 }
 
 func bitAt(data []byte, bit uint) uint8 {
@@ -249,13 +358,7 @@ func newOpcodeDispatch() *opcodeDispatch {
 	return &opcodeDispatch{root: &trieNode{}}
 }
 
-func (tvm *TVM) addTriePrefix(prefix *cell.Slice, op vm.OPGetter) {
-	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
-	dispatch.addPrefix(prefix, op)
-	dispatch.buildFastTable()
-}
-
-func (dispatch *opcodeDispatch) addPrefix(prefix *cell.Slice, op vm.OPGetter) {
+func (dispatch *opcodeDispatch) addPrefix(prefix *cell.Slice, op *dispatchEntry) {
 	n := dispatch.root
 	bits := prefix.BitsLeft()
 	raw := prefix.MustPreloadSlice(bits)
@@ -278,7 +381,7 @@ func (dispatch *opcodeDispatch) addPrefix(prefix *cell.Slice, op vm.OPGetter) {
 func (dispatch *opcodeDispatch) buildFastTable() {
 	for raw := range dispatch.index {
 		n := dispatch.root
-		var matched vm.OPGetter
+		var matched *dispatchEntry
 
 		for bit := uint(0); bit < opcodeDispatchIndexBits; bit++ {
 			b := uint8((uint(raw) >> (opcodeDispatchIndexBits - 1 - bit)) & 1)
@@ -298,26 +401,22 @@ func (dispatch *opcodeDispatch) buildFastTable() {
 	}
 }
 
-func (tvm *TVM) matchOpcode(code *cell.Slice) vm.OPGetter {
+func (tvm *TVM) matchOpcode(code *cell.Slice) *dispatchEntry {
 	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcode(dispatch, code)
 }
 
-func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) vm.OPGetter {
+func (tvm *TVM) matchOpcodeFast(code *cell.Slice, available uint) *dispatchEntry {
 	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcodeFast(dispatch, code, available)
 }
 
-func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) vm.OPGetter {
+func (tvm *TVM) matchOpcodeSlow(code *cell.Slice, available uint) *dispatchEntry {
 	dispatch := tvm.dispatches[vm.MaxSupportedGlobalVersion]
 	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
 }
 
-func (dispatch *opcodeDispatch) match(code *cell.Slice) vm.OPGetter {
-	return matchOpcode(dispatch, code)
-}
-
-func matchOpcode(dispatch *opcodeDispatch, code *cell.Slice) vm.OPGetter {
+func matchOpcode(dispatch *opcodeDispatch, code *cell.Slice) *dispatchEntry {
 	available := code.BitsLeft()
 	if available == 0 {
 		return nil
@@ -330,7 +429,7 @@ func matchOpcode(dispatch *opcodeDispatch, code *cell.Slice) vm.OPGetter {
 	return matchOpcodeSlow(dispatch.root, maxPrefixLen, code, available)
 }
 
-func matchOpcodeFast(dispatch *opcodeDispatch, code *cell.Slice, available uint) vm.OPGetter {
+func matchOpcodeFast(dispatch *opcodeDispatch, code *cell.Slice, available uint) *dispatchEntry {
 	maxPrefixLen := dispatch.maxPrefixLen
 	indexBits := uint(opcodeDispatchIndexBits)
 	preloadBits := indexBits
@@ -384,13 +483,9 @@ func matchOpcodeFast(dispatch *opcodeDispatch, code *cell.Slice, available uint)
 	return matched
 }
 
-func (dispatch *opcodeDispatch) matchSlow(code *cell.Slice, available uint) vm.OPGetter {
-	return matchOpcodeSlow(dispatch.root, dispatch.maxPrefixLen, code, available)
-}
-
-func matchOpcodeSlow(root *trieNode, maxPrefixLen uint, code *cell.Slice, available uint) vm.OPGetter {
+func matchOpcodeSlow(root *trieNode, maxPrefixLen uint, code *cell.Slice, available uint) *dispatchEntry {
 	n := root
-	var matched vm.OPGetter
+	var matched *dispatchEntry
 
 	for i := uint(0); i < maxPrefixLen; i++ {
 		bit := uint8(0)
@@ -417,15 +512,24 @@ func (tvm *TVM) Execute(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack
 	return tvm.executeWithConfig(code, data, c7, gas, stack, cfg, executeOptionsFromConfig(cfg))
 }
 
+// ExecuteGetMethod runs a get method. As in the reference get-method flow,
+// the final automatic commit still happens: a successful run leaving a
+// too-deep or non-zero-level c4/c5 ends with an inverted cell-overflow exit
+// and a cleared stack. That flow also registers the library collection only
+// after the machine has converted the code, so a library root code is not
+// resolved at startup — it gets wrapped and resolves during execution.
 func (tvm *TVM) ExecuteGetMethod(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig) (*ExecutionResult, error) {
 	options := executeOptionsFromConfig(cfg)
-	options.skipFinalCommit = true
+	options.codeConversionWithoutLibraries = true
 	return tvm.executeWithConfig(code, data, c7, gas, stack, cfg, options)
 }
 
 func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.Gas, stack *vm.Stack, cfg ExecutionConfig, options executeOptions) (*ExecutionResult, error) {
 	if cfg.Config == nil {
 		return nil, errConfigRootRequired
+	}
+	if err := cfg.Historical.Validate(int(cfg.Config.GlobalVersion())); err != nil {
+		return nil, err
 	}
 
 	libraries := cfg.Libraries
@@ -436,6 +540,18 @@ func (tvm *TVM) executeWithConfig(code, data *cell.Cell, c7 tuple.Tuple, gas vm.
 		if err != nil || res != nil {
 			return res, err
 		}
+	}
+
+	if code == nil || stack == nil {
+		// The reference VM refuses to run with null code or stack as a fatal
+		// condition (exit ~fatal) before the normal exception path.
+		return &ExecutionResult{
+			ExitCode: ^int64(vmerr.CodeFatal),
+			Gas:      gas,
+			Stack:    stack,
+			Code:     code,
+			Data:     data,
+		}, nil
 	}
 
 	res, err := tvm.executeWithOptions(code, data, c7, gas, stack, cfg.Config, options, libraries...)
@@ -453,17 +569,26 @@ func finishExecutionResult(res *ExecutionResult, err error) (*ExecutionResult, e
 }
 
 type executeOptions struct {
+	historical                  vm.HistoricalConfig
 	stopOnAccept                bool
 	proof                       *cell.MerkleProofBuilder
-	skipFinalCommit             bool
 	traceHook                   vm.TraceHook
 	signatureCheckAlwaysSucceed bool
 	maxVMDataDepth              uint16
 	libraryLoadLimit            *uint32
+	// codeConversionWithoutLibraries reproduces the SmartContract dry-run flow
+	// for get methods and messages. Libraries are registered after construction,
+	// so startup code conversion cannot resolve library cells. Transaction
+	// flows have the libraries up front and resolve them for free.
+	codeConversionWithoutLibraries bool
+	// onCellLoad observes the first load of every cell, for callers that must
+	// record what the machine read regardless of how the cell reached it.
+	onCellLoad func(*cell.Cell)
 }
 
 func executeOptionsFromConfig(cfg ExecutionConfig) executeOptions {
 	return executeOptions{
+		historical:                  cfg.Historical,
 		signatureCheckAlwaysSucceed: cfg.SignatureCheckAlwaysSucceed,
 		maxVMDataDepth:              vm.MaxDataDepth,
 	}
@@ -502,7 +627,12 @@ func (tvm *TVM) executeWithOptions(code, data *cell.Cell, c7 tuple.Tuple, gas vm
 // enters here directly with a c7 pre-bound to the state's gas trace, so the
 // c7 bind in InitForExecution hits the fast path.
 func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options executeOptions) (*ExecutionResult, error) {
+	initialData := state.Reg.D[0]
+	initialActions := state.Reg.D[1]
+
+	state.Historical = options.historical
 	state.StopOnAccept = options.stopOnAccept
+	state.OnCellLoad = options.onCellLoad
 	state.TraceHook = options.traceHook
 	state.SignatureCheckAlwaysSucceed = options.signatureCheckAlwaysSucceed
 	state.SetChildRunner(tvm.runState)
@@ -511,9 +641,18 @@ func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options exe
 		state.SetMaxLibraryLoads(*options.libraryLoadLimit)
 	}
 	state.InitForExecution()
-	currentCode, err := tvm.convertExecutionCodeCell(state, code)
+	defer state.Cells.FinishExecution()
+	currentCode, err := tvm.convertExecutionCodeCell(state, code, !options.codeConversionWithoutLibraries)
 	if err != nil {
-		res := executionResultFromState(vmerrCode(err), state, code, data)
+		exitCode := vmerrCode(err)
+		if _, ok := vmerr.AsVirtualization(err); ok {
+			// Since v9 a virtualized pruned code root aborts in the C++
+			// constructor, before run() starts. Keep the public Execute contract
+			// (VM failures are returned as a result) while encoding that external
+			// abort exactly like the reference boundary does.
+			exitCode = ^exitCode
+		}
+		res := executionResultFromState(exitCode, state, code, initialData, initialActions)
 		if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
 			return res, proofErr
 		}
@@ -522,31 +661,33 @@ func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options exe
 	state.CurrentCode = currentCode
 	state.Reg.C[3] = &vm.OrdinaryContinuation{
 		Data: vm.ControlData{
-			CP:      vm.CP,
+			CP:      state.CP,
 			NumArgs: vm.ControlDataAllArgs,
 		},
 		Code: currentCode.Copy(),
 	}
 
-	exitCode, err := tvm.runStateWithOptions(state, options.skipFinalCommit)
+	exitCode, err := tvm.runState(state)
 
-	dataRes := state.Reg.D[0]
-	actionsRes := state.Reg.D[1]
+	dataRes := initialData
+	actionsRes := initialActions
 	if state.Committed.Committed {
 		dataRes = state.Committed.Data
 		actionsRes = state.Committed.Actions
 	}
 
 	res := &ExecutionResult{
-		ExitCode:  exitCode,
-		GasUsed:   state.Gas.Used(),
-		Steps:     state.Steps,
-		Gas:       state.Gas,
-		Stack:     state.Stack,
-		Code:      code,
-		Data:      dataRes,
-		Actions:   actionsRes,
-		Committed: state.Committed.Committed,
+		ExitCode:       exitCode,
+		GasUsed:        state.Gas.Used(),
+		Steps:          state.Steps,
+		Gas:            state.Gas,
+		Stack:          state.Stack,
+		Code:           code,
+		Data:           dataRes,
+		Actions:        actionsRes,
+		Committed:      state.Committed.Committed,
+		MissingLibrary: state.MissingLibrary(),
+		loadedCells:    state.Cells.LoadedCells(),
 	}
 	if proofErr := attachExecutionProof(res, state, options.proof); proofErr != nil {
 		return res, proofErr
@@ -554,30 +695,47 @@ func (tvm *TVM) executeState(state *vm.State, code, data *cell.Cell, options exe
 	return res, err
 }
 
-func (tvm *TVM) convertExecutionCodeCell(state *vm.State, code *cell.Cell) (*cell.Slice, error) {
+func (tvm *TVM) convertExecutionCodeCell(state *vm.State, code *cell.Cell, resolveLibraries bool) (*cell.Slice, error) {
 	if code == nil {
 		return state.Cells.BeginParseAlreadyLoaded(code)
 	}
 
-	if state.GlobalVersion >= 9 {
+	if resolveLibraries && state.GlobalVersion >= 9 {
+		// Transaction flows have the library collection up front, so the root
+		// is resolved outside gas accounting: neither gas nor a library-load
+		// slot is consumed.
+		restoreLookupState := state.SuspendLibraryLoadAccounting()
 		currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
+		restoreLookupState()
 		if err == nil {
 			return currentCode, nil
 		}
-		if _, ok := vmerr.ErrorCode(err); !ok {
+		// The reference catches VmError here, but VmVirtError must escape the
+		// constructor before the first VM step.
+		if _, ok := vmerr.AsVMError(err); !ok {
 			return nil, err
 		}
 		return state.Cells.BeginParseAlreadyLoaded(executionCodeRefWrapper(code))
 	}
 
-	if !code.IsSpecial() {
-		currentCode, err := state.Cells.BeginParseAlreadyLoaded(code)
-		if err == nil {
-			return currentCode, nil
+	// Below v9 the code slice is built outside gas accounting, and the
+	// get-method flow converts before its library collection is registered:
+	// specials are not resolved and nothing is charged. A lazy placeholder
+	// always looks special, so materialize it for free first and inspect the
+	// real cell type.
+	currentCode, special, err := state.Cells.BeginParseSpecialAlreadyLoaded(code)
+	if err != nil {
+		if state.GlobalVersion >= 9 {
+			if _, ok := vmerr.AsVMError(err); !ok {
+				return nil, err
+			}
+		} else {
+			if _, ok := vmerr.ErrorCode(err); !ok {
+				return nil, err
+			}
 		}
-		if _, ok := vmerr.ErrorCode(err); !ok {
-			return nil, err
-		}
+	} else if !special {
+		return currentCode, nil
 	}
 
 	return state.Cells.BeginParseAlreadyLoaded(executionCodeRefWrapper(code))
@@ -587,27 +745,26 @@ func executionCodeRefWrapper(code *cell.Cell) *cell.Cell {
 	return cell.BeginCell().MustStoreRef(code).EndCell()
 }
 
-func executionResultFromState(exitCode int64, state *vm.State, code, data *cell.Cell) *ExecutionResult {
-	dataRes := state.Reg.D[0]
-	actionsRes := state.Reg.D[1]
+func executionResultFromState(exitCode int64, state *vm.State, code, data, actions *cell.Cell) *ExecutionResult {
+	dataRes := data
+	actionsRes := actions
 	if state.Committed.Committed {
 		dataRes = state.Committed.Data
 		actionsRes = state.Committed.Actions
 	}
-	if dataRes == nil {
-		dataRes = data
-	}
 
 	return &ExecutionResult{
-		ExitCode:  exitCode,
-		GasUsed:   state.Gas.Used(),
-		Steps:     state.Steps,
-		Gas:       state.Gas,
-		Stack:     state.Stack,
-		Code:      code,
-		Data:      dataRes,
-		Actions:   actionsRes,
-		Committed: state.Committed.Committed,
+		ExitCode:       exitCode,
+		GasUsed:        state.Gas.Used(),
+		Steps:          state.Steps,
+		Gas:            state.Gas,
+		Stack:          state.Stack,
+		Code:           code,
+		Data:           dataRes,
+		Actions:        actionsRes,
+		Committed:      state.Committed.Committed,
+		MissingLibrary: state.MissingLibrary(),
+		loadedCells:    state.Cells.LoadedCells(),
 	}
 }
 
@@ -619,10 +776,6 @@ func vmerrCode(err error) int64 {
 }
 
 func (tvm *TVM) runState(state *vm.State) (exitCode int64, err error) {
-	return tvm.runStateWithOptions(state, false)
-}
-
-func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exitCode int64, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			exitCode = vmerr.CodeFatal
@@ -640,6 +793,14 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 			if exitCode == vmerr.CodeOutOfGas && !vm.IsHandledException(err) {
 				exitCode = ^exitCode
 			}
+			if exitCode == vmerr.CodeVirtualization {
+				_, isVirt := vmerr.AsVirtualization(err)
+				if isVirt {
+					// Like unhandled out-of-gas, a virtualization abort bypasses
+					// c2 and is reported inverted (-15).
+					exitCode = ^exitCode
+				}
+			}
 			if !vm.IsSuccessExitCode(exitCode) {
 				return exitCode, err
 			}
@@ -648,9 +809,6 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 		}
 	}
 
-	if skipFinalCommit {
-		return exitCode, nil
-	}
 	if state.TryCommitCurrent() {
 		return exitCode, nil
 	}
@@ -663,8 +821,19 @@ func (tvm *TVM) runStateWithOptions(state *vm.State, skipFinalCommit bool) (exit
 
 func (tvm *TVM) execute(state *vm.State) error {
 	dispatch := tvm.dispatchForVersion(state.GlobalVersion)
+	uncheckedGas := state.GlobalVersion < 4
 	for {
-		if err := tvm.stepAnyWithDispatch(dispatch, state); err != nil {
+		err := tvm.stepAnyWithDispatch(dispatch, state)
+		if uncheckedGas && (err == nil || vm.IsHandledException(err)) {
+			// Pre-v4 consumption is unchecked, so the gas check runs after
+			// every step that returned normally — including the terminating
+			// one — and an overdraft overrides its result. Thrown exceptions
+			// are exempt: their checked exception charge covers them.
+			if gasErr := state.CheckGas(); gasErr != nil {
+				err = gasErr
+			}
+		}
+		if err != nil {
 			retry, err := tvm.handleStepError(state, err)
 			if retry {
 				continue
@@ -675,11 +844,11 @@ func (tvm *TVM) execute(state *vm.State) error {
 }
 
 func (tvm *TVM) handleStepError(state *vm.State, err error) (bool, error) {
-	if errors.Is(err, vm.ErrStopOnAccept) {
-		return false, nil
-	}
 	if vm.IsHandledException(err) {
 		return false, err
+	}
+	if errors.Is(err, vm.ErrStopOnAccept) {
+		return false, nil
 	}
 	e, isVMErr := vmerr.AsVMError(err)
 	if isVMErr && e.Code == vmerr.CodeOutOfGas {
@@ -692,7 +861,7 @@ func (tvm *TVM) handleStepError(state *vm.State, err error) (bool, error) {
 	if _, isVirt := vmerr.AsVirtualization(err); isVirt {
 		return false, err
 	}
-	if state.Reg.C[2] != nil && isVMErr && !vm.IsSuccessExitCode(e.Code) {
+	if !vm.IsNullContinuation(state.Reg.C[2]) && isVMErr && !vm.IsSuccessExitCode(e.Code) {
 		if state.TraceEnabled() {
 			state.Tracef("[EXCEPTION] %d %s", e.Code, e.Msg)
 		}
@@ -717,10 +886,6 @@ func (tvm *TVM) dispatchForVersion(version int) *opcodeDispatch {
 	return tvm.dispatches[version]
 }
 
-func (tvm *TVM) stepAny(state *vm.State) error {
-	return tvm.stepAnyWithDispatch(tvm.dispatchForVersion(state.GlobalVersion), state)
-}
-
 func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) error {
 	if state.CurrentCode.BitsLeft() > 0 {
 		state.Steps++
@@ -730,38 +895,27 @@ func (tvm *TVM) stepAnyWithDispatch(dispatch *opcodeDispatch, state *vm.State) e
 	if state.CurrentCode.RefsNum() > 0 {
 		state.Steps++
 
-		if err := state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
-			return err
-		}
-
-		cc, err := state.Cells.LoadRef(state.CurrentCode)
-		if err != nil {
-			return err
-		}
-		if state.GlobalVersion < 4 {
-			// Pre-v4 gas checks are usually deferred, but the reference VM
-			// checks after loading the implicit JMPREF target before executing it.
-			if err := state.CheckGas(); err != nil {
+		if state.GlobalVersion != 0 || state.Historical.GasSchedule == vm.GasScheduleModern {
+			if err := state.Gas.Consume(vm.ImplicitJmprefGasPrice); err != nil {
 				return err
 			}
 		}
 
-		c := &vm.OrdinaryContinuation{
-			Data: vm.ControlData{
-				CP:      vm.CP,
-				NumArgs: vm.ControlDataAllArgs,
-			},
-			Code: cc,
+		var cc cell.Slice
+		if err := state.Cells.LoadRefInto(state.CurrentCode, &cc); err != nil {
+			return err
 		}
 
 		state.TraceOpcode("implicit JMPREF")
-		return state.Jump(c)
+		return state.JumpToCode(&cc, state.CP)
 	}
 
 	state.Steps++
 	state.TraceOpcode("implicit RET")
-	if err := state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
-		return err
+	if state.GlobalVersion != 0 || state.Historical.GasSchedule == vm.GasScheduleModern {
+		if err := state.Gas.Consume(vm.ImplicitRetGasPrice); err != nil {
+			return err
+		}
 	}
 
 	return state.Return()
@@ -814,15 +968,35 @@ func (tvm *TVM) step(state *vm.State) (err error) {
 }
 
 func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err error) {
-	px := matchOpcode(dispatch, state.CurrentCode)
-	if px == nil {
+	entry := matchOpcode(dispatch, state.CurrentCode)
+	if state.GlobalVersion == 0 && (state.Historical.NoPRNG || state.Historical.NoBLKDROP2) {
+		// These opcodes were absent from early tables. Reject before decoding
+		// so an unknown instruction leaves the code cursor and stack intact.
+		// Pad truncated prefixes the same way as the opcode lookup above.
+		bits := min(state.CurrentCode.BitsLeft(), uint(16))
+		prefix := state.CurrentCode.MustPreloadUInt(bits) << (16 - bits)
+		if state.Historical.NoBLKDROP2 && prefix>>8 == 0x6c {
+			entry = nil
+		}
+		if state.Historical.NoPRNG {
+			switch prefix {
+			case 0xf810, 0xf811, 0xf814, 0xf815:
+				entry = nil
+			}
+		}
+	}
+	if entry == nil {
 		if err = state.ConsumeGas(vm.InstructionBaseGasPrice); err != nil {
 			return err
 		}
 		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("opcode not found: %s", state.CurrentCode.String()))
 	}
 
-	op := px()
+	if entry.arg != nil {
+		return executeArgOpcode(state, entry.arg)
+	}
+
+	op := entry.get()
 
 	if fast, ok := op.(matchedDeserializer); ok {
 		err = fast.DeserializeMatched(state.CurrentCode)
@@ -835,32 +1009,89 @@ func (tvm *TVM) stepWithDispatch(dispatch *opcodeDispatch, state *vm.State) (err
 		}
 		return normalizeOpcodeDeserializeError(err, op)
 	}
-	if err = consumeInstructionGas(state, op); err != nil {
+
+	return executeDecodedOpcode(state, op)
+}
+
+// executeArgOpcode runs an opcode that keeps no state of its own. It mirrors
+// the legacy decode-charge-interpret order exactly, including charging for a
+// failed decode: the reference VM has already picked and paid for a table entry
+// by the time it discovers the instruction is truncated.
+func executeArgOpcode(state *vm.State, op vm.ArgOP) error {
+	args, err := op.DecodeArgs(state, state.CurrentCode)
+	if err != nil {
+		if gasErr := state.ConsumeGas(vm.InstructionBaseGasPrice + op.ArgInstructionBits(args)); gasErr != nil {
+			return gasErr
+		}
+		return normalizeArgOpcodeDeserializeError(err, op, args)
+	}
+
+	if err = state.ConsumeGas(vm.InstructionBaseGasPrice + op.ArgInstructionBits(args)); err != nil {
 		return err
 	}
+
+	return interpretOpcode(state,
+		func() error { return op.InterpretArgs(state, args) },
+		func() string { return op.SerializeArgsText(args) },
+	)
+}
+
+func normalizeArgOpcodeDeserializeError(err error, op vm.ArgOP, args uint64) error {
+	if errors.Is(err, vm.ErrCorruptedOpcode) ||
+		errors.Is(err, cell.ErrNoMoreRefs) ||
+		errors.Is(err, cell.ErrSmallSlice) ||
+		cell.IsNotEnoughDataError(err) {
+		return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("deserialize opcode [%s] failed", op.SerializeArgsText(args)))
+	}
+	return fmt.Errorf("deserialize opcode [%s] error: %w", op.SerializeArgsText(args), err)
+}
+
+func executeDecodedOpcode(state *vm.State, op vm.OP) error {
+	if err := consumeInstructionGas(state, op); err != nil {
+		return err
+	}
+
+	return interpretOpcode(state,
+		func() error { return op.Interpret(state) },
+		func() string { return op.SerializeText() },
+	)
+}
+
+// interpretOpcode runs the body of an instruction whose own gas the caller has
+// already charged; from there on both opcode shapes behave identically. The two
+// closures are only called, never stored, so they stay on the caller's stack and
+// a step still allocates nothing.
+func interpretOpcode(state *vm.State, run func() error, trace func() string) error {
+	// From global version 4 on an exhausted limit aborts before the instruction
+	// body rather than after it.
 	if state.GlobalVersion >= 4 {
-		if err = state.CheckGas(); err != nil {
+		if err := state.CheckGas(); err != nil {
 			return err
 		}
 	}
 	if state.TraceEnabled() {
-		state.TraceOpcode(op.SerializeText())
+		state.TraceOpcode(trace())
 	}
 
-	stackBefore := state.Stack.Checkpoint()
-	err = op.Interpret(state)
-	if err != nil {
-		if code, ok := vmerr.ErrorCode(err); ok && code == vmerr.CodeStackUnderflow && !vm.IsHandledException(err) {
-			state.Stack.RestoreCheckpoint(stackBefore)
+	if err := run(); err != nil {
+		// Cell load/create gas is charged by a trace callback. If it exhausted
+		// gas while the opcode later found a semantic error, the synchronous
+		// out-of-gas abort from the reference VM takes precedence.
+		if gasErr := state.Cells.PendingError(); gasErr != nil {
+			return gasErr
 		}
-		err = normalizeCellError(err)
-		return err
-	}
-	if err = state.CheckGas(); err != nil {
-		return err
+		if errors.Is(err, vm.ErrStopOnAccept) {
+			// ACCEPT can exhaust gas when clearing credit and clamping the
+			// limit to max. Its early-stop signal still needs the post-step
+			// gas check before the transaction precheck returns.
+			if gasErr := state.Gas.Check(); gasErr != nil {
+				return gasErr
+			}
+		}
+		return normalizeCellError(err)
 	}
 
-	return nil
+	return state.CheckGas()
 }
 
 func consumeInstructionGas(state *vm.State, op vm.OP) error {
@@ -869,4 +1100,18 @@ func consumeInstructionGas(state *vm.State, op vm.OP) error {
 		return nil
 	}
 	return state.ConsumeGas(vm.InstructionBaseGasPrice + gasOp.InstructionBits())
+}
+
+func newTVM(registry, frozenRegistry []vm.OPGetter) *TVM {
+	dispatches := getSharedOpcodeDispatches()
+	if len(registry) != len(frozenRegistry) || len(vm.ArgList) != len(frozenArgRegistry) {
+		// Keep supporting opcode packages registered after tvm initialization:
+		// their dispatch is built privately from the extended registry.
+		dispatches = buildOpcodeDispatches(
+			append([]vm.OPGetter(nil), registry...),
+			append([]vm.ArgOP(nil), vm.ArgList...),
+		)
+	}
+
+	return &TVM{dispatches: dispatches}
 }

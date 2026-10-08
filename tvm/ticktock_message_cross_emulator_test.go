@@ -389,10 +389,6 @@ func assertTickTockBuildProofLibrariesVersionParity(t *testing.T, version int, i
 	if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), wantData.Hash()) {
 		t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, wantData.Dump())
 	}
-	if version >= 9 {
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
-	}
-
 	refRes, err := runReferenceTickTockWithConfigRootAndLibraries(code, origData, tickTockTestAddr, isTock, now, tickTockTestBalance, tonopsTestSeed, configRoot, libs)
 	if err != nil {
 		t.Fatalf("reference tick/tock build-proof libraries emulation failed: %v", err)
@@ -452,10 +448,6 @@ func assertTickTockBuildProofLibrariesGlobalVersionOverrideParity(t *testing.T, 
 	if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), wantData.Hash()) {
 		t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, wantData.Dump())
 	}
-	if version >= 9 {
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
-	}
-
 	refRes, err := runReferenceTickTockWithConfigRootAndLibraries(code, origData, tickTockTestAddr, isTock, now, tickTockTestBalance, tonopsTestSeed, refConfigRoot, libs)
 	if err != nil {
 		t.Fatalf("reference tick/tock build-proof libraries global-version override machine_v=%d effective_v=%d is_tock=%t failed: %v", machineVersion, version, isTock, err)

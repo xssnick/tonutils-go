@@ -3,7 +3,6 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -11,69 +10,39 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return INDEX2(0, 0) },
-		func() vm.OP { return INDEX3(0, 0, 0) },
-	)
+	vm.ArgList = append(vm.ArgList, index2Op, index3Op)
 }
 
-// constant prefixes, computed once instead of on every decode
-var (
-	index2Prefix = helpers.UIntPrefix(0x6fb, 12)
-	index3Prefix = helpers.UIntPrefix(0x6fc>>2, 10)
-)
+// The operand is the encoded suffix itself: INDEX2 packs its two indices as
+// i:j, two bits each, and INDEX3 packs three the same way.
+var index2Op = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6fb, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("INDEX2 %d,%d", (args>>2)&3, args&3)
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execIndex2(state, int((args>>2)&3), int(args&3))
+	},
+})
 
-func INDEX2(i, j uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     index2Prefix,
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("INDEX2 %d,%d", i, j)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			value := (uint64(i&3) << 2) | uint64(j&3)
-			return cell.BeginCell().MustStoreUInt(value, 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			i = uint8((val >> 2) & 3)
-			j = uint8(val & 3)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execIndex2(state, int(i), int(j))
-		},
-	}
+var index3Op = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6fc>>2, 10)),
+	ArgBits:  6,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("INDEX3 %d,%d,%d", (args>>4)&3, (args>>2)&3, args&3)
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execIndex3(state, int((args>>4)&3), int((args>>2)&3), int(args&3))
+	},
+})
+
+func INDEX2(i, j uint8) vm.OP {
+	return vm.Bind(index2Op, (uint64(i&3)<<2)|uint64(j&3))
 }
 
-func INDEX3(i, j, k uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     index3Prefix,
-		FixedSizeBits: 6,
-		NameSerializer: func() string {
-			return fmt.Sprintf("INDEX3 %d,%d,%d", i, j, k)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			value := (uint64(i&3) << 4) | (uint64(j&3) << 2) | uint64(k&3)
-			return cell.BeginCell().MustStoreUInt(value, 6)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(6)
-			if err != nil {
-				return err
-			}
-			i = uint8((val >> 4) & 3)
-			j = uint8((val >> 2) & 3)
-			k = uint8(val & 3)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execIndex3(state, int(i), int(j), int(k))
-		},
-	}
+func INDEX3(i, j, k uint8) vm.OP {
+	return vm.Bind(index3Op, (uint64(i&3)<<4)|(uint64(j&3)<<2)|uint64(k&3))
 }
 
 func execIndex2(state *vm.State, i, j int) error {
@@ -125,7 +94,7 @@ func indexIntermediateTuple(current tuplepkg.Tuple, idx int) (tuplepkg.Tuple, er
 		return zero, err
 	}
 	nested, ok := val.(tuplepkg.Tuple)
-	if !ok || nested.Len() > 255 {
+	if !ok || nested.IsNull() || nested.Len() > 255 {
 		var zero tuplepkg.Tuple
 		return zero, vmerr.Error(vmerr.CodeTypeCheck, "intermediate value is not a tuple")
 	}

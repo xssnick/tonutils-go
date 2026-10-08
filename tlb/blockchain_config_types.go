@@ -1,6 +1,10 @@
 package tlb
 
-import "github.com/xssnick/tonutils-go/tvm/cell"
+import (
+	"fmt"
+
+	"github.com/xssnick/tonutils-go/tvm/cell"
+)
 
 const (
 	ConfigParamConfigAddress               uint32 = 0
@@ -72,6 +76,8 @@ const (
 	defaultSizeLimitsMaxMsgExtraCurrencies       = 2
 	defaultSizeLimitsMaxAccFixedPrefixLength     = 8
 	defaultSizeLimitsAccStateCellsForStorageDict = 26
+	defaultSizeLimitsOutMsgQueueSizeHardLimit    = 18000
+	defaultSizeLimitsOutMsgQueueSizeSoftLimit    = 12000
 )
 
 func init() {
@@ -81,6 +87,7 @@ func init() {
 	Register(NewConsensusConfigSimplexV2{})
 	Register(SizeLimitsConfigV1{})
 	Register(SizeLimitsConfigV2{})
+	Register(SizeLimitsConfigV3{})
 	Register(WorkchainDescrV1{})
 	Register(WorkchainDescrV2{})
 	Register(WorkchainFormatBasic{})
@@ -153,8 +160,18 @@ type WorkchainDescrV1 struct {
 }
 
 type WorkchainDescrV2 struct {
-	_                    Magic `tlb:"#a7"`
-	WorkchainDescrFields `tlb:"."`
+	_                         Magic `tlb:"#a7"`
+	WorkchainDescrFields      `tlb:"."`
+	SplitMergeTimings         WorkchainSplitMergeTimings `tlb:"."`
+	PersistentStateSplitDepth uint8                      `tlb:"## 8"`
+}
+
+type WorkchainSplitMergeTimings struct {
+	_                     Magic  `tlb:"#0"`
+	SplitMergeDelay       uint32 `tlb:"## 32"`
+	SplitMergeInterval    uint32 `tlb:"## 32"`
+	MinSplitMergeInterval uint32 `tlb:"## 32"`
+	MaxSplitMergeDelay    uint32 `tlb:"## 32"`
 }
 
 type WorkchainDescrFields struct {
@@ -278,7 +295,8 @@ type NewConsensusConfigSimplex struct {
 
 type NewConsensusConfigSimplexV2 struct {
 	_                    Magic            `tlb:"#22"`
-	Flags                uint8            `tlb:"## 7"`
+	Flags                uint8            `tlb:"## 5"`
+	ProtocolVersion      uint8            `tlb:"## 2"`
 	UseQUIC              bool             `tlb:"bool"`
 	SlotsPerLeaderWindow uint32           `tlb:"## 32"`
 	NoncriticalParams    *cell.Dictionary `tlb:"dict 8"`
@@ -308,7 +326,7 @@ type MisbehaviourPunishmentConfig struct {
 }
 
 type SizeLimitsConfig struct {
-	Config any `tlb:"[SizeLimitsConfigV1,SizeLimitsConfigV2]"`
+	Config any `tlb:"[SizeLimitsConfigV1,SizeLimitsConfigV2,SizeLimitsConfigV3]"`
 }
 
 type SizeLimitsConfigV1 struct {
@@ -337,6 +355,95 @@ type SizeLimitsConfigV2 struct {
 	MaxAccFixedPrefixLength     uint8   `tlb:"## 8"`
 	AccStateCellsForStorageDict uint32  `tlb:"## 32"`
 	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
+}
+
+// SizeLimitsConfigV3 serializes the current #03 record, including queue limits.
+// Loading also accepts the historical #03 record without the final two fields.
+type SizeLimitsConfigV3 struct {
+	_                           Magic   `tlb:"#03"`
+	MaxMsgBits                  uint32  `tlb:"## 32"`
+	MaxMsgCells                 uint32  `tlb:"## 32"`
+	MaxLibraryCells             uint32  `tlb:"## 32"`
+	MaxVMDataDepth              uint16  `tlb:"## 16"`
+	MaxExtMsgSize               uint32  `tlb:"## 32"`
+	MaxExtMsgDepth              uint16  `tlb:"## 16"`
+	MaxAccStateCells            uint32  `tlb:"## 32"`
+	MaxMCAccStateCells          uint32  `tlb:"## 32"`
+	MaxAccPublicLibraries       uint32  `tlb:"## 32"`
+	DeferOutQueueSizeLimit      uint32  `tlb:"## 32"`
+	MaxMsgExtraCurrencies       uint32  `tlb:"## 32"`
+	MaxAccFixedPrefixLength     uint8   `tlb:"## 8"`
+	AccStateCellsForStorageDict uint32  `tlb:"## 32"`
+	MaxTransactionLibraryLoads  *uint32 `tlb:"maybe ## 32"`
+	MaxTotalMsgBits             uint32  `tlb:"## 32"`
+	MaxTotalMsgCells            uint32  `tlb:"## 32"`
+	OutMsgQueueSizeHardLimit    uint32  `tlb:"## 32"`
+	OutMsgQueueSizeSoftLimit    uint32  `tlb:"## 32"`
+}
+
+func (v *SizeLimitsConfigV3) loadFromCell(loader *cell.Slice, skipMagic bool) error {
+	if !skipMagic {
+		tag, err := loader.LoadUInt(8)
+		if err != nil {
+			return err
+		}
+		if tag != 0x03 {
+			return fmt.Errorf("size limits v3 tag is %02x, want 03", tag)
+		}
+	}
+
+	// The v3 prefix is identical to v2 after its constructor tag.
+	var prefix SizeLimitsConfigV2
+	if err := LoadFromCell(&prefix, loader, true); err != nil {
+		return err
+	}
+	maxTotalMsgBits, err := loader.LoadUInt(32)
+	if err != nil {
+		return err
+	}
+	maxTotalMsgCells, err := loader.LoadUInt(32)
+	if err != nil {
+		return err
+	}
+
+	if loader.RefsNum() != 0 {
+		return fmt.Errorf("size limits v3 has unexpected references")
+	}
+	hardLimit := uint32(defaultSizeLimitsOutMsgQueueSizeHardLimit)
+	softLimit := uint32(defaultSizeLimitsOutMsgQueueSizeSoftLimit)
+	switch loader.BitsLeft() {
+	case 0:
+		// TON reused #03 when queue limits were added in September 2026.
+		// Historical configs use the same defaults as an absent param 43.
+	case 64:
+		hardLimit = uint32(loader.MustLoadUInt(32))
+		softLimit = uint32(loader.MustLoadUInt(32))
+	default:
+		return fmt.Errorf("size limits v3 queue limits tail has %d bits, want 0 or 64", loader.BitsLeft())
+	}
+
+	*v = SizeLimitsConfigV3{
+		MaxMsgBits:                  prefix.MaxMsgBits,
+		MaxMsgCells:                 prefix.MaxMsgCells,
+		MaxLibraryCells:             prefix.MaxLibraryCells,
+		MaxVMDataDepth:              prefix.MaxVMDataDepth,
+		MaxExtMsgSize:               prefix.MaxExtMsgSize,
+		MaxExtMsgDepth:              prefix.MaxExtMsgDepth,
+		MaxAccStateCells:            prefix.MaxAccStateCells,
+		MaxMCAccStateCells:          prefix.MaxMCAccStateCells,
+		MaxAccPublicLibraries:       prefix.MaxAccPublicLibraries,
+		DeferOutQueueSizeLimit:      prefix.DeferOutQueueSizeLimit,
+		MaxMsgExtraCurrencies:       prefix.MaxMsgExtraCurrencies,
+		MaxAccFixedPrefixLength:     prefix.MaxAccFixedPrefixLength,
+		AccStateCellsForStorageDict: prefix.AccStateCellsForStorageDict,
+		MaxTransactionLibraryLoads:  prefix.MaxTransactionLibraryLoads,
+		MaxTotalMsgBits:             uint32(maxTotalMsgBits),
+		MaxTotalMsgCells:            uint32(maxTotalMsgCells),
+		OutMsgQueueSizeHardLimit:    hardLimit,
+		OutMsgQueueSizeSoftLimit:    softLimit,
+	}
+
+	return nil
 }
 
 type SuspendedAddressList struct {

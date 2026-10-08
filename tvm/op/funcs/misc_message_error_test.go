@@ -391,8 +391,8 @@ func TestMiscMessageAdditionalPaths(t *testing.T) {
 		}
 
 		st = newFuncTestState(t, map[int]any{8: big.NewInt(1)})
-		if _, err := getMyAddr(st); err == nil {
-			t.Fatal("getMyAddr should reject non-slice params")
+		if _, err := sendMsgMyAddrSlice(st); err == nil {
+			t.Fatal("sendMsgMyAddrSlice should reject non-slice params")
 		}
 
 	})

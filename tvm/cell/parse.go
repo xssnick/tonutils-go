@@ -25,12 +25,16 @@ var bocIdxCRC32CMagic = []byte{0xAC, 0xC3, 0xA7, 0x28}
 // Set it to 0 or a negative value to disable the limit.
 var MaxBOCRoots = 16384
 
-// MaxBOCCells limits how many cells may be decoded from a single BOC payload,
-// including the improved compression/decompression path.
-// Set it to 0 or a negative value to disable the limit.
+// MaxBOCCells limits how many cells may be decoded from a single BOC payload.
+// This guard is stricter than the reference, which bounds only the payload size
+// (data_size <= cell_count<<10); it exists to keep a malicious payload from
+// allocating unbounded memory and can be raised per call through
+// BOCParseOptions.MaxCells. Set it to 0 or a negative value to disable the
+// global limit.
 var MaxBOCCells = 1 << 20
 
 const maxSerializedBOCCellBytes = 2 + maxCellDataBytes + 4*4 + (hashSize+depthSize)*4
+const maxBOCDeclaredPayloadBytesPerCell = 1 << 10
 
 func maxBOCPayloadBytes() int {
 	return maxBOCPayloadBytesForCells(MaxBOCCells)
@@ -40,16 +44,17 @@ func maxBOCPayloadBytesForCells(maxCells int) int {
 	if maxCells <= 0 {
 		return 0
 	}
-	if maxCells > math.MaxInt/maxSerializedBOCCellBytes {
+	if maxCells > math.MaxInt/maxBOCDeclaredPayloadBytesPerCell {
 		return math.MaxInt
 	}
-	return maxCells * maxSerializedBOCCellBytes
+	return maxCells * maxBOCDeclaredPayloadBytesPerCell
 }
 
 // BOCParseOptions configures BoC parsing.
 type BOCParseOptions struct {
-	// TrustedHashes trusts serialized hashes/depths when a cell stores them in
-	// the BoC payload. Cells without serialized hashes are still hashed normally.
+	// TrustedHashes trusts serialized hashes and depths when a cell stores them
+	// in the BoC payload. Cells without serialized metadata are still hashed
+	// normally.
 	TrustedHashes bool
 	// NoCopyPayload lets parsed cells reference the BoC payload directly.
 	// The caller must keep the source immutable while returned cells are alive.
@@ -61,9 +66,17 @@ type BOCParseOptions struct {
 	// DisableLazyCache disables lazy BoC materialized-cell caching, even when
 	// the BoC carries cache bits for shared cells.
 	DisableLazyCache bool
+	// CacheAllLazyCells caches every materialized lazy cell, including cells
+	// whose BoC cache bit is unset. It avoids repeated decoding on recurring
+	// lookups at the cost of retaining the visited cells. DisableLazyCache
+	// takes precedence when both options are set.
+	CacheAllLazyCells bool
 	// MaxCells limits how many cells may be decoded from this BoC payload.
 	// Zero or a negative value uses the package-level MaxBOCCells limit.
 	MaxCells int
+	// AllowNonZeroLevelRoot permits non-zero-level roots. The zero value matches
+	// the reference std_boc_deserialize default and rejects them.
+	AllowNonZeroLevelRoot bool
 
 	// refGraphSink, when set, captures the raw cell reference graph (indices
 	// into the flat parsed cell array) so a re-serialization can reuse it
@@ -214,6 +227,29 @@ func (r *BOCNoCopyReader) readBytes(num int) ([]byte, error) {
 	return buf, nil
 }
 
+func (r *BOCNoCopyReader) skipBytes(num int) error {
+	if num < 0 {
+		return errors.New("invalid read size")
+	}
+	if num == 0 {
+		return nil
+	}
+	if r.direct {
+		_, err := r.readDirect(num)
+		return err
+	}
+
+	var buf [4096]byte
+	for num > 0 {
+		n := min(num, len(buf))
+		if err := r.readFull(buf[:n]); err != nil {
+			return err
+		}
+		num -= n
+	}
+	return nil
+}
+
 func (r *BOCNoCopyReader) readDynInt(size int) (int, error) {
 	if size < 0 || size > 8 {
 		return 0, errors.New("invalid dynamic integer size")
@@ -299,6 +335,9 @@ func FromBOCMultiRoot(data []byte) ([]*Cell, error) {
 }
 
 func FromBOCMultiRootWithOptions(data []byte, options BOCParseOptions) ([]*Cell, error) {
+	if len(data) == 0 {
+		return []*Cell{}, nil
+	}
 	cells, _, err := parseBOCMultiRoot(NewBOCNoCopyReader(data), options)
 	return cells, err
 }
@@ -307,7 +346,18 @@ func FromBOCMultiRootReader(reader io.Reader, options BOCParseOptions) ([]*Cell,
 	if reader == nil {
 		return nil, nil, errors.New("invalid boc")
 	}
-	return parseBOCMultiRoot(newBOCStreamReader(reader), options)
+	bocReader := newBOCStreamReader(reader)
+	if left, known := bocReader.leftLen(); known && left == 0 {
+		return []*Cell{}, []Cell{}, nil
+	}
+	if buffered, ok := bocReader.reader.(*bufio.Reader); ok {
+		if _, err := buffered.Peek(1); errors.Is(err, io.EOF) {
+			return []*Cell{}, []Cell{}, nil
+		} else if err != nil {
+			return nil, nil, fmt.Errorf("failed to inspect boc input: %w", err)
+		}
+	}
+	return parseBOCMultiRoot(bocReader, options)
 }
 
 func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []Cell, error) {
@@ -394,7 +444,8 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if err != nil {
 		return nil, nil, err
 	}
-	if absentNum < 0 || absentNum > cellsNum || rootsNum+absentNum > cellsNum {
+	// the reference bounds the absent count by the cell count alone
+	if absentNum < 0 || absentNum > cellsNum {
 		return nil, nil, errors.New("invalid boc counters")
 	}
 
@@ -402,14 +453,14 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 	if err != nil {
 		return nil, nil, err
 	}
-	if dataLen < cellsNum*2 {
+	if minDataLen := cellsNum*(2+cellNumSizeBytes) - cellNumSizeBytes; cellsNum > 0 && dataLen < minDataLen {
 		return nil, nil, errors.New("invalid boc cells data size")
 	}
 	maxPayloadBytes := maxBOCPayloadBytesForCells(maxCells)
 	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
 		return nil, nil, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
 	}
-	if cellsNum > 0 && dataLen > cellsNum*maxSerializedBOCCellBytes {
+	if cellsNum > 0 && uint64(dataLen) > uint64(cellsNum)*maxBOCDeclaredPayloadBytesPerCell {
 		return nil, nil, fmt.Errorf("boc cells data size is too big for cells count: data len %d, cells %d", dataLen, cellsNum)
 	}
 
@@ -460,6 +511,10 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 			return nil, nil, err
 		}
 
+		if err := validateBOCRootLevels(cll, options); err != nil {
+			return nil, nil, err
+		}
+
 		return cll, nil, nil
 	}
 
@@ -480,7 +535,25 @@ func parseBOCMultiRoot(r *BOCNoCopyReader, options BOCParseOptions) ([]*Cell, []
 		return nil, nil, err
 	}
 
+	if err := validateBOCRootLevels(cll, options); err != nil {
+		return nil, nil, err
+	}
+
 	return cll, unique, nil
+}
+
+// validateBOCRootLevels rejects roots with a non-zero level when the caller
+// opted into the reference std_boc_deserialize root contract.
+func validateBOCRootLevels(roots []*Cell, options BOCParseOptions) error {
+	if options.AllowNonZeroLevelRoot {
+		return nil
+	}
+	for _, root := range roots {
+		if root.Level() != 0 {
+			return errors.New("bag of cells has a root with non-zero level")
+		}
+	}
+	return nil
 }
 
 func finishBOCRead(r *BOCNoCopyReader, hasCRC32C bool) error {
@@ -509,6 +582,9 @@ func finishBOCRead(r *BOCNoCopyReader, hasCRC32C bool) error {
 		}
 		r.disableCRC()
 	}
+	// Stricter than the reference on purpose: it only requires the input to be
+	// at least as long as the estimated size, while trailing bytes here always
+	// mean a malformed payload.
 	if left, ok := r.leftLen(); ok && left != 0 {
 		return fmt.Errorf("unexpected trailing data after boc payload: %d bytes", left)
 	}
@@ -545,10 +621,6 @@ func (idx bocCellIndex) cellEndAndCacheBit(i int) (int, bool) {
 		return end, false
 	}
 	return end / 2, end&1 == 1
-}
-
-func (idx bocCellIndex) cacheBit(i int) bool {
-	return idx.rawEnd(i)%2 == 1
 }
 
 const (
@@ -813,10 +885,14 @@ func parseCells(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r *BOCNo
 		}
 	}
 
-	if offset != dataLen {
-		if indexEnabled {
-			return nil, nil, errors.New("invalid cell index")
+	if indexEnabled {
+		if offset < dataLen {
+			if err := r.skipBytes(dataLen - offset); err != nil {
+				return nil, nil, fmt.Errorf("failed to skip indexed payload tail: %w", err)
+			}
 		}
+	} else if offset != dataLen {
+		// Without an index, every declared payload byte must belong to a cell.
 		return nil, nil, errors.New("failed to parse cells payload, corrupted data")
 	}
 	if cacheRefs != nil {
@@ -922,10 +998,9 @@ func parseCellsNoCopy(rootsIndex []uint32, cellsNum, refSzBytes, dataLen int, r 
 		offset = nextOffset
 	}
 
-	if offset != dataLen {
-		if indexEnabled {
-			return nil, nil, errors.New("invalid cell index")
-		}
+	if offset != dataLen && !indexEnabled {
+		// with an index the reference addresses every cell through it and
+		// never looks at bytes past the last entry
 		return nil, nil, errors.New("failed to parse cells payload, corrupted data")
 	}
 	if cacheRefs != nil {

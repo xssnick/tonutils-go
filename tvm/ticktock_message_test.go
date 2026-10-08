@@ -268,6 +268,16 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 		if !tickRes.Accepted {
 			t.Fatal("tick transaction should be accepted")
 		}
+		tickTransaction, err := tickRes.ParseTransaction()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tickRes.StartLT != tickTransaction.LT {
+			t.Fatalf("tick result start lt = %d, want %d", tickRes.StartLT, tickTransaction.LT)
+		}
+		if tickRes.Burned.Coins.Nano().Sign() != 0 || !transactionExtraDictIsEmpty(tickRes.Burned.ExtraCurrencies) {
+			t.Fatal("tick transaction unexpectedly reported burned value")
+		}
 		if !bytes.Equal(tickRes.Data.Hash(), tickData.Hash()) {
 			t.Fatalf("unexpected tick data:\nwant=%s\ngot=%s", tickData.Dump(), tickRes.Data.Dump())
 		}
@@ -343,6 +353,15 @@ func TestEmulateTickTockTransaction(t *testing.T) {
 		_, err := testEmulateTickTockTransaction(NewTVM(), nil, false, testTxParams{})
 		if err == nil {
 			t.Fatal("expected missing shard account to fail")
+		}
+	})
+
+	t.Run("RejectsNonExistingAccount", func(t *testing.T) {
+		_, err := testEmulateTickTockTransaction(NewTVM(), buildTransactionTestNoneShardAccount(t), false, testTxParams{
+			Address: tickTockTestAddr,
+		})
+		if err == nil {
+			t.Fatal("expected account_none to fail")
 		}
 	})
 }

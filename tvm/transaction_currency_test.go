@@ -98,6 +98,10 @@ func TestTransactionCurrencyExtraDictRoundTripAndErrors(t *testing.T) {
 	if _, err = transactionStoreExtraCurrencies(map[uint32]*big.Int{1: big.NewInt(-1)}); err == nil {
 		t.Fatal("expected negative extra currency error")
 	}
+	tooLarge := new(big.Int).Lsh(big.NewInt(1), 248)
+	if _, err = transactionStoreExtraCurrencies(map[uint32]*big.Int{1: tooLarge}); err == nil {
+		t.Fatal("expected oversized extra currency error")
+	}
 
 	malformed := cell.NewDict(32)
 	if err = malformed.SetIntKey(big.NewInt(7), cell.BeginCell().MustStoreBigVarUInt(big.NewInt(11), 32).MustStoreUInt(1, 1).EndCell()); err != nil {
@@ -115,6 +119,32 @@ func TestTransactionCurrencyExtraDictRoundTripAndErrors(t *testing.T) {
 	if _, err = transactionAddExtraCurrencies(nil, malformed); err == nil {
 		t.Fatal("expected add malformed extra error")
 	}
+
+	absent := cell.NewDict(32)
+	loaded, err = transactionLoadExtraCurrencies(absent)
+	if err != nil || len(loaded) != 0 {
+		t.Fatalf("absent extra currency root = %v, %v; want empty, nil", loaded, err)
+	}
+
+	presentEmpty := cell.BeginCell().EndCell().AsDict(32)
+	if _, err = transactionLoadExtraCurrencies(presentEmpty); err == nil {
+		t.Fatal("expected present empty extra currency root error")
+	}
+
+	for _, malformedFork := range []struct {
+		name               string
+		extraBit, extraRef bool
+	}{
+		{name: "payload_bit", extraBit: true},
+		{name: "third_reference", extraRef: true},
+	} {
+		t.Run(malformedFork.name, func(t *testing.T) {
+			dict := transactionMalformedExtraCurrencyFork(t, malformedFork.extraBit, malformedFork.extraRef)
+			if _, err := transactionLoadExtraCurrencies(dict); err == nil {
+				t.Fatal("expected malformed extra currency fork error")
+			}
+		})
+	}
 }
 
 func TestTransactionCurrencyAddExtraCurrenciesAndMinBig(t *testing.T) {
@@ -131,6 +161,19 @@ func TestTransactionCurrencyAddExtraCurrenciesAndMinBig(t *testing.T) {
 	}
 	if len(loaded) != 3 || loaded[1].Uint64() != 11 || loaded[7].Uint64() != 11 || loaded[9].Uint64() != 13 {
 		t.Fatalf("sum extra = %v, want ids 1/7/9", loaded)
+	}
+
+	maxHalf := new(big.Int).Lsh(big.NewInt(1), 247)
+	largeLeft, err := transactionStoreExtraCurrencies(map[uint32]*big.Int{1: maxHalf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	largeRight, err := transactionStoreExtraCurrencies(map[uint32]*big.Int{1: maxHalf})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = transactionAddExtraCurrencies(largeLeft, largeRight); err == nil {
+		t.Fatal("expected extra currency sum overflow error")
 	}
 
 	cases := []struct {

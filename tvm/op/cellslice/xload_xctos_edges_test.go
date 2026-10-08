@@ -43,3 +43,17 @@ func TestXLOADQPostV5OrdinarySuccess(t *testing.T) {
 		t.Fatal("XLOADQ ordinary should preserve ordinary cell")
 	}
 }
+
+func TestXLOADQPropagatesLibraryDictionaryVirtualization(t *testing.T) {
+	st := newCellSliceState()
+	st.SetLibraries(mustPrunedCell(t).Virtualize(0))
+	pushCellSliceCell(t, st, mustLibraryCell(t))
+
+	err := XLOADQ().Interpret(st)
+	if _, ok := vmerr.AsVirtualization(err); !ok {
+		t.Fatalf("XLOADQ library lookup error = %v, want virtualization abort", err)
+	}
+	if st.Stack.Len() != 0 {
+		t.Fatalf("XLOADQ virtualization left %d stack values, want consumed input and no quiet flag", st.Stack.Len())
+	}
+}

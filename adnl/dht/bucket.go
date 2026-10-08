@@ -38,7 +38,13 @@ func (b *Bucket) getActiveNodes() dhtNodeList {
 	b.mx.RLock()
 	defer b.mx.RUnlock()
 
-	return append(dhtNodeList{}, b.active...)
+	nodes := make(dhtNodeList, 0, len(b.active))
+	for _, node := range b.active {
+		if node.isReady() {
+			nodes = append(nodes, node)
+		}
+	}
+	return nodes
 }
 
 func (b *Bucket) routingNodes(max int) []*Node {
@@ -53,6 +59,9 @@ func (b *Bucket) routingNodes(max int) []*Node {
 	for _, node := range b.active {
 		if len(nodes) >= limit {
 			return nodes
+		}
+		if !node.isReady() {
+			continue
 		}
 		if exported := node.asNode(); exported != nil {
 			nodes = append(nodes, exported)
@@ -93,6 +102,10 @@ func (b *Bucket) addNode(node *dhtNode, setActive bool) *dhtNode {
 	if node == nil {
 		return nil
 	}
+
+	// Clients without background pings must also make room for healthy nodes.
+	b.demoteUnreadyActiveLocked()
+	b.promoteReadyLocked()
 
 	if existing, idx := findNodeInList(b.active, node.adnlId); existing != nil {
 		existing.absorb(node)

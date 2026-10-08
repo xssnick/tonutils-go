@@ -23,7 +23,8 @@ func LDGRAMS() *helpers.SimpleOP {
 				return vmerr.Error(vmerr.CodeCellUnderflow, "cannot deserialize a variable-length integer")
 			}
 
-			err = state.Stack.PushInt(coins)
+			// LoadBigCoins allocated coins for us; nothing else holds it.
+			err = state.Stack.PushOwnedInt(coins)
 			if err != nil {
 				return err
 			}

@@ -54,7 +54,7 @@ func BenchmarkDHTFindValueMock(b *testing.B) {
 	}
 
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				request, ok := req.(tl.Raw)
@@ -69,7 +69,7 @@ func BenchmarkDHTFindValueMock(b *testing.B) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	dhtCli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -114,7 +114,7 @@ func BenchmarkDHTServerRefreshNodes(b *testing.B) {
 			ReinitDate: 1,
 		},
 	}
-	gw.reg = func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
+	gw.setReg(func(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				node, err := newCorrectNode(1, 2, 3, 4, 17050)
@@ -125,7 +125,7 @@ func BenchmarkDHTServerRefreshNodes(b *testing.B) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	server, err := NewServer(gw, key, nil, nil)
 	if err != nil {

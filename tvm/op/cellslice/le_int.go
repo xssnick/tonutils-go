@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"math/big"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -13,10 +12,7 @@ import (
 var cellsliceBigIntOne = big.NewInt(1)
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return LDILE4() },
-		func() vm.OP { return STILE4() },
-	)
+	vm.ArgList = append(vm.ArgList, loadLEIntOp, storeLEIntOp)
 }
 
 func loadLEModeName(mode uint64) string {
@@ -128,140 +124,116 @@ func writeLEInt(out []byte, x *big.Int, unsigned bool) bool {
 	return true
 }
 
-func loadLEIntOp(mode uint64) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string { return loadLEModeName(mode) },
-		BitPrefix:      helpers.UIntPrefix(0xD75, 12),
-		FixedSizeBits:  4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(mode, 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			mode = v
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			cs, err := state.Stack.PopSlice()
-			if err != nil {
-				return err
-			}
+// The whole LDxLEn family shares one prefix: the four mode bits that pick
+// signedness, width, preload and quiet are the operand.
+var loadLEIntOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xD75, 12)),
+	ArgBits:  4,
+	Name:     loadLEModeName,
+	Action: func(state *vm.State, mode uint64) error {
+		cs, err := state.Stack.PopSlice()
+		if err != nil {
+			return err
+		}
 
-			bytesLen := 4
-			if mode&2 != 0 {
-				bytesLen = 8
-			}
-			preload := mode&4 != 0
-			quiet := mode&8 != 0
+		bytesLen := 4
+		if mode&2 != 0 {
+			bytesLen = 8
+		}
+		preload := mode&4 != 0
+		quiet := mode&8 != 0
 
-			var data []byte
-			if preload {
-				data, err = cs.PreloadSlice(uint(bytesLen * 8))
-			} else {
-				data, err = cs.LoadSlice(uint(bytesLen * 8))
-			}
-			if err != nil {
-				if !quiet {
-					return vmerr.Error(vmerr.CodeCellUnderflow)
-				}
-				if !preload {
-					if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
-						return pushErr
-					}
-				}
-				return state.Stack.PushBool(false)
-			}
-
-			if err = state.Stack.PushInt(decodeLEInt(data, mode&1 != 0)); err != nil {
-				return err
+		var data []byte
+		if preload {
+			data, err = cs.PreloadSlice(uint(bytesLen * 8))
+		} else {
+			data, err = cs.LoadSlice(uint(bytesLen * 8))
+		}
+		if err != nil {
+			if !quiet {
+				return vmerr.Error(vmerr.CodeCellUnderflow)
 			}
 			if !preload {
-				if err = state.Stack.PushOwnedSlice(cs); err != nil {
-					return err
+				if pushErr := state.Stack.PushOwnedSlice(cs); pushErr != nil {
+					return pushErr
 				}
 			}
-			if quiet {
-				return state.Stack.PushBool(true)
-			}
-			return nil
-		},
-	}
-}
+			return state.Stack.PushBool(false)
+		}
 
-func storeLEIntOp(mode uint64) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string { return storeLEModeName(mode) },
-		BitPrefix:      helpers.UIntPrefix(0xCF28>>2, 14),
-		FixedSizeBits:  2,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(mode, 2)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(2)
-			if err != nil {
+		if err = state.Stack.PushInt(decodeLEInt(data, mode&1 != 0)); err != nil {
+			return err
+		}
+		if !preload {
+			if err = state.Stack.PushOwnedSlice(cs); err != nil {
 				return err
 			}
-			mode = v
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			if err := checkStackDepth(state, 2); err != nil {
-				return err
-			}
+		}
+		if quiet {
+			return state.Stack.PushBool(true)
+		}
+		return nil
+	},
+})
 
-			builder, err := state.Stack.PopBuilder()
-			if err != nil {
-				return err
-			}
-			x, err := state.Stack.PopIntRead()
-			if err != nil {
-				return err
-			}
+var storeLEIntOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xCF28>>2, 14)),
+	ArgBits:  2,
+	Name:     storeLEModeName,
+	Action: func(state *vm.State, mode uint64) error {
+		if err := checkStackDepth(state, 2); err != nil {
+			return err
+		}
 
-			bytesLen := 4
-			if mode&2 != 0 {
-				bytesLen = 8
-			}
-			if !builder.CanExtendBy(uint(bytesLen*8), 0) {
-				return vmerr.Error(vmerr.CodeCellOverflow)
-			}
-			if x == nil {
-				return vmerr.Error(vmerr.CodeRangeCheck)
-			}
-			var data [8]byte
-			encoded := data[:bytesLen]
-			if !writeLEInt(encoded, x, mode&1 != 0) {
-				return vmerr.Error(vmerr.CodeRangeCheck)
-			}
-			if err = builder.StoreSlice(encoded, uint(bytesLen*8)); err != nil {
-				return vmerr.Error(vmerr.CodeCellOverflow)
-			}
-			return state.Stack.PushOwnedBuilder(builder)
-		},
-	}
-}
+		builder, err := state.Stack.PopBuilder()
+		if err != nil {
+			return err
+		}
+		x, err := state.Stack.PopIntRead()
+		if err != nil {
+			return err
+		}
 
-func LDILE4() *helpers.AdvancedOP   { return loadLEIntOp(0) }
-func LDULE4() *helpers.AdvancedOP   { return loadLEIntOp(1) }
-func LDILE8() *helpers.AdvancedOP   { return loadLEIntOp(2) }
-func LDULE8() *helpers.AdvancedOP   { return loadLEIntOp(3) }
-func PLDILE4() *helpers.AdvancedOP  { return loadLEIntOp(4) }
-func PLDULE4() *helpers.AdvancedOP  { return loadLEIntOp(5) }
-func PLDILE8() *helpers.AdvancedOP  { return loadLEIntOp(6) }
-func PLDULE8() *helpers.AdvancedOP  { return loadLEIntOp(7) }
-func LDILE4Q() *helpers.AdvancedOP  { return loadLEIntOp(8) }
-func LDULE4Q() *helpers.AdvancedOP  { return loadLEIntOp(9) }
-func LDILE8Q() *helpers.AdvancedOP  { return loadLEIntOp(10) }
-func LDULE8Q() *helpers.AdvancedOP  { return loadLEIntOp(11) }
-func PLDILE4Q() *helpers.AdvancedOP { return loadLEIntOp(12) }
-func PLDULE4Q() *helpers.AdvancedOP { return loadLEIntOp(13) }
-func PLDILE8Q() *helpers.AdvancedOP { return loadLEIntOp(14) }
-func PLDULE8Q() *helpers.AdvancedOP { return loadLEIntOp(15) }
+		bytesLen := 4
+		if mode&2 != 0 {
+			bytesLen = 8
+		}
+		if !builder.CanExtendBy(uint(bytesLen*8), 0) {
+			return vmerr.Error(vmerr.CodeCellOverflow)
+		}
+		if x == nil {
+			return vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		var data [8]byte
+		encoded := data[:bytesLen]
+		if !writeLEInt(encoded, x, mode&1 != 0) {
+			return vmerr.Error(vmerr.CodeRangeCheck)
+		}
+		if err = builder.StoreSlice(encoded, uint(bytesLen*8)); err != nil {
+			return vmerr.Error(vmerr.CodeCellOverflow)
+		}
+		return state.Stack.PushOwnedBuilder(builder)
+	},
+})
 
-func STILE4() *helpers.AdvancedOP { return storeLEIntOp(0) }
-func STULE4() *helpers.AdvancedOP { return storeLEIntOp(1) }
-func STILE8() *helpers.AdvancedOP { return storeLEIntOp(2) }
-func STULE8() *helpers.AdvancedOP { return storeLEIntOp(3) }
+func LDILE4() vm.OP   { return vm.Bind(loadLEIntOp, 0) }
+func LDULE4() vm.OP   { return vm.Bind(loadLEIntOp, 1) }
+func LDILE8() vm.OP   { return vm.Bind(loadLEIntOp, 2) }
+func LDULE8() vm.OP   { return vm.Bind(loadLEIntOp, 3) }
+func PLDILE4() vm.OP  { return vm.Bind(loadLEIntOp, 4) }
+func PLDULE4() vm.OP  { return vm.Bind(loadLEIntOp, 5) }
+func PLDILE8() vm.OP  { return vm.Bind(loadLEIntOp, 6) }
+func PLDULE8() vm.OP  { return vm.Bind(loadLEIntOp, 7) }
+func LDILE4Q() vm.OP  { return vm.Bind(loadLEIntOp, 8) }
+func LDULE4Q() vm.OP  { return vm.Bind(loadLEIntOp, 9) }
+func LDILE8Q() vm.OP  { return vm.Bind(loadLEIntOp, 10) }
+func LDULE8Q() vm.OP  { return vm.Bind(loadLEIntOp, 11) }
+func PLDILE4Q() vm.OP { return vm.Bind(loadLEIntOp, 12) }
+func PLDULE4Q() vm.OP { return vm.Bind(loadLEIntOp, 13) }
+func PLDILE8Q() vm.OP { return vm.Bind(loadLEIntOp, 14) }
+func PLDULE8Q() vm.OP { return vm.Bind(loadLEIntOp, 15) }
+
+func STILE4() vm.OP { return vm.Bind(storeLEIntOp, 0) }
+func STULE4() vm.OP { return vm.Bind(storeLEIntOp, 1) }
+func STILE8() vm.OP { return vm.Bind(storeLEIntOp, 2) }
+func STULE8() vm.OP { return vm.Bind(storeLEIntOp, 3) }

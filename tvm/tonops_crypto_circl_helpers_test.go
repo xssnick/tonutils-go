@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	ristretto "github.com/bwesterb/go-ristretto"
-	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
 	"github.com/xssnick/tonutils-go/tvm/cell"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 )
 
 const tonBLSTestDST = "BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_"

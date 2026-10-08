@@ -12,7 +12,7 @@ import (
 func lshiftCodeFromSuffix(t *testing.T, suffix uint8) mathInterpretOp {
 	t.Helper()
 
-	op := LSHIFTCODE(0)
+	op := LSHIFTCODE(1)
 	code := cell.BeginCell().
 		MustStoreUInt(0xAA, 8).
 		MustStoreUInt(uint64(suffix), 8).

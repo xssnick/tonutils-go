@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
+	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
@@ -31,7 +31,7 @@ func TestRightShiftErrorAndImmediateTextEdges(t *testing.T) {
 
 	for _, tt := range []struct {
 		name   string
-		op     *helpers.AdvancedOP
+		op     vm.OP
 		prefix uint64
 		bits   uint
 		text   string

@@ -67,7 +67,9 @@ type APIClientWrapped interface {
 	GetMasterchainInfo(ctx context.Context) (*BlockIDExt, error)
 	GetAccount(ctx context.Context, block *BlockIDExt, addr *address.Address) (*tlb.Account, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
+	SendExternalMessageToAllNodes(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error)
+	SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error)
 	RunGetMethod(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ExecutionResult, error)
 	RunGetMethodByID(ctx context.Context, blockInfo *BlockIDExt, addr *address.Address, methodID uint64, params ...interface{}) (*ExecutionResult, error)
 	ListTransactions(ctx context.Context, addr *address.Address, num uint32, lt uint64, txHash []byte) ([]*tlb.Transaction, error)

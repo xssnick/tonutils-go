@@ -12,7 +12,7 @@ import (
 func TestAddrShiftCodeModErrorAndBoundaryEdges(t *testing.T) {
 	t.Run("MinVersionAndText", func(t *testing.T) {
 		op := ADDRSHIFTCODEMOD(3)
-		if got := op.MinGlobalVersion(); got != 4 {
+		if got := mathOpMinVersion(op); got != 4 {
 			t.Fatalf("min version = %d, want 4", got)
 		}
 		if got := op.SerializeText(); got != "3 ADDRSHIFT#MOD" {
@@ -52,7 +52,7 @@ func TestAddrShiftCodeModErrorAndBoundaryEdges(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := newMathCoverageState()
 			tt.push(t, st)
-			assertMathCoverageVMError(t, ADDRSHIFTCODEMOD(0).Interpret(st), tt.code)
+			assertMathCoverageVMError(t, ADDRSHIFTCODEMOD(1).Interpret(st), tt.code)
 		})
 	}
 

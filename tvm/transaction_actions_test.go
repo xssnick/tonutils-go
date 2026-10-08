@@ -14,12 +14,12 @@ import (
 
 func TestTransactionMessageToCellWithRetryKeepsStateInitRefWhenMovingBody(t *testing.T) {
 	var attempts []transactionOutboundLayout
-	root, used, err := transactionMessageToCellWithRetry(transactionOutboundLayout{}, true, func(layout transactionOutboundLayout) (*cell.Cell, error) {
+	root, used, err := transactionMessageToCellWithRetry(transactionOutboundLayout{}, true, true, func(layout transactionOutboundLayout) (*cell.Cell, error) {
 		attempts = append(attempts, layout)
 		if layout.stateInitInRef && layout.bodyInRef {
 			return cell.BeginCell().EndCell(), nil
 		}
-		return nil, errors.New("does not fit")
+		return nil, cell.ErrNotFit1023
 	})
 	if err != nil {
 		t.Fatalf("retry failed: %v", err)
@@ -40,12 +40,12 @@ func TestTransactionMessageToCellWithRetryKeepsStateInitRefWhenMovingBody(t *tes
 
 func TestTransactionMessageToCellWithRetryCanSkipStateInitRef(t *testing.T) {
 	var attempts []transactionOutboundLayout
-	root, used, err := transactionMessageToCellWithRetry(transactionOutboundLayout{}, false, func(layout transactionOutboundLayout) (*cell.Cell, error) {
+	root, used, err := transactionMessageToCellWithRetry(transactionOutboundLayout{}, false, true, func(layout transactionOutboundLayout) (*cell.Cell, error) {
 		attempts = append(attempts, layout)
 		if layout.bodyInRef {
 			return cell.BeginCell().EndCell(), nil
 		}
-		return nil, errors.New("does not fit")
+		return nil, cell.ErrNotFit1023
 	})
 	if err != nil {
 		t.Fatalf("retry failed: %v", err)
@@ -179,6 +179,151 @@ func TestTransactionExternalOutMessageToCellRetriesRefs(t *testing.T) {
 	if layout != (transactionOutboundLayout{bodyInRef: true}) {
 		t.Fatalf("body-ref external layout = %+v, want body ref only", layout)
 	}
+}
+
+func TestTransactionApplyActionsOutboundMessageDoesNotFitAfterRewrite(t *testing.T) {
+	workchainsCell := buildTransactionResult39WorkchainsConfig(t)
+	pricesCell, err := tlb.ToCell(&tlb.ConfigMsgForwardPrices{
+		LumpPrice: 400_000,
+		CellPrice: 4 << 16,
+		FirstFrac: 21_845,
+	})
+	if err != nil {
+		t.Fatalf("build forwarding prices: %v", err)
+	}
+	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion:               transactionTestGlobalVersionCell(t, 14),
+		tlb.ConfigParamWorkchains:                  workchainsCell,
+		tlb.ConfigParamMsgForwardPricesBasechain:   pricesCell,
+		tlb.ConfigParamMsgForwardPricesMasterchain: pricesCell,
+	})
+
+	msgCell := buildTransactionResult39OutboundMessage(t)
+
+	balance := new(big.Int).SetUint64((1 << 56) + 1_000_000_000)
+	for _, tc := range []struct {
+		name        string
+		mode        uint8
+		wantSuccess bool
+		wantCode    int32
+		wantSkipped uint16
+	}{
+		{name: "result 39", mode: 1, wantCode: 39},
+		{name: "ignore errors", mode: 3, wantSuccess: true, wantSkipped: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out := applyTransactionActionsForTestWithParams(t, []any{
+				tlb.ActionSendMsg{Mode: 1, Msg: buildTransactionOutboundInternalCell(t, 1)},
+				tlb.ActionSendMsg{Mode: tc.mode, Msg: msgCell},
+			}, cfg, balance, nil, transactionZeroCurrencyBalance())
+
+			if out.phase == nil || out.phase.Success != tc.wantSuccess || !out.phase.Valid || out.phase.ResultCode != tc.wantCode || out.phase.SkippedActions != tc.wantSkipped || out.phase.MessagesCreated != 1 {
+				t.Fatalf("unexpected action phase: %+v", out.phase)
+			}
+			if out.actionFine.Int64() != 4 {
+				t.Fatalf("action fine = %s, want 4 for final referenced layout", out.actionFine)
+			}
+			if !tc.wantSuccess {
+				if out.phase.ResultArg == nil || *out.phase.ResultArg != 1 {
+					t.Fatalf("result arg = %v, want 1", out.phase.ResultArg)
+				}
+				if len(out.outMsgs) != 0 {
+					t.Fatalf("committed outbound messages = %d, want rollback", len(out.outMsgs))
+				}
+				wantBalance := new(big.Int).Sub(balance, big.NewInt(4))
+				if out.balance.Cmp(wantBalance) != 0 {
+					t.Fatalf("balance = %s, want only action fine charged: %s", out.balance, wantBalance)
+				}
+			}
+		})
+	}
+}
+
+func buildTransactionResult39WorkchainsConfig(t *testing.T) *cell.Cell {
+	t.Helper()
+
+	workchains := cell.NewDict(32)
+	basechain := cell.BeginCell().
+		MustStoreUInt(0xa6, 8).
+		MustStoreUInt(123, 32).
+		MustStoreUInt(0, 8).
+		MustStoreUInt(0, 8).
+		MustStoreUInt(4, 8).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreUInt(0, 13).
+		MustStoreSlice(make([]byte, 32), 256).
+		MustStoreSlice(make([]byte, 32), 256).
+		MustStoreUInt(7, 32).
+		MustStoreUInt(1, 4).
+		MustStoreInt(-1, 32).
+		MustStoreUInt(3, 64).
+		EndCell()
+	wideWorkchain := cell.BeginCell().
+		MustStoreUInt(0xa7, 8).
+		MustStoreUInt(123, 32).
+		MustStoreUInt(0, 8).
+		MustStoreUInt(0, 8).
+		MustStoreUInt(4, 8).
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreUInt(0, 13).
+		MustStoreSlice(make([]byte, 32), 256).
+		MustStoreSlice(make([]byte, 32), 256).
+		MustStoreUInt(7, 32).
+		MustStoreUInt(0, 4).
+		MustStoreUInt(511, 12).
+		MustStoreUInt(511, 12).
+		MustStoreUInt(1, 12).
+		MustStoreUInt(1, 32).
+		// workchain_v2#a7 tail: split_merge_timings:WcSplitMergeTimings
+		// persistent_state_split_depth:(## 8)
+		MustStoreUInt(0, 4).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(20, 32).
+		MustStoreUInt(10, 32).
+		MustStoreUInt(1000, 32).
+		MustStoreUInt(5, 8).
+		EndCell()
+	if err := workchains.SetIntKey(big.NewInt(0), basechain); err != nil {
+		t.Fatalf("store basechain descriptor: %v", err)
+	}
+	if err := workchains.SetIntKey(big.NewInt(1), wideWorkchain); err != nil {
+		t.Fatalf("store wide workchain descriptor: %v", err)
+	}
+	workchainsCell, err := tlb.ToCell(&tlb.WorkchainsConfig{Workchains: workchains})
+	if err != nil {
+		t.Fatalf("build workchains config: %v", err)
+	}
+	return workchainsCell
+}
+
+func buildTransactionResult39OutboundMessage(t *testing.T) *cell.Cell {
+	t.Helper()
+
+	dstData := bytes.Repeat([]byte{0xA5}, 64)
+	dstData[len(dstData)-1] &= 0xFE
+	dst := address.NewAddressVar(0, 1, 511, dstData)
+	msgCell, usedLayout, err := transactionInternalMessageToCellWithLayout(&tlb.InternalMessage{
+		IHRDisabled: true,
+		SrcAddr:     address.NewAddressNone(),
+		DstAddr:     dst,
+		Amount:      tlb.FromNanoTONU(1 << 56),
+		StateInit: &tlb.StateInit{
+			Code: cell.BeginCell().MustStoreUInt(0xC0, 8).EndCell(),
+			Data: cell.BeginCell().MustStoreUInt(0xD0, 8).EndCell(),
+		},
+		Body: cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell(),
+	}, transactionOutboundLayout{})
+	if err != nil {
+		t.Fatalf("build outbound message: %v", err)
+	}
+	if usedLayout != (transactionOutboundLayout{}) {
+		t.Fatalf("initial message layout = %+v, want inline StateInit and body", usedLayout)
+	}
+	return msgCell
 }
 
 func TestTransactionOutboundMessageLayoutRejectsInvalidInputs(t *testing.T) {
@@ -335,10 +480,9 @@ func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 	})
 
 	t.Run("external out is accepted and external in is rejected", func(t *testing.T) {
-		externalOut := cell.BeginCell().
-			MustStoreBoolBit(true).
-			MustStoreBoolBit(true).
-			EndCell()
+		externalOut := transactionTestMessageWithReferencedStateInit(
+			cell.BeginCell().MustStoreUInt(0, 5).EndCell(), true,
+		)
 		if _, err := transactionValidateRelaxedActionMessageCurrencies(externalOut); err != nil {
 			t.Fatalf("external out relaxed message should be accepted: %v", err)
 		}
@@ -426,6 +570,24 @@ func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 		}
 	})
 
+	for _, malformed := range []struct {
+		name     string
+		extraBit bool
+		extraRef bool
+	}{
+		{name: "fork payload bit", extraBit: true},
+		{name: "third fork ref", extraRef: true},
+	} {
+		t.Run("rejects extra currency "+malformed.name, func(t *testing.T) {
+			extra := transactionMalformedExtraCurrencyFork(t, malformed.extraBit, malformed.extraRef)
+			msg := transactionTestRelaxedInternalMessageWithExtra(extra, false)
+
+			if _, err := transactionValidateRelaxedActionMessageCurrencies(msg); !errors.Is(err, errTransactionInvalidRelaxedActionMessage) {
+				t.Fatalf("malformed extra-currency fork error = %v, want invalid relaxed message", err)
+			}
+		})
+	}
+
 	t.Run("reports trailing data after body ref", func(t *testing.T) {
 		msg := transactionTestRelaxedInternalMessageWithExtra(nil, true)
 
@@ -438,7 +600,7 @@ func TestTransactionValidateRelaxedActionMessageCurrencies(t *testing.T) {
 
 func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	for _, root := range []*cell.Cell{nil, cell.BeginCell().EndCell()} {
-		loaded, err := transactionLoadActions(root, 13)
+		loaded, err := transactionLoadActions(root, 13, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -448,7 +610,7 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	}
 
 	noPrevRef := cell.BeginCell().MustStoreUInt(0x0ec3c86d, 32).EndCell()
-	loaded, err := transactionLoadActions(noPrevRef, 13)
+	loaded, err := transactionLoadActions(noPrevRef, 13, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -460,7 +622,7 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = tlb.ActionSetCode{NewCode: cell.BeginCell().MustStoreUInt(uint64(i&0xff), 8).EndCell()}
 	}
-	loaded, err = transactionLoadActions(buildTransactionActionList(t, tooMany...), 13)
+	loaded, err = transactionLoadActions(buildTransactionActionList(t, tooMany...), 13, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,19 +635,19 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 		MustStoreUInt(0x0ec3c86d, 32).
 		MustStoreUInt(16, 8).
 		EndCell()
-	v3, err := transactionLoadActions(malformedBounce, 3)
+	v7, err := transactionLoadActions(malformedBounce, 7, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v3.resultCode != 34 || v3.bounce {
-		t.Fatalf("v3 malformed send result = %+v, want code 34 without bounce", v3)
+	if v7.resultCode != 34 || v7.bounce {
+		t.Fatalf("v7 malformed send result = %+v, want code 34 without bounce", v7)
 	}
-	v4, err := transactionLoadActions(malformedBounce, 4)
+	v8, err := transactionLoadActions(malformedBounce, 8, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v4.resultCode != 34 || !v4.bounce {
-		t.Fatalf("v4 malformed send result = %+v, want code 34 with bounce", v4)
+	if v8.resultCode != 34 || !v8.bounce {
+		t.Fatalf("v8 malformed send result = %+v, want code 34 with bounce", v8)
 	}
 
 	if mode, ok := transactionMalformedSendMode(malformedBounce); !ok || mode != 16 {
@@ -500,6 +662,124 @@ func TestTransactionLoadActionsAndMalformedSendModeEdges(t *testing.T) {
 		if mode, ok := transactionMalformedSendMode(node); ok || mode != 0 {
 			t.Fatalf("unexpected malformed send mode for %v: %d/%t", node, mode, ok)
 		}
+	}
+}
+
+func TestTransactionReferencedStateInitRequiresExactExhaustion(t *testing.T) {
+	exact := cell.BeginCell().MustStoreUInt(0, 5).EndCell()
+	for _, external := range []bool{false, true} {
+		name := "internal"
+		if external {
+			name = "external"
+		}
+		t.Run(name+" exact", func(t *testing.T) {
+			msg := transactionTestMessageWithReferencedStateInit(exact, external)
+			validation, err := transactionValidateRelaxedActionMessageCurrencies(msg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !validation.layoutKnown || !validation.layout.stateInitInRef {
+				t.Fatalf("layout = %+v, known=%t", validation.layout, validation.layoutKnown)
+			}
+
+			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.resultCode != 0 || len(loaded.actions) != 1 {
+				t.Fatalf("exact referenced StateInit result = %+v", loaded)
+			}
+		})
+
+		for _, malformed := range []struct {
+			name  string
+			state *cell.Cell
+		}{
+			{name: "trailing bit", state: exact.ToBuilder().MustStoreBoolBit(true).EndCell()},
+			{name: "trailing ref", state: exact.ToBuilder().MustStoreRef(cell.BeginCell().EndCell()).EndCell()},
+		} {
+			t.Run(name+" "+malformed.name, func(t *testing.T) {
+				msg := transactionTestMessageWithReferencedStateInit(malformed.state, external)
+				if _, err := transactionValidateRelaxedActionMessageCurrencies(msg); !errors.Is(err, errTransactionInvalidRelaxedActionMessage) {
+					t.Fatalf("validation error = %v", err)
+				}
+
+				loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if loaded.resultCode != 34 || loaded.totalActions != 1 || len(loaded.actions) != 0 {
+					t.Fatalf("malformed referenced StateInit result = %+v, want code 34", loaded)
+				}
+			})
+		}
+	}
+}
+
+func TestTransactionRelaxedActionMessageAcceptsStructurallyValidVariableAddress(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		workchain int64
+		addrBits  uint
+	}{
+		{name: "standard-sized int8 workchain", workchain: 1, addrBits: 256},
+		{name: "basechain is reserved", workchain: 0, addrBits: 255},
+		{name: "masterchain is reserved", workchain: -1, addrBits: 255},
+		{name: "non-standard size", workchain: 1, addrBits: 255},
+		{name: "wide workchain", workchain: 128, addrBits: 256},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := transactionTestInternalMessageWithVariableDestination(tc.workchain, tc.addrBits)
+			_, err := transactionValidateRelaxedActionMessageCurrencies(msg)
+			if err != nil {
+				t.Fatalf("structurally valid variable address rejected: %v", err)
+			}
+			loaded, err := transactionLoadActions(buildTransactionActionList(t, tlb.ActionSendMsg{Msg: msg}), 14, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.resultCode != 0 || loaded.totalActions != 1 || len(loaded.actions) != 1 {
+				t.Fatalf("variable address prepass result = %+v, want accepted action", loaded)
+			}
+		})
+	}
+}
+
+func TestTransactionVariableDestinationValidationIsDeferredAfterPrepass(t *testing.T) {
+	cfg := transactionFuzzWorkchainConfig(t, 14, tonopsTestAddr.Workchain(), true)
+	normalized := buildTransactionOutboundInternalCellWithAddresses(
+		t,
+		address.NewAddressNone(),
+		address.NewAddressVar(0, tonopsTestAddr.Workchain(), 256, tonopsTestAddr.Data()),
+		1000,
+		cell.BeginCell().EndCell(),
+	)
+	res := applyTransactionSendActionForTestWithParams(
+		t, tlb.ActionSendMsg{Msg: normalized}, cfg, big.NewInt(1_000_000_000), nil, transactionZeroCurrencyBalance(),
+	)
+	if res.phase == nil || !res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 0 || len(res.outMsgs) != 1 {
+		t.Fatalf("normalizable variable destination result = phase=%+v out=%d", res.phase, len(res.outMsgs))
+	}
+	var outMsg tlb.Message
+	if err := transactionParseCell(&outMsg, res.outMsgs[0].Cell); err != nil {
+		t.Fatal(err)
+	}
+	if dst := outMsg.AsInternal().DstAddr; dst.Type() != address.StdAddress || dst.Workchain() != tonopsTestAddr.Workchain() || !bytes.Equal(dst.Data(), tonopsTestAddr.Data()) {
+		t.Fatalf("normalized destination = %v, want %v", dst, tonopsTestAddr)
+	}
+
+	rejected := buildTransactionOutboundInternalCellWithAddresses(
+		t,
+		address.NewAddressNone(),
+		address.NewAddressVar(0, tonopsTestAddr.Workchain(), 255, tonopsTestAddr.Data()),
+		1000,
+		cell.BeginCell().EndCell(),
+	)
+	res = applyTransactionSendActionForTestWithParams(
+		t, tlb.ActionSendMsg{Msg: rejected}, cfg, big.NewInt(1_000_000_000), nil, transactionZeroCurrencyBalance(),
+	)
+	if res.phase == nil || res.phase.Success || !res.phase.Valid || res.phase.ResultCode != 36 || len(res.outMsgs) != 0 {
+		t.Fatalf("short variable destination result = phase=%+v out=%d, want valid code 36", res.phase, len(res.outMsgs))
 	}
 }
 
@@ -720,7 +1000,7 @@ func TestTransactionMalformedSendPrepassSkipStartsAtV8(t *testing.T) {
 		MustStoreUInt(2, 8).
 		EndCell()
 
-	v7, err := transactionLoadActions(malformed, 7)
+	v7, err := transactionLoadActions(malformed, 7, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -728,7 +1008,7 @@ func TestTransactionMalformedSendPrepassSkipStartsAtV8(t *testing.T) {
 		t.Fatalf("unexpected v7 load result: %+v", v7)
 	}
 
-	v8, err := transactionLoadActions(malformed, 8)
+	v8, err := transactionLoadActions(malformed, 8, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1195,7 +1475,7 @@ func TestTransactionReserveExtraVersionGates(t *testing.T) {
 			remaining := original.copy()
 			reserved := transactionZeroCurrencyBalance()
 
-			res, err := transactionProcessReserveAction(action, original, remaining, reserved, tc.version)
+			res, err := transactionProcessReserveAction(action, false, original, remaining, reserved, tc.version)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1245,7 +1525,7 @@ func TestTransactionReserveActionModeAndBalanceBoundaries(t *testing.T) {
 				Currency: tlb.CurrencyCollection{
 					Coins: tlb.FromNanoTONU(tc.amount),
 				},
-			}, original, remaining, reserved, tc.version)
+			}, false, original, remaining, reserved, tc.version)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1277,7 +1557,7 @@ func TestTransactionReserveOriginalMinusAmountFailures(t *testing.T) {
 				Currency: tlb.CurrencyCollection{
 					Coins: tlb.FromNanoTONU(51),
 				},
-			}, original, remaining, reserved, version)
+			}, false, original, remaining, reserved, version)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1305,7 +1585,7 @@ func TestTransactionReserveActionExtraFailureKeepsBalances(t *testing.T) {
 			Coins:           tlb.FromNanoTONU(1),
 			ExtraCurrencies: makeTransactionExtraCurrencies(t, 7, 6),
 		},
-	}, original, remaining, reserved, 9)
+	}, false, original, remaining, reserved, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1513,7 +1793,7 @@ func TestTransactionProcessReserveCurrencyV13DoesNotReserveOriginalExtraCurrenci
 				Currency: tlb.CurrencyCollection{
 					Coins: tlb.FromNanoTONU(tc.amount),
 				},
-			}, original, remaining, reserved, vmcore.MaxSupportedGlobalVersion)
+			}, false, original, remaining, reserved, vmcore.MaxSupportedGlobalVersion)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1676,32 +1956,123 @@ func TestTransactionV15ChangeLibraryRestrictions(t *testing.T) {
 	}
 }
 
-func TestTransactionFailedActionKeepsPreviousActionFeesBeforeV4(t *testing.T) {
+func TestTransactionFailedActionTotalActionFeesV4Boundary(t *testing.T) {
 	priceCell := buildTransactionMsgForwardPricesCell(t, 400000, 21845)
-	cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
-		tlb.ConfigParamGlobalVersion:               transactionTestGlobalVersionCell(t, 0),
-		tlb.ConfigParamMsgForwardPricesBasechain:   priceCell,
-		tlb.ConfigParamMsgForwardPricesMasterchain: priceCell,
+
+	for _, tc := range []struct {
+		name     string
+		version  uint32
+		wantFees int64
+	}{
+		{name: "v3 keeps previous fees", version: 3, wantFees: 133_331},
+		{name: "v4 replaces previous fees with fine", version: 4},
+		{name: "v14 replaces previous fees with fine", version: 14},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGlobalVersion:               transactionTestGlobalVersionCell(t, tc.version),
+				tlb.ConfigParamMsgForwardPricesBasechain:   priceCell,
+				tlb.ConfigParamMsgForwardPricesMasterchain: priceCell,
+			})
+			out := applyTransactionActionsForTestWithParams(t, []any{
+				tlb.ActionSendMsg{Mode: 1, Msg: buildTransactionOutboundInternalCell(t, 1)},
+				tlb.ActionSendMsg{Mode: 4, Msg: buildTransactionOutboundInternalCell(t, 0)},
+			}, cfg, big.NewInt(2_000_000_000), nil, transactionZeroCurrencyBalance())
+
+			if out.phase == nil || out.phase.Success || out.phase.ResultCode != 34 || out.phase.MessagesCreated != 1 {
+				t.Fatalf("unexpected action phase: %+v", out.phase)
+			}
+			gotFees := transactionBigOrZero(transactionCoinsNano(out.phase.TotalActionFees))
+			if gotFees.Int64() != tc.wantFees {
+				t.Fatalf("total action fees = %s, want %d", gotFees, tc.wantFees)
+			}
+			if out.actionFees == nil || out.actionFees.Sign() != 0 {
+				t.Fatalf("charged action fees = %v, want zero", out.actionFees)
+			}
+		})
+	}
+}
+
+func TestTransactionApplyActionsTotalMessageLimitsV15(t *testing.T) {
+	msg := buildTransactionOutboundInternalCell(t, 100_000_000)
+	unlimitedCfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+		tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, 15),
+		tlb.ConfigParamSizeLimits:    transactionTestSizeLimitsV3Cell(t, ^uint32(0), ^uint32(0)),
 	})
-	msgBalance, err := transactionCurrencyFromParts(big.NewInt(1_000_000_000), nil)
+	one := applyTransactionSendActionForTestWithParams(
+		t,
+		tlb.ActionSendMsg{Mode: 1, Msg: msg},
+		unlimitedCfg,
+		big.NewInt(2_000_000_000),
+		nil,
+		transactionZeroCurrencyBalance(),
+	)
+	if one.phase == nil || !one.phase.Success || one.phase.MessagesCreated != 1 {
+		t.Fatalf("failed to measure one outbound message: %+v", one.phase)
+	}
+	maxBits := uint32(one.phase.TotalMsgSize.Bits.Uint64())
+	maxCells := uint32(one.phase.TotalMsgSize.Cells.Uint64())
+
+	for _, tc := range []struct {
+		name         string
+		version      uint32
+		secondMode   uint8
+		wantSuccess  bool
+		wantCode     int32
+		wantSkipped  uint16
+		wantMessages uint16
+	}{
+		{name: "v14_not_enforced", version: 14, secondMode: 1, wantSuccess: true, wantMessages: 2},
+		{name: "v15_result_47", version: 15, secondMode: 1, wantCode: 47, wantMessages: 1},
+		{name: "v15_mode_2_skips", version: 15, secondMode: 3, wantSuccess: true, wantSkipped: 1, wantMessages: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := transactionTestConfigWithParams(t, map[uint32]*cell.Cell{
+				tlb.ConfigParamGlobalVersion: transactionTestGlobalVersionCell(t, tc.version),
+				tlb.ConfigParamSizeLimits:    transactionTestSizeLimitsV3Cell(t, maxBits, maxCells),
+			})
+			out := applyTransactionActionsForTestWithParams(t, []any{
+				tlb.ActionSendMsg{Mode: 1, Msg: msg},
+				tlb.ActionSendMsg{Mode: tc.secondMode, Msg: msg},
+			}, cfg, big.NewInt(2_000_000_000), nil, transactionZeroCurrencyBalance())
+
+			if out.phase == nil {
+				t.Fatal("action phase is nil")
+			}
+			if out.phase.Success != tc.wantSuccess || !out.phase.Valid || out.phase.ResultCode != tc.wantCode {
+				t.Fatalf("action result = success:%t valid:%t code:%d, want success:%t valid:true code:%d", out.phase.Success, out.phase.Valid, out.phase.ResultCode, tc.wantSuccess, tc.wantCode)
+			}
+			if out.phase.SkippedActions != tc.wantSkipped || out.phase.MessagesCreated != tc.wantMessages {
+				t.Fatalf("action counts = skipped:%d messages:%d, want skipped:%d messages:%d", out.phase.SkippedActions, out.phase.MessagesCreated, tc.wantSkipped, tc.wantMessages)
+			}
+		})
+	}
+}
+
+func transactionTestSizeLimitsV3Cell(t *testing.T, maxTotalBits, maxTotalCells uint32) *cell.Cell {
+	t.Helper()
+
+	limits, err := tlb.ToCell(&tlb.SizeLimitsConfigV3{
+		MaxMsgBits:                  1 << 21,
+		MaxMsgCells:                 1 << 13,
+		MaxLibraryCells:             1_000,
+		MaxVMDataDepth:              512,
+		MaxExtMsgSize:               65_535,
+		MaxExtMsgDepth:              512,
+		MaxAccStateCells:            1 << 16,
+		MaxMCAccStateCells:          1 << 11,
+		MaxAccPublicLibraries:       256,
+		DeferOutQueueSizeLimit:      256,
+		MaxMsgExtraCurrencies:       2,
+		MaxAccFixedPrefixLength:     8,
+		AccStateCellsForStorageDict: 26,
+		MaxTotalMsgBits:             maxTotalBits,
+		MaxTotalMsgCells:            maxTotalCells,
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to build v3 size limits: %v", err)
 	}
-
-	out := applyTransactionActionsForTestWithParams(t, []any{
-		tlb.ActionSendMsg{Mode: 64, Msg: buildTransactionOutboundInternalCell(t, 1)},
-		tlb.ActionSendMsg{Mode: 16, Msg: buildTransactionOutboundInternalCell(t, 20_000_000_000)},
-	}, cfg, big.NewInt(2_000_000_000), nil, msgBalance)
-
-	if out.phase == nil || out.phase.Success || out.phase.ResultCode != 34 {
-		t.Fatalf("unexpected action phase: %+v", out.phase)
-	}
-	if out.phase.TotalActionFees == nil || out.phase.TotalActionFees.Nano().Sign() == 0 {
-		t.Fatalf("total action fees = %v, want previous outbound action fees", out.phase.TotalActionFees)
-	}
-	if out.actionFees == nil || out.actionFees.Sign() != 0 {
-		t.Fatalf("charged action fees = %v, want no previous outbound action fees charged", out.actionFees)
-	}
+	return limits
 }
 
 func assertTransactionLibraryStored(t *testing.T, libs *cell.Dictionary, lib *cell.Cell, wantPublic bool) {
@@ -1781,7 +2152,7 @@ func applyTransactionActionsForTestWithParams(t *testing.T, actions []any, cfg *
 		data:    data,
 		balance: new(big.Int).Set(balance),
 	}
-	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0))
+	out, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), cfg, new(big.Int).Set(balance), extra, msgBalance, big.NewInt(0), preV9TestOriginalBalance(t, new(big.Int).Set(balance), extra), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1802,7 +2173,7 @@ func transactionTestConfigWithParams(t *testing.T, params map[uint32]*cell.Cell)
 	if _, ok := params[tlb.ConfigParamGlobalVersion]; !ok {
 		params[tlb.ConfigParamGlobalVersion] = transactionTestGlobalVersionCell(t, 13)
 	}
-	return MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, params))
+	return mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, params))
 }
 
 func transactionTestGlobalVersionCell(t *testing.T, version uint32) *cell.Cell {
@@ -1875,6 +2246,91 @@ func transactionTestRelaxedInternalMessageWithExtra(extra *cell.Dictionary, trai
 	return builder.EndCell()
 }
 
+func transactionMalformedExtraCurrencyFork(t *testing.T, extraBit, extraRef bool) *cell.Dictionary {
+	t.Helper()
+
+	dict := cell.NewDict(32)
+	for i, key := range []uint64{0, 1 << 31} {
+		value := cell.BeginCell().MustStoreBigVarUInt(big.NewInt(int64(i+1)), 32).EndCell()
+		if err := dict.SetIntKey(new(big.Int).SetUint64(key), value); err != nil {
+			t.Fatalf("store extra currency %d: %v", key, err)
+		}
+	}
+
+	root := dict.AsCell()
+	rootSlice := root.MustBeginParse()
+	malformed := cell.BeginCell().MustStoreSlice(rootSlice.MustLoadSlice(root.BitsSize()), root.BitsSize())
+	if extraBit {
+		malformed.MustStoreBoolBit(true)
+	}
+	for rootSlice.RefsNum() > 0 {
+		ref, err := rootSlice.LoadRefCell()
+		if err != nil {
+			t.Fatalf("load extra-currency fork ref: %v", err)
+		}
+		malformed.MustStoreRef(ref)
+	}
+	if extraRef {
+		malformed.MustStoreRef(cell.BeginCell().EndCell())
+	}
+	return malformed.EndCell().AsDict(32)
+}
+
+func transactionTestMessageWithReferencedStateInit(stateInit *cell.Cell, external bool) *cell.Cell {
+	builder := cell.BeginCell()
+	if external {
+		builder.
+			MustStoreUInt(0b11, 2).
+			MustStoreAddr(tonopsTestAddr).
+			MustStoreAddr(address.NewAddressExt(0, 8, []byte{0xaa})).
+			MustStoreUInt(0, 64).
+			MustStoreUInt(0, 32)
+	} else {
+		builder.
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(true).
+			MustStoreBoolBit(false).
+			MustStoreBoolBit(false).
+			MustStoreAddr(tonopsTestAddr).
+			MustStoreAddr(tonopsTestAddr).
+			MustStoreBigCoins(big.NewInt(1)).
+			MustStoreDict(nil).
+			MustStoreBigCoins(big.NewInt(0)).
+			MustStoreBigCoins(big.NewInt(0)).
+			MustStoreUInt(0, 64).
+			MustStoreUInt(0, 32)
+	}
+	return builder.
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(true).
+		MustStoreRef(stateInit).
+		MustStoreBoolBit(false).
+		EndCell()
+}
+
+func transactionTestInternalMessageWithVariableDestination(workchain int64, addrBits uint) *cell.Cell {
+	return cell.BeginCell().
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(true).
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(false).
+		MustStoreAddr(tonopsTestAddr).
+		MustStoreUInt(0b11, 2).
+		MustStoreBoolBit(false).
+		MustStoreUInt(uint64(addrBits), 9).
+		MustStoreInt(workchain, 32).
+		MustStoreSlice(make([]byte, (addrBits+7)/8), addrBits).
+		MustStoreBigCoins(big.NewInt(0)).
+		MustStoreBoolBit(false).
+		MustStoreBigCoins(big.NewInt(0)).
+		MustStoreBigCoins(big.NewInt(0)).
+		MustStoreUInt(0, 64).
+		MustStoreUInt(0, 32).
+		MustStoreBoolBit(false).
+		MustStoreBoolBit(false).
+		EndCell()
+}
+
 func transactionTestTruncatedRelaxedInternalMessage() *cell.Cell {
 	return cell.BeginCell().
 		MustStoreBoolBit(false).
@@ -1936,4 +2392,16 @@ func lazyTransactionTestRoot(t *testing.T, root *cell.Cell) *cell.Cell {
 		t.Fatalf("lazy parse returned %d roots, want 1", len(roots))
 	}
 	return roots[0]
+}
+
+// preV9TestOriginalBalance builds the RAWRESERVE base used below global
+// version 9 for direct action-phase calls: these fixtures collect no fees, so
+// the base is simply the account balance the fixture starts with.
+func preV9TestOriginalBalance(t *testing.T, balance *big.Int, extra *cell.Dictionary) *transactionCurrencyBalance {
+	t.Helper()
+	base, err := transactionCurrencyFromParts(balance, extra)
+	if err != nil {
+		t.Fatalf("build pre-v9 original balance: %v", err)
+	}
+	return base
 }

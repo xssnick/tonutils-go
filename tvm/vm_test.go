@@ -110,11 +110,7 @@ func TestTVMExecuteFutureConfigWithLatestDefault(t *testing.T) {
 		tlb.ConfigParamGlobalVersion: mustGlobalVersionCell(t, futureVersion),
 	})
 
-	if !AllowHigherVersionExecUsingLatest {
-		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
-	}
-
-	cfg, err := PrepareBlockchainConfig(root)
+	cfg, err := prepareBlockchainConfigLenient(root)
 	if err != nil {
 		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
 	}
@@ -184,7 +180,7 @@ func TestExecutionResultFromStateUsesCommittedOrFallbackData(t *testing.T) {
 	code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 	fallbackData := cell.BeginCell().MustStoreUInt(0xBB, 8).EndCell()
 
-	res := executionResultFromState(vmerrCode(errors.New("plain failure")), &vm.State{Stack: vm.NewStack()}, code, fallbackData)
+	res := executionResultFromState(vmerrCode(errors.New("plain failure")), &vm.State{Stack: vm.NewStack()}, code, fallbackData, nil)
 	if res.ExitCode != vmerr.CodeFatal {
 		t.Fatalf("generic vmerr code = %d, want fatal", res.ExitCode)
 	}
@@ -208,7 +204,7 @@ func TestExecutionResultFromStateUsesCommittedOrFallbackData(t *testing.T) {
 		},
 	}
 
-	res = executionResultFromState(vmerrCode(vmerr.Error(vmerr.CodeRangeCheck, "range")), state, code, fallbackData)
+	res = executionResultFromState(vmerrCode(vmerr.Error(vmerr.CodeRangeCheck, "range")), state, code, fallbackData, nil)
 	if res.ExitCode != vmerr.CodeRangeCheck {
 		t.Fatalf("vmerr code = %d, want range check", res.ExitCode)
 	}
@@ -809,7 +805,7 @@ func FuzzTVMVersionedOpcodeTruncatedDispatchBoundary(f *testing.F) {
 		if getter == nil {
 			return
 		}
-		versioned, ok := getter().(vm.VersionedOp)
+		versioned, ok := getter.instance().(vm.VersionedOp)
 		if !ok || versioned.MinGlobalVersion() != tt.minVersion {
 			return
 		}

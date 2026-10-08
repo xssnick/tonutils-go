@@ -32,6 +32,11 @@ func (b *BinTree) walk(node *cell.Cell, key *cell.Builder, fn func(key *cell.Cel
 	if node == nil {
 		return fmt.Errorf("failed to walk BinTree: nil node")
 	}
+	loaded, err := node.Prewarm()
+	if err != nil {
+		return fmt.Errorf("failed to load BinTree node: %w", err)
+	}
+	node = loaded
 
 	if isOpaqueBinTreeLeaf(node) {
 		return fn(key.EndCell(), node)
@@ -106,6 +111,11 @@ func (b *BinTree) Get(key *cell.Cell) *cell.Cell {
 		if node == nil {
 			return nil
 		}
+		loaded, err := node.Prewarm()
+		if err != nil {
+			return nil
+		}
+		node = loaded
 
 		if isOpaqueBinTreeLeaf(node) {
 			if path.BitsLeft() == 0 {

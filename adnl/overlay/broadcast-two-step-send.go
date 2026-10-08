@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/xssnick/raptorq"
@@ -15,6 +16,11 @@ import (
 
 const DefaultBroadcastTwoStepFECMinBytes uint32 = 513
 const DefaultBroadcastTwoStepFECMinPeers = 5
+
+// DefaultBroadcastTwoStepSendConcurrency bounds how many peers one broadcast
+// dispatches at the same time. Without a bound a large overlay would start a
+// goroutine per peer on every broadcast.
+const DefaultBroadcastTwoStepSendConcurrency = 64
 
 type BroadcastTwoStepMode int
 
@@ -30,8 +36,13 @@ type BroadcastTwoStepSendResult struct {
 	Attempted   int
 	Sent        int
 	Failed      []BroadcastTwoStepPeerError
-	DataSize    uint32
-	PartSize    uint32
+	// Pending counts the recipients whose send had not finished when the call
+	// returned, which is non-zero only for a fan-out released at quorum (see
+	// WithBroadcastTwoStepQuorumMargin). They are neither delivered nor failed:
+	// their goroutines are still running. Attempted = Sent + len(Failed) + Pending.
+	Pending  int
+	DataSize uint32
+	PartSize uint32
 }
 
 type BroadcastTwoStepPeerError struct {
@@ -39,8 +50,31 @@ type BroadcastTwoStepPeerError struct {
 	Err    error
 }
 
+// BroadcastSigner owns the key used to authenticate an overlay broadcast.
+// Calls to Sign made by one broadcast are serialized so signers backed by a
+// stateful keyring or hardware device do not need to be concurrency-safe.
+type BroadcastSigner interface {
+	PublicKey() ed25519.PublicKey
+	Sign(payload []byte) ([]byte, error)
+}
+
+type ed25519BroadcastSigner ed25519.PrivateKey
+
+func (s ed25519BroadcastSigner) PublicKey() ed25519.PublicKey {
+	return ed25519.PrivateKey(s).Public().(ed25519.PublicKey)
+}
+
+func (s ed25519BroadcastSigner) Sign(payload []byte) ([]byte, error) {
+	return ed25519.Sign(ed25519.PrivateKey(s), payload), nil
+}
+
 type BroadcastTwoStepSendRequest struct {
-	Key         ed25519.PrivateKey
+	// Key is the original signing API, kept for compatibility. Exactly one of
+	// Key and Signer must be set, otherwise the send is rejected.
+	Key ed25519.PrivateKey
+	// Signer signs on behalf of the source so a keyring can retain ownership of
+	// the private material. Exactly one of Key and Signer must be set.
+	Signer      BroadcastSigner
 	Certificate any
 	LocalADNLID []byte
 	Payload     []byte
@@ -50,7 +84,12 @@ type BroadcastTwoStepSendRequest struct {
 }
 
 type BroadcastTwoStepTLSendRequest struct {
-	Key         ed25519.PrivateKey
+	// Key is the original signing API, kept for compatibility. Exactly one of
+	// Key and Signer must be set, otherwise the send is rejected.
+	Key ed25519.PrivateKey
+	// Signer signs on behalf of the source so a keyring can retain ownership of
+	// the private material. Exactly one of Key and Signer must be set.
+	Signer      BroadcastSigner
 	Certificate any
 	LocalADNLID []byte
 	Payload     tl.Serializable
@@ -62,10 +101,13 @@ type BroadcastTwoStepTLSendRequest struct {
 type BroadcastTwoStepSenderOption func(cfg *broadcastTwoStepSenderConfig)
 
 type broadcastTwoStepSenderConfig struct {
-	date     uint32
-	minBytes uint32
-	minPeers int
-	now      func() time.Time
+	date            uint32
+	minBytes        uint32
+	minPeers        int
+	concurrency     int
+	peerSendTimeout time.Duration
+	quorumMargin    int
+	now             func() time.Time
 }
 
 func WithBroadcastTwoStepDate(date uint32) BroadcastTwoStepSenderOption {
@@ -78,6 +120,43 @@ func WithBroadcastTwoStepFECThreshold(minBytes uint32, minPeers int) BroadcastTw
 	return func(cfg *broadcastTwoStepSenderConfig) {
 		cfg.minBytes = minBytes
 		cfg.minPeers = minPeers
+	}
+}
+
+// WithBroadcastTwoStepSendConcurrency bounds how many peers of one broadcast
+// are dispatched in parallel. Values below 1 select the default.
+func WithBroadcastTwoStepSendConcurrency(concurrency int) BroadcastTwoStepSenderOption {
+	return func(cfg *broadcastTwoStepSenderConfig) {
+		cfg.concurrency = concurrency
+	}
+}
+
+// WithBroadcastTwoStepPeerSendTimeout limits each peer's network send
+// independently. A non-positive timeout keeps the caller context unchanged.
+func WithBroadcastTwoStepPeerSendTimeout(timeout time.Duration) BroadcastTwoStepSenderOption {
+	return func(cfg *broadcastTwoStepSenderConfig) {
+		cfg.peerSendTimeout = timeout
+	}
+}
+
+// WithBroadcastTwoStepQuorumMargin returns the FEC fan-out to its caller once
+// k+margin peers have taken their symbol, instead of after the last of them.
+//
+// The fan-out is already one goroutine per peer, so this changes nothing about
+// what any peer receives: the stragglers keep running and finish into a
+// channel buffered for every peer. What it changes is what the caller waits
+// for. A broadcast is recoverable once k symbols are out — every recipient
+// relays the one it took to all the others — so waiting for the slowest of
+// fifteen only reports the worst link on the committee and holds the caller's
+// send worker while it does. On the test stand that tail was seconds while the
+// median was tens of milliseconds.
+//
+// A margin of zero (the default) keeps the old behaviour of waiting for all.
+// Simple-mode broadcasts always wait for all: they carry the whole payload to
+// every peer, so there is no k to be short of.
+func WithBroadcastTwoStepQuorumMargin(margin int) BroadcastTwoStepSenderOption {
+	return func(cfg *broadcastTwoStepSenderConfig) {
+		cfg.quorumMargin = margin
 	}
 }
 
@@ -94,11 +173,16 @@ func SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, 
 	if req.PeerSet == nil {
 		return BroadcastTwoStepSendResult{}, fmt.Errorf("peer set is nil")
 	}
+	signer, publicKey, err := broadcastTwoStepSigner(req.Key, req.Signer)
+	if err != nil {
+		return BroadcastTwoStepSendResult{}, err
+	}
 
 	cfg := broadcastTwoStepSenderConfig{
-		minBytes: DefaultBroadcastTwoStepFECMinBytes,
-		minPeers: DefaultBroadcastTwoStepFECMinPeers,
-		now:      time.Now,
+		minBytes:    DefaultBroadcastTwoStepFECMinBytes,
+		minPeers:    DefaultBroadcastTwoStepFECMinPeers,
+		concurrency: DefaultBroadcastTwoStepSendConcurrency,
+		now:         time.Now,
 	}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -106,11 +190,14 @@ func SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, 
 	if cfg.minPeers < 1 {
 		cfg.minPeers = 1
 	}
+	if cfg.concurrency < 1 {
+		cfg.concurrency = DefaultBroadcastTwoStepSendConcurrency
+	}
 	if cfg.now == nil {
 		cfg.now = time.Now
 	}
 
-	source := keys.PublicKeyED25519{Key: req.Key.Public().(ed25519.PublicKey)}
+	source := keys.PublicKeyED25519{Key: publicKey}
 	if req.Certificate == nil {
 		req.Certificate = CertificateEmpty{}
 	}
@@ -129,9 +216,32 @@ func SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, 
 	dataSize := uint32(len(req.Payload))
 	dataHash := calcBroadcastTwoStepDataHash(req.Payload)
 	if dataSize >= cfg.minBytes && len(peers) >= cfg.minPeers {
-		return sendBroadcastTwoStepFEC(ctx, req.Key, source, sourceID, req.Certificate, req.LocalADNLID, req.Payload, dataHash, req.Extra, flags, date, peers)
+		return sendBroadcastTwoStepFEC(ctx, signer, source, sourceID, req.Certificate, req.LocalADNLID, req.Payload, dataHash, req.Extra, flags, date, peers, cfg.concurrency, cfg.peerSendTimeout, cfg.quorumMargin)
 	}
-	return sendBroadcastTwoStepSimple(ctx, req.Key, source, sourceID, req.Certificate, req.LocalADNLID, req.Payload, dataHash, req.Extra, flags, date, peers)
+	return sendBroadcastTwoStepSimple(ctx, signer, source, sourceID, req.Certificate, req.LocalADNLID, req.Payload, dataHash, req.Extra, flags, date, peers, cfg.concurrency, cfg.peerSendTimeout)
+}
+
+func broadcastTwoStepSigner(key ed25519.PrivateKey, signer BroadcastSigner) (BroadcastSigner, ed25519.PublicKey, error) {
+	if signer != nil {
+		if len(key) != 0 {
+			return nil, nil, fmt.Errorf("key and signer are mutually exclusive")
+		}
+		publicKey := signer.PublicKey()
+		if len(publicKey) != ed25519.PublicKeySize {
+			return nil, nil, fmt.Errorf("signer public key should be %d bytes", ed25519.PublicKeySize)
+		}
+
+		return signer, publicKey, nil
+	}
+
+	// Key is the original public API. Keep it as a strict compatibility path
+	// while the signer form lets keyrings retain ownership of private material.
+	if len(key) != ed25519.PrivateKeySize {
+		return nil, nil, fmt.Errorf("private key should be %d bytes", ed25519.PrivateKeySize)
+	}
+
+	localSigner := ed25519BroadcastSigner(key)
+	return localSigner, localSigner.PublicKey(), nil
 }
 
 func SendBroadcastTwoStepFromTL(ctx context.Context, req BroadcastTwoStepTLSendRequest, opts ...BroadcastTwoStepSenderOption) (BroadcastTwoStepSendResult, error) {
@@ -141,6 +251,7 @@ func SendBroadcastTwoStepFromTL(ctx context.Context, req BroadcastTwoStepTLSendR
 	}
 	return SendBroadcastTwoStep(ctx, BroadcastTwoStepSendRequest{
 		Key:         req.Key,
+		Signer:      req.Signer,
 		Certificate: req.Certificate,
 		LocalADNLID: req.LocalADNLID,
 		Payload:     data,
@@ -151,10 +262,7 @@ func SendBroadcastTwoStepFromTL(ctx context.Context, req BroadcastTwoStepTLSendR
 }
 
 func (a *ADNLOverlayWrapper) SendBroadcastTwoStep(ctx context.Context, req BroadcastTwoStepSendRequest, opts ...BroadcastTwoStepSenderOption) (BroadcastTwoStepSendResult, error) {
-	a.mx.RLock()
-	localID := append([]byte(nil), a.twoStepLocalID...)
-	peerSet := a.twoStepPeerSet
-	a.mx.RUnlock()
+	peerSet, localID := a.twoStepRelayConfig()
 	if len(req.LocalADNLID) == 0 {
 		req.LocalADNLID = localID
 	}
@@ -189,6 +297,7 @@ func (a *ADNLOverlayWrapper) SendBroadcastTwoStepFromTL(ctx context.Context, req
 	}
 	return a.SendBroadcastTwoStep(ctx, BroadcastTwoStepSendRequest{
 		Key:         req.Key,
+		Signer:      req.Signer,
 		Certificate: req.Certificate,
 		LocalADNLID: req.LocalADNLID,
 		Payload:     data,
@@ -198,7 +307,7 @@ func (a *ADNLOverlayWrapper) SendBroadcastTwoStepFromTL(ctx context.Context, req
 	}, opts...)
 }
 
-func sendBroadcastTwoStepSimple(ctx context.Context, key ed25519.PrivateKey, source keys.PublicKeyED25519, sourceID []byte, certificate any, localADNLID []byte, payload []byte, dataHash []byte, extra []byte, flags int32, date uint32, peers []BroadcastPeer) (BroadcastTwoStepSendResult, error) {
+func sendBroadcastTwoStepSimple(ctx context.Context, signer BroadcastSigner, source keys.PublicKeyED25519, sourceID []byte, certificate any, localADNLID []byte, payload []byte, dataHash []byte, extra []byte, flags int32, date uint32, peers []BroadcastPeer, concurrency int, peerSendTimeout time.Duration) (BroadcastTwoStepSendResult, error) {
 	dataSize := uint32(len(payload))
 	broadcastID, err := calcBroadcastTwoStepIDFromSourceID(sourceID, flags, date, localADNLID, dataHash, dataSize, dataSize, extra)
 	if err != nil {
@@ -214,12 +323,16 @@ func sendBroadcastTwoStepSimple(ctx context.Context, key ed25519.PrivateKey, sou
 		Data:        append([]byte(nil), payload...),
 		Extra:       append([]byte(nil), extra...),
 	}
-	msg.Signature, err = signBroadcastTwoStepSimple(key, broadcastID, msg.Data)
+	msg.Signature, err = signBroadcastTwoStepSimpleWithSigner(signer, broadcastID, msg.Data)
+	if err != nil {
+		return BroadcastTwoStepSendResult{}, err
+	}
+	prepared, err := prepareTwoStepBroadcastMessage(msg)
 	if err != nil {
 		return BroadcastTwoStepSendResult{}, err
 	}
 
-	attempted, sent, failed, sendErr := sendBroadcastTwoStepMessage(ctx, peers, msg)
+	attempted, sent, failed, sendErr := sendBroadcastTwoStepMessage(ctx, peers, prepared, concurrency, peerSendTimeout)
 	return BroadcastTwoStepSendResult{
 		BroadcastID: broadcastID,
 		DataHash:    append([]byte(nil), dataHash...),
@@ -232,16 +345,16 @@ func sendBroadcastTwoStepSimple(ctx context.Context, key ed25519.PrivateKey, sou
 	}, sendErr
 }
 
-func sendBroadcastTwoStepFEC(ctx context.Context, key ed25519.PrivateKey, source keys.PublicKeyED25519, sourceID []byte, certificate any, localADNLID []byte, payload []byte, dataHash []byte, extra []byte, flags int32, date uint32, peers []BroadcastPeer) (BroadcastTwoStepSendResult, error) {
+func sendBroadcastTwoStepFEC(ctx context.Context, signer BroadcastSigner, source keys.PublicKeyED25519, sourceID []byte, certificate any, localADNLID []byte, payload []byte, dataHash []byte, extra []byte, flags int32, date uint32, peers []BroadcastPeer, concurrency int, peerSendTimeout time.Duration, quorumMargin int) (BroadcastTwoStepSendResult, error) {
 	dataSize := uint32(len(payload))
 	k := broadcastTwoStepFECBaseSymbols(len(peers))
 	if k < 1 {
-		return sendBroadcastTwoStepSimple(ctx, key, source, sourceID, certificate, localADNLID, payload, dataHash, extra, flags, date, peers)
+		return sendBroadcastTwoStepSimple(ctx, signer, source, sourceID, certificate, localADNLID, payload, dataHash, extra, flags, date, peers, concurrency, peerSendTimeout)
 	}
 
 	partSize := uint32((len(payload) + k - 1) / k)
 	if partSize == 0 || partSize >= dataSize {
-		return sendBroadcastTwoStepSimple(ctx, key, source, sourceID, certificate, localADNLID, payload, dataHash, extra, flags, date, peers)
+		return sendBroadcastTwoStepSimple(ctx, signer, source, sourceID, certificate, localADNLID, payload, dataHash, extra, flags, date, peers, concurrency, peerSendTimeout)
 	}
 
 	enc, err := raptorq.NewRaptorQ(partSize).CreateEncoder(payload)
@@ -254,14 +367,20 @@ func sendBroadcastTwoStepFEC(ctx context.Context, key ed25519.PrivateKey, source
 		return BroadcastTwoStepSendResult{}, err
 	}
 
-	var sendErr error
-	attempted := 0
-	sent := 0
-	var failed []BroadcastTwoStepPeerError
-	for i, peer := range peers {
-		seqno := uint32(i)
-		part := enc.GenSymbol(seqno)
-		msg := &BroadcastTwoStepFEC{
+	// k symbols make the payload recoverable and every recipient relays the one
+	// it took, so the fan-out has done its job once k+margin peers hold theirs.
+	quorum := 0
+	if quorumMargin > 0 {
+		quorum = k + quorumMargin
+		if quorum > len(peers) {
+			quorum = len(peers)
+		}
+	}
+
+	var signMu sync.Mutex
+	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, peerSendTimeout, quorum, func(index int) (preparedTwoStepBroadcastMessage, error) {
+		seqno := uint32(index)
+		message := &BroadcastTwoStepFEC{
 			Flags:       flags,
 			Date:        date,
 			Source:      source,
@@ -270,64 +389,210 @@ func sendBroadcastTwoStepFEC(ctx context.Context, key ed25519.PrivateKey, source
 			DataHash:    append([]byte(nil), dataHash...),
 			DataSize:    dataSize,
 			Seqno:       seqno,
-			Part:        part,
+			Part:        enc.GenSymbol(seqno),
 			Extra:       append([]byte(nil), extra...),
 		}
-		msg.Signature, err = signBroadcastTwoStepFEC(key, broadcastID, seqno, part)
-		if err != nil {
-			return BroadcastTwoStepSendResult{}, err
-		}
 
-		peerID := peer.ID()
-		attempted++
-		if err = peer.SendCustomMessage(ctx, msg); err != nil {
-			failed = append(failed, BroadcastTwoStepPeerError{
-				PeerID: append([]byte(nil), peerID...),
-				Err:    err,
-			})
-			if sendErr == nil {
-				sendErr = fmt.Errorf("failed to send two-step fec part %d to peer %x: %w", seqno, peerID, err)
-			}
-			continue
+		signMu.Lock()
+		var signErr error
+		message.Signature, signErr = signBroadcastTwoStepFECWithSigner(
+			signer,
+			broadcastID,
+			message.Seqno,
+			message.Part,
+		)
+		signMu.Unlock()
+
+		if signErr != nil {
+			return preparedTwoStepBroadcastMessage{}, signErr
 		}
-		sent++
-	}
+		return prepareTwoStepBroadcastMessage(message)
+	})
+	sent, failed, sendErr := collectBroadcastTwoStepResults(results, "fec part")
 
 	return BroadcastTwoStepSendResult{
 		BroadcastID: broadcastID,
 		DataHash:    append([]byte(nil), dataHash...),
 		Mode:        BroadcastTwoStepModeFEC,
-		Attempted:   attempted,
+		Attempted:   len(peers),
 		Sent:        sent,
 		Failed:      failed,
+		Pending:     len(peers) - len(results),
 		DataSize:    dataSize,
 		PartSize:    partSize,
 	}, sendErr
 }
 
+// broadcastTwoStepFECBaseSymbols is how many symbols the payload is cut into.
+// Every peer takes exactly one, so the source pays len(peers)/k times the
+// payload and each recipient relays its own symbol to everyone else: the
+// overlay carries about n²/k payloads per broadcast, and k is the only term a
+// sender controls.
+//
+// The reference cuts at (n-1)/2 (cppnode/ton/overlay/broadcast-twostep.cpp:53-56),
+// which for a 15-peer committee is k=7: a 2 MB candidate becomes 300 kB parts,
+// 4.5 MB out of the source and 4.2 MB out of every relayer. Measured on the
+// test stand under load (2026-09-04), that put this node at 582 Mbit/s while it
+// led a window against 282 Mbit/s otherwise, and its own candidate — fifteen
+// streams sharing one UDP socket — took 230 ms at the median and 809 ms at p90
+// to leave, against a 400 ms slot.
+//
+// Two thirds instead of one half cuts every one of those numbers by ~22% and
+// costs only redundancy the committee does not need: one symbol still arrives
+// per peer, so fifteen arrive where nine decode. It is sender policy, not
+// protocol — the receiver derives its symbol count from the part_size carried
+// in the message (broadcast-twostep.cpp:415-419), so a reference node decodes
+// this without knowing the sender changed anything.
 func broadcastTwoStepFECBaseSymbols(otherNodes int) int {
-	return (otherNodes - 1) / 2
+	return 2 * (otherNodes - 1) / 3
 }
 
-func sendBroadcastTwoStepMessage(ctx context.Context, peers []BroadcastPeer, msg tl.Serializable) (int, int, []BroadcastTwoStepPeerError, error) {
-	var sendErr error
-	attempted := 0
+type preparedTwoStepBroadcastMessage struct {
+	message tl.Serializable
+	body    *PreparedBroadcastMessage
+}
+
+func prepareTwoStepBroadcastMessage(message tl.Serializable) (preparedTwoStepBroadcastMessage, error) {
+	body, err := PrepareBroadcastMessage(message)
+	if err != nil {
+		return preparedTwoStepBroadcastMessage{}, err
+	}
+	return preparedTwoStepBroadcastMessage{message: message, body: body}, nil
+}
+
+func sendBroadcastTwoStepMessage(ctx context.Context, peers []BroadcastPeer, msg preparedTwoStepBroadcastMessage, concurrency int, peerSendTimeout time.Duration) (int, int, []BroadcastTwoStepPeerError, error) {
+	results := sendBroadcastTwoStepParallel(ctx, peers, concurrency, peerSendTimeout, 0, func(int) (preparedTwoStepBroadcastMessage, error) {
+		return msg, nil
+	})
+	sent, failed, sendErr := collectBroadcastTwoStepResults(results, "broadcast")
+
+	return len(peers), sent, failed, sendErr
+}
+
+type broadcastTwoStepPeerResult struct {
+	peerID []byte
+	err    error
+}
+
+// C++ dispatches every two-step recipient independently through the actor
+// mailbox. A slow delivery receipt must not delay the first hop to another
+// validator, especially in a small validator set where every vote is needed.
+// Dispatch is bounded by concurrency, so a large overlay does not turn one
+// broadcast into a goroutine per peer.
+func sendBroadcastTwoStepParallel(
+	ctx context.Context,
+	peers []BroadcastPeer,
+	concurrency int,
+	peerSendTimeout time.Duration,
+	quorum int,
+	message func(int) (preparedTwoStepBroadcastMessage, error),
+) []broadcastTwoStepPeerResult {
+	// A fan-out released at quorum outlives the call that started it, so the
+	// stragglers get a context the caller's cancellation cannot reach — only
+	// its deadline. The caller cancels as soon as this returns (see the
+	// candidate sender in the validator), and a peer whose send dies there
+	// never receives its symbol at all: it then has none to relay, and the
+	// second step of this broadcast is made of exactly those relays. Measured
+	// on the test stand before this was detached: eleven of fourteen committee
+	// members were reached by the source, the other three had to reconstruct
+	// the candidate from relays alone, and the certificates for a leader's
+	// window came in progressively later until the committee skipped its tail.
+	sendCtx := ctx
+	var release context.CancelFunc
+	if quorum > 0 && quorum < len(peers) {
+		if deadline, ok := ctx.Deadline(); ok {
+			sendCtx, release = context.WithDeadline(context.WithoutCancel(ctx), deadline)
+		} else {
+			sendCtx, release = context.WithCancel(context.WithoutCancel(ctx))
+		}
+	}
+
+	// Buffered for every peer: a fan-out that returns at quorum leaves its
+	// stragglers running, and they have to be able to finish with nobody
+	// reading. Results are collected in completion order; the only consumer
+	// counts them.
+	done := make(chan broadcastTwoStepPeerResult, len(peers))
+
+	// A set that already fits into the bound needs no semaphore at all.
+	var slots chan struct{}
+	if len(peers) > concurrency {
+		slots = make(chan struct{}, concurrency)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(peers))
+	for index, peer := range peers {
+		if slots != nil {
+			slots <- struct{}{}
+		}
+
+		go func(index int, peer BroadcastPeer) {
+			defer wg.Done()
+
+			peerID := append([]byte(nil), peer.ID()...)
+			msg, err := message(index)
+			if err == nil {
+				if peerSendTimeout > 0 {
+					peerCtx, cancel := context.WithTimeout(sendCtx, peerSendTimeout)
+					err = SendPreparedBroadcast(peerCtx, peer, msg.message, msg.body)
+					cancel()
+				} else {
+					err = SendPreparedBroadcast(sendCtx, peer, msg.message, msg.body)
+				}
+			}
+
+			if slots != nil {
+				<-slots
+			}
+			done <- broadcastTwoStepPeerResult{peerID: peerID, err: err}
+		}(index, peer)
+	}
+	if release != nil {
+		// Held until the last straggler is done, so the detached context is
+		// released rather than left to its deadline.
+		go func() {
+			wg.Wait()
+			release()
+		}()
+	}
+
+	results := make([]broadcastTwoStepPeerResult, 0, len(peers))
+	delivered := 0
+	for range peers {
+		result := <-done
+		results = append(results, result)
+		if result.err == nil {
+			delivered++
+		}
+		if quorum > 0 && delivered >= quorum {
+			break
+		}
+	}
+
+	return results
+}
+
+func collectBroadcastTwoStepResults(
+	results []broadcastTwoStepPeerResult,
+	kind string,
+) (int, []BroadcastTwoStepPeerError, error) {
 	sent := 0
 	var failed []BroadcastTwoStepPeerError
-	for _, peer := range peers {
-		peerID := peer.ID()
-		attempted++
-		if err := peer.SendCustomMessage(ctx, msg); err != nil {
-			failed = append(failed, BroadcastTwoStepPeerError{
-				PeerID: append([]byte(nil), peerID...),
-				Err:    err,
-			})
-			if sendErr == nil {
-				sendErr = fmt.Errorf("failed to send two-step broadcast to peer %x: %w", peerID, err)
-			}
+	var sendErr error
+	for index := range results {
+		result := results[index]
+		if result.err == nil {
+			sent++
 			continue
 		}
-		sent++
+		failed = append(failed, BroadcastTwoStepPeerError{
+			PeerID: result.peerID,
+			Err:    result.err,
+		})
+		if sendErr == nil {
+			sendErr = fmt.Errorf("failed to send two-step %s %d to peer %x: %w", kind, index, result.peerID, result.err)
+		}
 	}
-	return attempted, sent, failed, sendErr
+
+	return sent, failed, sendErr
 }

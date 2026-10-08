@@ -9,6 +9,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	cellsliceop "github.com/xssnick/tonutils-go/tvm/op/cellslice"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
@@ -18,6 +19,133 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
+
+func rawExecutionStackCell(stack *vm.Stack) (out *cell.Cell, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			out = nil
+			err = fmt.Errorf("serialize execution stack: %v", recovered)
+		}
+	}()
+
+	serialized, err := tlb.NewStackFromVM(stack)
+	if err != nil {
+		return nil, err
+	}
+	return serialized.ToCell()
+}
+
+func TestTVMCrossEmulatorZeroGasLimitParity(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	code := cell.BeginCell().EndCell()
+	goStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("build go stack: %v", err)
+	}
+	refStack, err := buildCrossStack()
+	if err != nil {
+		t.Fatalf("build reference stack: %v", err)
+	}
+
+	goRes, err := runGoCrossCodeWithGas(code, testEmptyCell(), tuple.Tuple{}, goStack, 0)
+	if err != nil {
+		t.Fatalf("go tvm execution failed: %v", err)
+	}
+	refRes, err := runReferenceCrossCodeWithGas(code, testEmptyCell(), tuple.Tuple{}, refStack, 0)
+	if err != nil {
+		t.Fatalf("reference tvm execution failed: %v", err)
+	}
+
+	if goRes.exitCode != refRes.exitCode {
+		t.Fatalf("exit mismatch: go=%d reference=%d", goRes.exitCode, refRes.exitCode)
+	}
+	if goRes.gasUsed != refRes.gasUsed {
+		t.Fatalf("gas mismatch: go=%d reference=%d", goRes.gasUsed, refRes.gasUsed)
+	}
+	if !bytes.Equal(goRes.stack.Hash(), refRes.stack.Hash()) {
+		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goRes.stack.Dump(), refRes.stack.Dump())
+	}
+	if goRes.exitCode != int32(^vmerr.CodeOutOfGas) || goRes.gasUsed != vm.ImplicitRetGasPrice {
+		t.Fatalf("zero limit result = exit %d gas %d, want exit %d gas %d", goRes.exitCode, goRes.gasUsed, ^vmerr.CodeOutOfGas, vm.ImplicitRetGasPrice)
+	}
+}
+
+func TestTVMCrossEmulatorExecutionResultTraceFinalizationParity(t *testing.T) {
+	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
+		t.Skipf("reference emulator library is unavailable: %v", err)
+	}
+
+	const gasLimit = int64(vm.InstructionBaseGasPrice + 8 + vm.ImplicitRetGasPrice)
+	code := rawCodeCellFromHex(t, "30") // DROP method id; implicit RET
+	tests := []struct {
+		name  string
+		value func() any
+	}{
+		{
+			name: "slice",
+			value: func() any {
+				return cell.BeginCell().
+					MustStoreUInt(0xAB, 8).
+					MustStoreRef(cell.BeginCell().MustStoreUInt(0xCD, 8).EndCell()).
+					EndCell().
+					MustBeginParse()
+			},
+		},
+		{
+			name: "builder",
+			value: func() any {
+				return cell.BeginCell().MustStoreUInt(0xAB, 8)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			goStack, err := buildCrossStack(tt.value())
+			if err != nil {
+				t.Fatalf("build go stack: %v", err)
+			}
+			execStack := goStack.Copy()
+			if err = execStack.PushSmallInt(0); err != nil {
+				t.Fatalf("push method id: %v", err)
+			}
+			cfg, err := crossRunPreparedBlockchainConfig(referenceRawRunGlobalVersion)
+			if err != nil {
+				t.Fatalf("prepare config: %v", err)
+			}
+			goRes, err := NewTVM().Execute(code, testEmptyCell(), tuple.Tuple{}, vm.GasWithLimit(gasLimit), execStack, ExecutionConfig{Config: cfg})
+			if err != nil {
+				t.Fatalf("go tvm execution failed: %v", err)
+			}
+			goStackCell, err := rawExecutionStackCell(goRes.Stack)
+			if err != nil {
+				t.Fatalf("serialize raw go result stack: %v", err)
+			}
+
+			refStack, err := buildCrossStack(tt.value())
+			if err != nil {
+				t.Fatalf("build reference stack: %v", err)
+			}
+			refRes, err := runReferenceCrossCodeWithGas(code, testEmptyCell(), tuple.Tuple{}, refStack, gasLimit)
+			if err != nil {
+				t.Fatalf("reference tvm execution failed: %v", err)
+			}
+
+			if int32(goRes.ExitCode) != refRes.exitCode {
+				t.Fatalf("exit mismatch: go=%d reference=%d", goRes.ExitCode, refRes.exitCode)
+			}
+			if goRes.GasUsed != refRes.gasUsed {
+				t.Fatalf("gas mismatch: go=%d reference=%d", goRes.GasUsed, refRes.gasUsed)
+			}
+			if !bytes.Equal(goStackCell.Hash(), refRes.stack.Hash()) {
+				t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refRes.stack.Dump())
+			}
+		})
+	}
+}
 
 func TestTVMCrossEmulatorGasBeyondOutOfGas(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {

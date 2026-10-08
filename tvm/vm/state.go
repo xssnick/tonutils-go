@@ -2,10 +2,11 @@ package vm
 
 import (
 	"errors"
+	"math/big"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
-	"math/big"
 )
 
 const ControlDataAllArgs = -1
@@ -19,7 +20,7 @@ type Register struct {
 
 func (r *Register) AdjustWith(r2 *Register) {
 	for i := 0; i < 4; i++ {
-		if r2.C[i] == nil {
+		if IsNullContinuation(r2.C[i]) {
 			continue
 		}
 		r.C[i] = r2.C[i]
@@ -35,11 +36,37 @@ func (r *Register) AdjustWith(r2 *Register) {
 	}
 }
 
+// preclearWith matches ControlRegs::operator&=: registers present in save are
+// cleared before a complex continuation starts moving its stack. The caller
+// uses it only on a post-validation failure; on success AdjustWith immediately
+// overwrites the same slots, so avoiding the redundant loop keeps the hot path
+// unchanged.
+func (r *Register) preclearWith(save *Register) {
+	for i := 0; i < 4; i++ {
+		if !IsNullContinuation(save.C[i]) {
+			r.C[i] = nil
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if save.D[i] != nil {
+			r.D[i] = nil
+		}
+	}
+	if !save.C7.IsNull() {
+		r.C7 = tuple.Tuple{}
+	}
+}
+
 func (r *Register) Get(i int) any {
-	if i < 4 {
+	if uint(i) < 4 {
+		if IsNullContinuation(r.C[i]) {
+			// ControlRegs::get preserves the t_vmcont tag even when its Ref is
+			// null. This differs from the ordinary TVM null stack value.
+			return nullContinuationValue
+		}
 		return r.C[i]
 	}
-	if i < 6 {
+	if i >= 4 && i < 6 {
 		return r.D[i-4]
 	}
 	if i == 7 {
@@ -51,7 +78,7 @@ func (r *Register) Get(i int) any {
 func (r *Register) Copy() Register {
 	rg := Register{}
 	for i := 0; i < 4; i++ {
-		if r.C[i] == nil {
+		if IsNullContinuation(r.C[i]) {
 			continue
 		}
 		rg.C[i] = r.C[i].Copy()
@@ -69,11 +96,16 @@ func (r *Register) Define(i int, val any) bool {
 	}
 
 	if i < 4 {
-		if r.C[i] != nil {
+		c, ok := val.(Continuation)
+		if !ok || IsNullContinuation(c) {
+			return false
+		}
+		if !IsNullContinuation(r.C[i]) {
 			return false
 		}
 
-		return r.Set(i, val)
+		r.C[i] = c
+		return true
 	}
 
 	if i < 6 {
@@ -106,7 +138,7 @@ func (r *Register) Set(i int, val any) bool {
 
 	if i < 4 {
 		c, ok := val.(Continuation)
-		if !ok || c == nil {
+		if !ok || IsNullContinuation(c) {
 			return false
 		}
 
@@ -151,27 +183,40 @@ type CommittedState struct {
 }
 
 type State struct {
-	GlobalVersion               int
-	CP                          int
-	CurrentCode                 *cell.Slice
-	Reg                         Register
-	Gas                         Gas
-	Cells                       CellManager
-	Libraries                   []*cell.Cell
-	libraryCache                map[cell.Hash]*cell.Cell
+	GlobalVersion int
+	CP            int
+	CurrentCode   *cell.Slice
+	Reg           Register
+	Gas           Gas
+	Cells         CellManager
+	Libraries     []*cell.Cell
+	libraryCache  map[cell.Hash]*cell.Cell
+	libraryLoads  *libraryLoadState
+	// OnCellLoad observes the first load of every cell in this execution, with
+	// the cell in hand. Gas already has to distinguish a first load from a
+	// repeat, so the machine knows this exactly; a collator hangs its proof
+	// recorder here to catch reads that reached the VM through a cell that had
+	// lost the recording trace.
+	OnCellLoad             func(*cell.Cell)
+	Stack                  *Stack
+	Steps                  uint64
+	TraceHook              TraceHook
+	SignatureCheckCounter  uint64
+	GetExtraBalanceCounter uint64
+	Committed              CommittedState
+	childRunner            ChildRunner
+
+	// The sub-word fields are grouped so their alignment tails are spent once
+	// rather than once each. Scattered among the pointers they cost seven bytes
+	// of padding apiece, which is what used to keep this struct one field away
+	// from its allocator class.
 	maxLibraryLoads             uint32
-	hasMaxLibraryLoads          bool
-	loadedLibraries             map[cell.Hash]struct{}
 	maxDataDepth                uint16
-	Stack                       *Stack
-	Steps                       uint32
+	Historical                  HistoricalConfig
+	hasMaxLibraryLoads          bool
+	libraryLookupSandboxed      bool
 	StopOnAccept                bool
-	TraceHook                   TraceHook
 	SignatureCheckAlwaysSucceed bool
-	SignatureCheckCounter       uint32
-	GetExtraBalanceCounter      uint32
-	Committed                   CommittedState
-	childRunner                 ChildRunner
 
 	// currentCodeOwned reports that CurrentCode points at a slice owned
 	// exclusively by this State: a scratch reused across continuation jumps.
@@ -179,6 +224,10 @@ type State struct {
 	// (Call/CallArgs/ExtractCurrentContinuation) or came from a caller, so
 	// the next jump allocates a fresh slice instead of overwriting in place.
 	currentCodeOwned bool
+
+	// c7Isolated reports that mutable cursor values nested in Reg.C7 were
+	// snapshotted for this State. Gas trace attachment is intentionally lazy.
+	c7Isolated bool
 }
 
 var ErrStopOnAccept = errors.New("stop on accept")
@@ -249,16 +298,40 @@ func (s *State) SetMaxLibraryLoads(limit uint32) {
 	s.hasMaxLibraryLoads = true
 }
 
+// MissingLibrary returns the hash from the most recent library lookup that
+// searched every registered collection without finding a matching cell. A
+// successful lookup and a lookup refused by the load limit leave it intact.
+// The hash is allocated lazily, keeping no-miss states in their original class.
+// Once returned, its snapshot remains stable across later misses.
+// Returning the stored pointer lets ExecutionResult reuse that allocation.
+func (s *State) MissingLibrary() *cell.Hash {
+	if s.libraryLoads == nil || !s.libraryLoads.hasMissing {
+		return nil
+	}
+	s.libraryLoads.missingExposed = true
+	return &s.libraryLoads.missingLibrary
+}
+
 func (s *State) SetMaxDataDepth(depth uint16) {
 	s.maxDataDepth = depth
 }
 
 func (s *State) InitForExecution() {
 	s.Cells.Init(s)
+	trace := s.Cells.Trace()
 	if s.Stack != nil {
-		s.Stack.SetTrace(s.Cells.Trace())
+		s.Stack.SetTrace(trace)
 	}
-	s.Reg.C7 = bindTupleTrace(s.Reg.C7, s.Cells.Trace())
+	if !s.c7Isolated {
+		// Internally constructed C7 values use the trace binding ID as an
+		// ownership token: their mutable leaves were already copied and bound.
+		// This is the same trust contract used by bindTupleTrace and avoids
+		// rebuilding the message-emulation context immediately after creation.
+		if !s.Reg.C7.HasBindingID(trace) {
+			s.Reg.C7 = snapshotTupleValue(s.Reg.C7)
+		}
+		s.c7Isolated = true
+	}
 }
 
 func (s *State) effectiveGlobalVersion() int {
@@ -288,6 +361,7 @@ func (s *State) prepareChildForRun(child *State) error {
 		return vmerr.Error(vmerr.CodeFatal, "child runner is not configured")
 	}
 	child.GlobalVersion = s.GlobalVersion
+	child.Historical = s.Historical
 	child.GetExtraBalanceCounter = s.GetExtraBalanceCounter
 	child.TraceHook = s.TraceHook
 	child.SignatureCheckAlwaysSucceed = s.SignatureCheckAlwaysSucceed
@@ -298,10 +372,10 @@ func (s *State) prepareChildForRun(child *State) error {
 	child.hasMaxLibraryLoads = s.hasMaxLibraryLoads
 	child.maxDataDepth = s.maxDataDepth
 	if s.hasMaxLibraryLoads {
-		if s.loadedLibraries == nil {
-			s.loadedLibraries = make(map[cell.Hash]struct{})
-		}
-		child.loadedLibraries = s.loadedLibraries
+		// Missing-result state stays private between parent and child.
+		// Only the unique-attempt set is shared, matching the reference
+		// transaction-wide load limit.
+		s.shareLibraryLoadsWith(child)
 	}
 	child.childRunner = s.childRunner
 	child.PrepareExecution(child.CurrentCode)
@@ -334,6 +408,9 @@ func (s *State) RunChild(child *State) (int64, error) {
 
 func (s *State) ConsumeGas(amount int64) error {
 	if !s.checkGasOnConsume() {
+		if amount < 0 {
+			return vmerr.Error(vmerr.CodeRangeCheck, "negative gas amount")
+		}
 		s.Gas.Remaining -= amount
 		return nil
 	}
@@ -383,15 +460,7 @@ func (s *State) RegisterGetExtraBalanceCall() bool {
 
 func (s *State) RegisterCellLoadFreeKey(key cell.Hash) bool {
 	s.Cells.Init(s)
-	if s.Cells.loaded == nil {
-		s.Cells.loaded = map[cell.Hash]struct{}{}
-	}
-	_, ok := s.Cells.loaded[key]
-	if !ok {
-		s.Cells.loaded[key] = struct{}{}
-		return true
-	}
-	return false
+	return s.Cells.loaded.add(key)
 }
 
 func (s *State) ConsumeStackGasLen(depth int) error {
@@ -410,6 +479,9 @@ func (s *State) ConsumeStackGas(stk *Stack) error {
 }
 
 func (s *State) ConsumeTupleGasLen(length int) error {
+	if length < 0 {
+		return vmerr.Error(vmerr.CodeRangeCheck, "negative tuple length")
+	}
 	return s.ConsumeGas(int64(length) * TupleEntryGasPrice)
 }
 
@@ -421,13 +493,18 @@ func (s *State) PushTupleCharged(t tuple.Tuple) error {
 }
 
 func (s *State) SetC7(t tuple.Tuple) error {
+	if t.IsNull() {
+		return vmerr.Error(vmerr.CodeTypeCheck, "c7 is null")
+	}
 	s.Cells.Init(s)
 	s.Reg.C7 = bindTupleTrace(t, s.Cells.Trace())
+	s.c7Isolated = true
 	return nil
 }
 
 func (s *State) UpdateC7(fn func(tuple.Tuple) (tuple.Tuple, error)) error {
-	next, err := fn(s.Reg.C7.Copy())
+	current := bindTupleTrace(s.Reg.C7, s.Cells.Trace())
+	next, err := fn(current.Copy())
 	if err != nil {
 		return err
 	}
@@ -441,7 +518,7 @@ func (s *State) GetParam(idx int) (any, error) {
 	}
 
 	p, ok := params.(tuple.Tuple)
-	if !ok || p.Len() > 255 {
+	if !ok || p.IsNull() || p.Len() > 255 {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 
@@ -450,7 +527,7 @@ func (s *State) GetParam(idx int) (any, error) {
 		return nil, err
 	}
 
-	return v, nil
+	return bindClonedValueTrace(v, s.Cells.Trace()), nil
 }
 
 func (s *State) GetUnpackedConfigTuple() (tuple.Tuple, error) {
@@ -459,7 +536,7 @@ func (s *State) GetUnpackedConfigTuple() (tuple.Tuple, error) {
 		return tuple.Tuple{}, err
 	}
 	t, ok := v.(tuple.Tuple)
-	if !ok || t.Len() > 255 {
+	if !ok || t.IsNull() || t.Len() > 255 {
 		return tuple.Tuple{}, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return t, nil
@@ -472,7 +549,11 @@ func (s *State) GetGlobal(idx int) (any, error) {
 	if idx >= s.Reg.C7.Len() {
 		return nil, nil
 	}
-	return s.Reg.C7.Index(idx)
+	val, err := s.Reg.C7.Index(idx)
+	if err != nil {
+		return nil, err
+	}
+	return bindClonedValueTrace(val, s.Cells.Trace()), nil
 }
 
 func (s *State) SetGlobal(idx int, val any) error {
@@ -489,6 +570,11 @@ func (s *State) SetGlobal(idx int, val any) error {
 	}
 
 	if err := s.ConsumeTupleGasLen(tup.Len()); err != nil {
+		// C++ releases the active c7 reference before charging for the
+		// replacement tuple, so a failed charge leaves a non-null empty c7.
+		// SetC7 only rejects a null tuple, which this one never is, and the
+		// out-of-gas error must reach the caller regardless.
+		_ = s.SetC7(tuple.NewTupleValue())
 		return err
 	}
 	if err := tup.Set(idx, val); err != nil {
@@ -501,9 +587,10 @@ func (s *State) SetGasLimit(limit int64) error {
 	if limit < s.Gas.Used() {
 		return vmerr.Error(vmerr.CodeOutOfGas)
 	}
-	accepting := s.StopOnAccept && s.Gas.Credit > 0
 	s.Gas.ChangeLimit(limit)
-	if accepting && s.Gas.Credit == 0 {
+	// the stop happens whenever the flag is armed, regardless of whether any
+	// gas credit was outstanding
+	if s.StopOnAccept {
 		return ErrStopOnAccept
 	}
 	return nil

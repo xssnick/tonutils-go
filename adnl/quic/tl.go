@@ -4,7 +4,6 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"github.com/xssnick/tonutils-go/tl"
@@ -17,7 +16,21 @@ var (
 	idPubEd25519  = tl.CRC("pub.ed25519 key:int256 = PublicKey")
 )
 
-const maxTLBytesLen = 1 << 24
+const (
+	maxPlumtreeBroadcastSize   = 16 << 20
+	plumtreePayloadMTUOverhead = 4096
+
+	// MaxPlumtreePayloadSize follows the reference node's Plumtree sender MTU:
+	// the 16 MiB broadcast limit plus its exact 4096-byte envelope allowance.
+	MaxPlumtreePayloadSize = maxPlumtreeBroadcastSize + plumtreePayloadMTUOverhead
+
+	// A default-size quic.message or quic.query consists of a four-byte
+	// constructor, an eight-byte extended TL bytes header, and the payload.
+	defaultMaxBoxedObjectSize = 4 + 8 + MaxPlumtreePayloadSize
+
+	maxTLBytesPayloadSize  = (uint64(1) << 32) - 1
+	maxBoxedObjectWireSize = (int64(1) << 32) + 12
+)
 
 // Message is a TL quic.message object.
 type Message struct {
@@ -44,51 +57,51 @@ func adnlIDFromKey(pub ed25519.PublicKey) adnlID {
 }
 
 func serializeBoxed(id uint32, payload []byte) ([]byte, error) {
-	dst := make([]byte, 4, len(payload)+12)
-	binary.LittleEndian.PutUint32(dst, id)
-	return tl.AppendBytes(dst, payload)
+	header, headerLen, _, total, err := boxedObjectHeader(id, len(payload))
+	if err != nil {
+		return nil, err
+	}
+
+	dst := make([]byte, total)
+	copy(dst, header[:headerLen])
+	copy(dst[headerLen:], payload)
+	return dst, nil
 }
 
-func boxedObjectHeader(id uint32, payloadLen int) (header [8]byte, headerLen, pad, total int, err error) {
-	if payloadLen >= maxTLBytesLen {
-		return header, 0, 0, 0, fmt.Errorf("quic: TL bytes too big (%d), limited to 1<<24", payloadLen)
+func boxedObjectHeader(id uint32, payloadLen int) (header [12]byte, headerLen, pad, total int, err error) {
+	if payloadLen < 0 {
+		return header, 0, 0, 0, fmt.Errorf("quic: negative payload size %d", payloadLen)
+	}
+	if uint64(payloadLen) > maxTLBytesPayloadSize {
+		return header, 0, 0, 0, fmt.Errorf("quic: payload size %d exceeds TL uint32 limit", payloadLen)
 	}
 
 	binary.LittleEndian.PutUint32(header[:4], id)
 	bytesHeaderLen := 1
-	if payloadLen >= 0xFE {
-		bytesHeaderLen = 4
-		binary.LittleEndian.PutUint32(header[4:8], uint32(payloadLen<<8)|0xFE)
-	} else {
+	switch {
+	case payloadLen < 0xFE:
 		header[4] = byte(payloadLen)
+	case payloadLen < 1<<24:
+		bytesHeaderLen = 4
+		binary.LittleEndian.PutUint32(header[4:8], uint32(payloadLen)<<8|0xFE)
+	default:
+		bytesHeaderLen = 8
+		header[4] = 0xFF
+		binary.LittleEndian.PutUint32(header[5:9], uint32(payloadLen))
 	}
 
-	bytesLen := bytesHeaderLen + payloadLen
+	bytesLen := uint64(bytesHeaderLen) + uint64(payloadLen)
 	if rem := bytesLen % 4; rem != 0 {
-		pad = 4 - rem
+		pad = int(4 - rem)
 	}
 	headerLen = 4 + bytesHeaderLen
-	total = headerLen + payloadLen + pad
+
+	totalSize := uint64(headerLen) + uint64(payloadLen) + uint64(pad)
+	maxInt := uint64(^uint(0) >> 1)
+	if totalSize > maxInt {
+		return header, 0, 0, 0, fmt.Errorf("quic: boxed object size %d overflows int", totalSize)
+	}
+
+	total = int(totalSize)
 	return header, headerLen, pad, total, nil
-}
-
-// parseBoxed decodes a boxed `<name> data:bytes` object, returning its
-// constructor id and the payload.
-func parseBoxed(data []byte) (id uint32, payload []byte, err error) {
-	if len(data) < 4 {
-		return 0, nil, errors.New("quic: boxed object too short")
-	}
-	if len(data)%4 != 0 {
-		return 0, nil, fmt.Errorf("quic: boxed object is not 4-byte aligned: %d bytes", len(data))
-	}
-
-	id = binary.LittleEndian.Uint32(data[:4])
-	payload, rest, err := tl.FromBytesNoCopy(data[4:])
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(rest) != 0 {
-		return 0, nil, fmt.Errorf("quic: %d trailing bytes after boxed object", len(rest))
-	}
-	return id, payload, nil
 }

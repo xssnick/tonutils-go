@@ -64,13 +64,8 @@ func TestEmulateTransactionReplayRegressionFixtures(t *testing.T) {
 		t.Run(fmt.Sprintf("%s/%d", account.Address, account.FirstTx.LT), func(t *testing.T) {
 			from := replayRegressionShardAccount(t, account.From)
 			expectedTx := replayRegressionCell(t, account.FirstTx.ExpectedTxBOCBase64)
-			expectedShardCell := replayRegressionCell(t, account.To)
+			expectedShard := replayRegressionShardAccount(t, account.To)
 			inMsg := replayRegressionInputMessage(t, expectedTx)
-
-			var expectedShard tlb.ShardAccount
-			if err := tlb.Parse(&expectedShard, expectedShardCell); err != nil {
-				t.Fatal(err)
-			}
 
 			machine := NewTVM()
 
@@ -117,7 +112,26 @@ func replayRegressionEmulationConfig(t *testing.T, shared replayRegressionShared
 func replayRegressionShardAccount(t *testing.T, boc string) *tlb.ShardAccount {
 	t.Helper()
 
-	root := replayRegressionCell(t, boc)
+	raw, err := base64.StdEncoding.DecodeString(boc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := cell.BOCParseOptions{AllowNonZeroLevelRoot: true}
+	if _, err = cell.FromBOCWithOptions(raw, opts); err == nil {
+		t.Fatal("legacy shard-account fixture unexpectedly has a canonical root descriptor")
+	}
+
+	// These captured fixtures predate strict C++ descriptor validation. Their
+	// ordinary root declares mask 1 while its Account reference has mask 0.
+	if len(raw) < 12 || !bytes.Equal(raw[:6], []byte{0xb5, 0xee, 0x9c, 0x72, 0x01, 0x01}) || raw[11] != 0x21 {
+		t.Fatal("unexpected legacy shard-account BoC layout")
+	}
+	raw[11] = 0x01
+	root, err := cell.FromBOCWithOptions(raw, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	var shard tlb.ShardAccount
 	if err := tlb.Parse(&shard, root); err != nil {
 		t.Fatal(err)
@@ -217,7 +231,7 @@ func replayRegressionCell(t *testing.T, boc string) *cell.Cell {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := cell.FromBOC(raw)
+	root, err := cell.FromBOCWithOptions(raw, cell.BOCParseOptions{AllowNonZeroLevelRoot: true})
 	if err != nil {
 		t.Fatal(err)
 	}

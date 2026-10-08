@@ -30,6 +30,9 @@ type BOCSerializeOptions struct {
 	WithCRC32C    bool
 	WithIndex     bool
 	WithCacheBits bool
+	// WithTopHash writes hashes and depths for root cells. The reference
+	// carries the same mode but never reaches the code that would emit them,
+	// so a bag serialized with this flag differs from one it would produce.
 	WithTopHash   bool
 	WithIntHashes bool
 	// CellsCountHint pre-sizes serializer dedup structures for the expected
@@ -59,27 +62,8 @@ func (o BOCSerializeOptions) mode() int {
 }
 
 func newBOCSerializer(roots []*Cell, cellsCountHint int) (*bocSerializer, error) {
-	if len(roots) == 0 {
-		return nil, nil
-	}
-
-	bag := &bocSerializer{
-		roots:     make([]bocRoot, len(roots)),
-		maxDepth:  maxDepth,
-		cellIndex: newBOCHashIndex(cellsCountHint),
-	}
-	if cellsCountHint > 0 {
-		bag.cellList = make([]bocSerializeItem, 0, cellsCountHint)
-	}
-	for i, root := range roots {
-		bag.roots[i] = bocRoot{cell: root, idx: bocInvalidCellIndex}
-	}
-
-	if err := bag.importCells(); err != nil {
-		return nil, err
-	}
-
-	return bag, nil
+	scratch := new(BOCScratch)
+	return scratch.prepare(roots, cellsCountHint)
 }
 
 func ToBOCWithOptions(roots []*Cell, opts BOCSerializeOptions) []byte {
@@ -91,32 +75,18 @@ func ToBOCWithOptions(roots []*Cell, opts BOCSerializeOptions) []byte {
 }
 
 func ToBOCWithOptionsErr(roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
-	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
-	if err != nil {
-		return nil, err
-	}
-	if bag == nil {
-		return nil, nil
-	}
+	scratch := acquireBOCScratch()
+	defer releaseBOCScratch(scratch)
 
-	boc := bag.serialize(opts.mode())
-	if boc == nil {
-		return nil, fmt.Errorf("failed to serialize boc")
-	}
-	return boc, nil
+	return scratch.Serialize(roots, opts)
 }
 
 // AppendBOCWithOptions serializes roots into BoC and appends the result to dst.
 func AppendBOCWithOptions(dst []byte, roots []*Cell, opts BOCSerializeOptions) ([]byte, error) {
-	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
-	if err != nil {
-		return nil, err
-	}
-	if bag == nil {
-		return dst, nil
-	}
+	scratch := acquireBOCScratch()
+	defer releaseBOCScratch(scratch)
 
-	return bag.appendTo(dst, opts.mode())
+	return scratch.append(dst, roots, opts)
 }
 
 // WriteBOCWithOptions serializes roots into BoC and writes the result to w.
@@ -128,15 +98,10 @@ func WriteBOCWithOptions(w io.Writer, roots []*Cell, opts BOCSerializeOptions) e
 		return fmt.Errorf("writer is nil")
 	}
 
-	bag, err := newBOCSerializer(roots, opts.CellsCountHint)
-	if err != nil {
-		return err
-	}
-	if bag == nil {
-		return nil
-	}
+	scratch := acquireBOCScratch()
+	defer releaseBOCScratch(scratch)
 
-	return bag.writeTo(w, opts.mode())
+	return scratch.write(w, roots, opts)
 }
 
 func (c *Cell) ToBOCWithOptions(opts BOCSerializeOptions) []byte {
@@ -151,7 +116,7 @@ func (c *Cell) ToBOCWithOptionsErr(opts BOCSerializeOptions) ([]byte, error) {
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	return ToBOCWithOptionsErr([]*Cell{c.rawCell()}, opts)
+	return ToBOCWithOptionsErr([]*Cell{c}, opts)
 }
 
 // AppendBOCWithOptions serializes c into BoC and appends the result to dst.
@@ -159,9 +124,10 @@ func (c *Cell) AppendBOCWithOptions(dst []byte, opts BOCSerializeOptions) ([]byt
 	if c == nil {
 		return nil, fmt.Errorf("cell is nil")
 	}
-	return AppendBOCWithOptions(dst, []*Cell{c.rawCell()}, opts)
+	return AppendBOCWithOptions(dst, []*Cell{c}, opts)
 }
 
+// ComputeFileHash returns the hash of the network block BOC encoding.
 func ComputeFileHash(root *Cell) []byte {
 	if root == nil {
 		return nil
@@ -171,21 +137,13 @@ func ComputeFileHash(root *Cell) []byte {
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
-		WithTopHash:   true,
 		WithIntHashes: true,
 	}
 
-	bag, err := newBOCSerializer([]*Cell{root}, opts.CellsCountHint)
-	if err != nil || bag == nil {
-		return nil
-	}
+	scratch := acquireBOCScratch()
+	defer releaseBOCScratch(scratch)
 
-	fileHash, ok := bag.computeFileHash(opts.mode())
-	if !ok {
-		return nil
-	}
-
-	return fileHash
+	return scratch.fileHash(root, opts)
 }
 
 type bocRoot struct {
@@ -233,6 +191,7 @@ type bocSerializer struct {
 
 	cellList []bocSerializeItem
 	roots    []bocRoot
+	reorder  []uint32
 }
 
 func (s *bocSerializer) importCells() error {
@@ -259,7 +218,6 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if cell == nil {
 		return 0, fmt.Errorf("cell is nil")
 	}
-	cell = cell.rawCell()
 	if cell.IsLazy() {
 		if pos, found := s.findImportedCell(cell); found {
 			return pos, nil
@@ -269,7 +227,7 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 		if err != nil {
 			return 0, err
 		}
-		cell = loaded.rawCell()
+		cell = loaded
 	}
 
 	hash := cell.getHash(_DataCellMaxLevel)
@@ -279,6 +237,11 @@ func (s *bocSerializer) importCell(cell *Cell, depth int) (uint32, error) {
 	if found {
 		s.cellList[int(pos)].shouldCache = true
 		return pos, nil
+	}
+	// the virtualization check comes after the lookup: a repeat of an already
+	// imported cell is served from the index regardless of how it was reached
+	if cell.IsVirtualized() {
+		return 0, ErrVirtualizedCell
 	}
 
 	refView := newCellRefView(cell)
@@ -418,7 +381,12 @@ func (s *bocSerializer) reorderCells() {
 		return
 	}
 
-	newIdx := make([]uint32, s.cellCount)
+	if cap(s.reorder) < s.cellCount {
+		s.reorder = make([]uint32, s.cellCount)
+	} else {
+		s.reorder = s.reorder[:s.cellCount]
+	}
+	newIdx := s.reorder
 	for i := range newIdx {
 		newIdx[i] = bocInvalidCellIndex
 	}

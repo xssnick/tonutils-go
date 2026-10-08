@@ -55,6 +55,7 @@ func BenchmarkReceiveTransfer(b *testing.B) {
 	}()
 
 	cli := NewClient(noopADNL{})
+	b.Cleanup(cli.closeState)
 	cli.SetOnMessage(func(id []byte, data []byte) error { return nil })
 
 	b.SetBytes(int64(len(msg)))
@@ -78,5 +79,14 @@ func BenchmarkReceiveTransfer(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
+
+		// Bound retained completed transfers so longer runs measure processing
+		// without accumulating payloads or reaching the per-IP admission limit.
+		id := [32]byte(transferID)
+		cli.mx.Lock()
+		stream := cli.recvStreams[id]
+		delete(cli.recvStreams, id)
+		cli.mx.Unlock()
+		cli.retireInboundStream(stream, inboundStreamExpired)
 	}
 }

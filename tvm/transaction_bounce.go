@@ -3,8 +3,11 @@ package tvm
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 
+	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/bigint"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 )
@@ -29,7 +32,7 @@ func transactionShouldBounce(msg *tlb.Message, skipReason *tlb.ComputeSkipReason
 	return skipReason != nil || !computeSuccess || actionBounce
 }
 
-func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
+func transactionPrepareBouncePhase(msg *tlb.Message, accountAddr *address.Address, balance *big.Int, extraCurrencies *cell.Dictionary, msgBalance *transactionCurrencyBalance, gasFees, actionFine *big.Int, startLT uint64, now uint32, outMsgCount int, cfg *PreparedBlockchainConfig, skipReason *tlb.ComputeSkipReason, computeResult *MessageExecutionResult, actionPhase *tlb.ActionPhase) (*transactionBounceResult, error) {
 	if msg == nil || msg.MsgType != tlb.MsgTypeInternal {
 		return nil, nil
 	}
@@ -38,9 +41,12 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, nil
 	}
 
-	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg, in.DstAddr)
-	if !ok {
+	if in.SrcAddr == nil || in.SrcAddr.Type() == address.NoneAddress || in.SrcAddr.Type() == address.ExtAddress {
 		return nil, nil
+	}
+	bounceDstAddr, ok := transactionValidateAndNormalizeBounceDestAddr(in.SrcAddr, cfg, accountAddr)
+	if !ok {
+		return nil, errors.New("invalid destination address in a bounced message")
 	}
 	bounceBody, err := transactionBuildBounceBody(in, cfg, skipReason, computeResult, actionPhase)
 	if err != nil {
@@ -58,7 +64,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		DstAddr:         bounceDstAddr,
 		Amount:          tlb.FromNanoTONU(0),
 		ExtraCurrencies: transactionCloneDictShallow(in.ExtraCurrencies),
-		IHRFee:          tlb.FromNanoTON(new(big.Int).SetUint64(extraFlags)),
+		IHRFee:          tlb.FromNanoTON(bigint.FromUint64(extraFlags)),
 		FwdFee:          tlb.FromNanoTONU(0),
 		CreatedLT:       startLT + 1 + uint64(outMsgCount),
 		CreatedAt:       now,
@@ -72,7 +78,7 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	if err != nil {
 		return nil, err
 	}
-	fwdFee := transactionComputeForwardFeeForUsage(cfg, in.DstAddr, bounceDstAddr, msgSize)
+	fwdFee := transactionComputeForwardFeeForUsage(cfg, accountAddr, bounceDstAddr, msgSize)
 	remainingMsgBalance := msgBalance.copy()
 	remainingMsgBalance.grams.Sub(remainingMsgBalance.grams, gasFees)
 	remainingMsgBalance.grams.Sub(remainingMsgBalance.grams, actionFine)
@@ -80,13 +86,23 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	out := &transactionBounceResult{
 		balance:         transactionBigOrZero(balance),
 		extraCurrencies: extraCurrencies,
-		msgFees:         big.NewInt(0),
+		msgFees:         bigint.FromInt64(0),
 	}
-	if remainingMsgBalance.grams.Sign() < 0 || remainingMsgBalance.grams.Cmp(fwdFee) < 0 {
+	noFunds := remainingMsgBalance.grams.Sign() < 0
+	if !noFunds && remainingMsgBalance.grams.Cmp(fwdFee) < 0 {
+		// The reference compares against (long long)fwd_fee. Values above
+		// MaxInt64 therefore bypass the no-funds branch and fail later when
+		// the negative bounced-message balance cannot be serialized.
+		if fwdFee.Uint64() > math.MaxInt64 {
+			return nil, errors.New("cannot create bounce phase with negative message balance")
+		}
+		noFunds = true
+	}
+	if noFunds {
 		out.phase = &tlb.BouncePhase{Phase: tlb.BouncePhaseNoFunds{
 			MsgSize: tlb.StorageUsedShort{
-				Cells: new(big.Int).SetUint64(msgSize.cells),
-				Bits:  new(big.Int).SetUint64(msgSize.bits),
+				Cells: bigint.FromUint64(msgSize.cells),
+				Bits:  bigint.FromUint64(msgSize.bits),
 			},
 			ReqFwdFees: tlb.FromNanoTON(fwdFee),
 		}}
@@ -106,15 +122,22 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 		return nil, err
 	}
 	msgAmount := new(big.Int).Sub(remainingMsgBalance.grams, fwdFee)
-	collectedFwdFee := transactionFirstPartForwardFee(cfg, in.DstAddr, bounceDstAddr, fwdFee)
+	collectedFwdFee := transactionFirstPartForwardFee(cfg, accountAddr, bounceDstAddr, fwdFee)
 	remainingFwdFee := new(big.Int).Sub(fwdFee, collectedFwdFee)
 	preliminary.Amount = tlb.FromNanoTON(msgAmount)
-	preliminary.ExtraCurrencies, err = remainingMsgBalance.extraDict()
-	if err != nil {
-		return nil, err
+	// The reference keeps the inbound value dictionary cell as is in the
+	// bounced message; rebuild it only when the action phase actually spent
+	// extra currencies from the message balance.
+	if msgExtra, loadErr := transactionLoadExtraCurrencies(in.ExtraCurrencies); loadErr == nil && transactionExtraMapsEqual(msgExtra, remainingMsgBalance.extra) {
+		preliminary.ExtraCurrencies = in.ExtraCurrencies
+	} else {
+		preliminary.ExtraCurrencies, err = remainingMsgBalance.extraDict()
+		if err != nil {
+			return nil, err
+		}
 	}
 	preliminary.FwdFee = tlb.FromNanoTON(remainingFwdFee)
-	preliminary.IHRFee = tlb.FromNanoTON(new(big.Int).SetUint64(extraFlags))
+	preliminary.IHRFee = tlb.FromNanoTON(bigint.FromUint64(extraFlags))
 
 	bounceCell, err := tlb.ToCell(preliminary)
 	if err != nil {
@@ -126,8 +149,8 @@ func transactionPrepareBouncePhase(msg *tlb.Message, balance *big.Int, extraCurr
 	out.msgFees = collectedFwdFee
 	out.phase = &tlb.BouncePhase{Phase: tlb.BouncePhaseOk{
 		MsgSize: tlb.StorageUsedShort{
-			Cells: new(big.Int).SetUint64(msgSize.cells),
-			Bits:  new(big.Int).SetUint64(msgSize.bits),
+			Cells: bigint.FromUint64(msgSize.cells),
+			Bits:  bigint.FromUint64(msgSize.bits),
 		},
 		MsgFees: tlb.FromNanoTON(collectedFwdFee),
 		FwdFees: tlb.FromNanoTON(remainingFwdFee),
@@ -173,8 +196,10 @@ func transactionBuildBounceBody(in *tlb.InternalMessage, cfg *PreparedBlockchain
 			body.MustStoreBoolBit(false)
 		} else {
 			body.MustStoreBoolBit(true)
-			body.MustStoreUInt(uint64(computeResult.GasUsed), 32)
-			body.MustStoreUInt(uint64(computeResult.Steps), 32)
+			// CellBuilder::store_long writes the low 32 bits without a range
+			// check in the reference transaction engine.
+			body.MustStoreUInt(uint64(uint32(computeResult.GasUsed)), 32)
+			body.MustStoreUInt(uint64(uint32(computeResult.Steps)), 32)
 		}
 		return body.EndCell(), nil
 	}
@@ -242,10 +267,11 @@ func transactionBounceMessageUsage(in *tlb.InternalMessage, body *cell.Cell, cfg
 }
 
 func transactionInboundExtraFlags(in *tlb.InternalMessage) uint64 {
-	if in == nil || in.IHRFee.Nano() == nil || !in.IHRFee.Nano().IsUint64() {
+	if in == nil {
 		return 0
 	}
-	return in.IHRFee.Nano().Uint64() & 3
+	flags := in.IHRFee.NanoRef()
+	return uint64(flags.Bit(0)) | uint64(flags.Bit(1))<<1
 }
 
 func transactionBounceOriginalBody(body *cell.Cell, full bool) (*cell.Cell, error) {

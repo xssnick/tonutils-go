@@ -3,72 +3,52 @@ package stack
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return XCHG3(0, 0, 0) })
-	vm.List = append(vm.List, func() vm.OP { return xchg3Ext(0, 0, 0) })
+	vm.ArgList = append(vm.ArgList, xchg3Op, xchg3ExtOp)
 }
 
-// constant prefixes, computed once instead of on every decode
+// The same permutation has a compact 4-bit prefix and a long 12-bit one; they
+// differ only in how much of the instruction the prefix takes.
 var (
-	xchg3Prefix    = helpers.UIntPrefix(0x4, 4)
-	xchg3ExtPrefix = helpers.UIntPrefix(0x540, 12)
+	xchg3Op = helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x4, 4)),
+		ArgBits:  12,
+		Action:   xchg3Action,
+		Name:     xchg3Name,
+	})
+	xchg3ExtOp = helpers.NewArgOP(&helpers.ArgOP{
+		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x540, 12)),
+		ArgBits:  12,
+		Action:   xchg3Action,
+		Name:     xchg3Name,
+	})
 )
 
-func XCHG3(i, j, k uint8) (op *helpers.AdvancedOP) {
-	return xchg3(xchg3Prefix, i, j, k)
-}
-
-func xchg3Ext(i, j, k uint8) *helpers.AdvancedOP {
-	return xchg3(xchg3ExtPrefix, i, j, k)
-}
-
-func xchg3(prefix helpers.BitPrefix, i, j, k uint8) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 12,
-		Action: func(state *vm.State) error {
-			if err := requireStackDepth(state, 3, int(i), int(j), int(k)); err != nil {
-				return err
-			}
-
-			if err := state.Stack.Exchange(2, int(i)); err != nil {
-				return err
-			}
-			if err := state.Stack.Exchange(1, int(j)); err != nil {
-				return err
-			}
-
-			return state.Stack.Exchange(0, int(k))
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d,%d,%d XCHG3", i, j, k)
-		},
-		BitPrefix: prefix,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i), 4).MustStoreUInt(uint64(j), 4).MustStoreUInt(uint64(k), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			ival, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			jval, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			kval, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			i = uint8(ival)
-			j = uint8(jval)
-			k = uint8(kval)
-			return nil
-		},
+func xchg3Action(state *vm.State, args uint64) error {
+	i, j, k := unpackArgs3(args)
+	if err := requireStackDepth(state, 3, i, j, k); err != nil {
+		return err
 	}
-	return op
+
+	if err := state.Stack.Exchange(2, i); err != nil {
+		return err
+	}
+	if err := state.Stack.Exchange(1, j); err != nil {
+		return err
+	}
+
+	return state.Stack.Exchange(0, k)
+}
+
+func xchg3Name(args uint64) string {
+	i, j, k := unpackArgs3(args)
+	return fmt.Sprintf("%d,%d,%d XCHG3", i, j, k)
+}
+
+func XCHG3(i, j, k uint8) vm.OP {
+	return vm.Bind(xchg3Op, packArgs3(i, j, k))
 }

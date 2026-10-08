@@ -111,12 +111,15 @@ type BBRv2Controller struct {
 	lossTotal atomic.Int64
 	lossLost  atomic.Int64
 	lastAckTs atomic.Int64 // unix ms marking the start of the ACK window
+	rateAcked atomic.Int64
+	rateAckTs atomic.Int64 // unix ms marking the start of the delivery-rate window
 
 	// Current pacing rate (bytes/sec)
 	pacingRate   atomic.Int64
 	deliveryRate atomic.Int64
 
-	appLimited atomic.Bool
+	appLimited      atomic.Bool
+	appLimitedUntil atomic.Int64 // unix ms, samples measured before it were shaped by the peer, not the path
 
 	dbgLast atomic.Int64
 
@@ -140,6 +143,7 @@ func NewBBRv2Controller(l *TokenBucket, o BBRv2Options) *BBRv2Controller {
 	c.cycleStamp.Store(now)
 	c.lastProc.Store(now)
 	c.lastAckTs.Store(now)
+	c.rateAckTs.Store(now)
 	c.lastBtlBwDecay.Store(now)
 	c.lastActive.Store(now)
 
@@ -209,7 +213,24 @@ func applyBBRDefaults(o *BBRv2Options) {
 
 func (c *BBRv2Controller) SetAppLimited(v bool) { c.appLimited.Store(v) }
 
-func (c *BBRv2Controller) markActive() { c.lastActive.Store(nowMs()) }
+func (c *BBRv2Controller) markActive(now int64) {
+	last := c.lastActive.Load()
+	if now-last <= 800 {
+		c.lastActive.Store(now)
+		return
+	}
+
+	idleMs := max64(800, 2*max64(c.minRTT.Load(), 1))
+	if last > 0 && now-last > idleMs {
+		// Only an idle restart needs to arbitrate between concurrent events.
+		last = c.lastActive.Swap(now)
+		if last > 0 && now-last > idleMs {
+			c.resetForNewFlow(now)
+		}
+		return
+	}
+	c.lastActive.Store(now)
+}
 
 func (c *BBRv2Controller) applyInflightLimit(inflight int64) {
 	if inflight < 0 {
@@ -234,18 +255,21 @@ func (c *BBRv2Controller) applyInflightLimit(inflight int64) {
 }
 
 func (c *BBRv2Controller) OnNewSendBurst() {
+	now := nowMs()
 	if c.appLimited.Swap(false) {
 		c.fullBW.Store(0)
 		c.fullBWCount.Store(0)
+		// what goes out now is still sized by the peer's request, and its acks land within a couple of RTTs
+		c.appLimitedUntil.Store(now + 2*max64(c.minRTT.Load(), 1))
 	}
-	c.markActive()
+	c.markActive(now)
 }
 
 func (c *BBRv2Controller) ObserveDelta(total, recv int64) {
 	if total == 0 {
 		return
 	}
-	c.markActive()
+	c.markActive(nowMs())
 	c._total.Add(total)
 	c._recv.Add(recv)
 	c._samples.Add(1)
@@ -258,7 +282,7 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 	}
 
 	now := nowMs()
-	c.markActive()
+	c.markActive(now)
 	old := c.minRTT.Load()
 	provisional := c.minRTTProvisional.Load()
 
@@ -278,12 +302,6 @@ func (c *BBRv2Controller) ObserveRTT(rttMs int64) {
 
 func (c *BBRv2Controller) maybeUpdate() {
 	now := nowMs()
-
-	minRtt := max64(c.minRTT.Load(), 1)
-	idleMs := max64(800, 2*minRtt)
-	if la := c.lastActive.Load(); la > 0 && now-la > idleMs {
-		c.resetForNewFlow(now)
-	}
 
 	last := c.lastProc.Load()
 	if last+c.opts.MinSampleMs > now {
@@ -321,12 +339,26 @@ func (c *BBRv2Controller) maybeUpdate() {
 	}
 
 	var ackRate int64
-	const minAckForRateUpdate = 128 * 1024
 	if acked > 0 {
 		ackRate = int64(float64(acked) * 1000.0 / float64(elapsedMs))
 		c.deliveryRate.Store(ackRate)
-		if acked >= minAckForRateUpdate || elapsedMs >= 250 {
+
+		const minAckForRateUpdate = 128 * 1024
+		// Fast peers keep the short sampling path. Smaller ACK windows are averaged
+		// long enough to update slower peers without amplifying ACK compression.
+		if acked >= minAckForRateUpdate {
+			c.rateAcked.Store(0)
+			c.rateAckTs.Store(now)
 			c.updateBtlBw(ackRate, now)
+		} else {
+			rateAcked := c.rateAcked.Add(acked)
+			rateElapsedMs := now - c.rateAckTs.Load()
+			if rateElapsedMs >= 250 {
+				rate := int64(float64(rateAcked) * 1000.0 / float64(rateElapsedMs))
+				c.rateAcked.Store(0)
+				c.rateAckTs.Store(now)
+				c.updateBtlBw(rate, now)
+			}
 		}
 	} else {
 		c.deliveryRate.Store(0)
@@ -356,6 +388,8 @@ func (c *BBRv2Controller) resetForNewFlow(now int64) {
 	c.fullBWCount.Store(0)
 	c.lossTotal.Store(0)
 	c.lossLost.Store(0)
+	c.rateAcked.Store(0)
+	c.rateAckTs.Store(now)
 	c.minRTTProvisional.Store(true)
 	model := rateToInflight(max64(c.btlbw.Load(), c.pacingRate.Load()), max64(c.minRTT.Load(), 1))
 	if model <= 0 {
@@ -414,7 +448,10 @@ func (c *BBRv2Controller) updateBtlBw(sample int64, now int64) {
 		return
 	}
 
-	if !c.appLimited.Load() {
+	// the flag marks the current state, the grace window covers acks for data sent right after it was set
+	appLimited := c.appLimited.Load() || now < c.appLimitedUntil.Load()
+
+	if !appLimited {
 		cur := c.btlbw.Load()
 		if sample > cur {
 			c.btlbw.Store(sample)
@@ -432,6 +469,13 @@ func (c *BBRv2Controller) updateBtlBw(sample int64, now int64) {
 				c.btlbw.Store(max64(cur, sample))
 			}
 		}
+	}
+
+	// an app-limited window carries no information about the path, so it must not age the max either;
+	// the window still moves, otherwise it banks up and fires once the peer starts asking again
+	if appLimited {
+		c.lastBtlBwDecay.Store(now)
+		return
 	}
 
 	// Soft decay of an overly old max (emulates a time window)

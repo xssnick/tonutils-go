@@ -201,7 +201,7 @@ func (op *OpSTSLICECONST) Interpret(state *vm.State) error {
 	if !builder.CanExtendBy(op.value.BitsLeft(), uint(op.value.RefsNum())) {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
-	if err = builder.StoreBuilderUncheckedDepth(op.value.ToBuilder()); err != nil {
+	if err = builder.StoreSliceFromUncheckedDepth(op.value); err != nil {
 		return vmerr.Error(vmerr.CodeCellOverflow)
 	}
 	return state.Stack.PushOwnedBuilder(builder)

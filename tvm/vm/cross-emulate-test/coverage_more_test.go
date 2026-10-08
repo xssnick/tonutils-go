@@ -134,15 +134,52 @@ func TestMainPanicsWhenRunGetMethodSetupIsInvalid(t *testing.T) {
 	}
 }
 
-func TestMainPanicsWhenNativeResultStackContainsContinuation(t *testing.T) {
+func TestMainComparesNativeResultStackContainingContinuation(t *testing.T) {
 	code := codeFromBuilders(t, stackop.PUSHCONT(cell.BeginCell().EndCell()).Serialize())
 
-	recovered, logs := runMainWithCodeAndLogs(t, code)
-	if recovered != 4 {
-		t.Fatalf("main panic = %v, want 4", recovered)
+	res, err := RunGetMethod(testRunMethodParams(t, code), 1_000_000_000)
+	if err != nil {
+		t.Fatalf("RunGetMethod: %v", err)
 	}
-	if logs != "" {
-		t.Fatalf("expected panic before Go log output, got logs: %q", logs)
+
+	var native tlb.Stack
+	if err = tlb.Parse(&native, res.Stack); err != nil {
+		t.Fatalf("parse native result stack: %v", err)
+	}
+
+	reserialized, err := native.ToCell()
+	if err != nil {
+		t.Fatalf("reserialize native result stack: %v", err)
+	}
+	if !bytes.Equal(reserialized.Hash(), res.Stack.Hash()) {
+		t.Fatalf("native stack round trip is not byte identical:\nnative: %s\ngo:     %s",
+			res.Stack.Dump(), reserialized.Dump())
+	}
+
+	values := make([]any, 0, native.Depth())
+	for native.Depth() > 0 {
+		val, err := native.Pop()
+		if err != nil {
+			t.Fatalf("pop native stack value: %v", err)
+		}
+		values = append(values, val)
+	}
+	if len(values) == 0 {
+		t.Fatal("native result stack is empty, want a continuation on top")
+	}
+	if _, ok := values[len(values)-1].(vm.Continuation); !ok {
+		t.Fatalf("native stack top = %T, want vm.Continuation", values[len(values)-1])
+	}
+
+	recovered, logs := runMainWithCodeAndLogs(t, code)
+	if recovered != nil {
+		t.Fatalf("main panicked: %v", recovered)
+	}
+	if !strings.Contains(logs, "C CALL COMPLETED") || !strings.Contains(logs, "GO CALL COMPLETED") {
+		t.Fatalf("expected both executions to complete, got logs: %q", logs)
+	}
+	if !strings.Contains(logs, "OK, SAME") {
+		t.Fatalf("expected Go and native continuation stacks to match, got logs: %q", logs)
 	}
 }
 

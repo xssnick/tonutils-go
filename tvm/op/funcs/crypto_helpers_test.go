@@ -1106,8 +1106,9 @@ func TestRistrettoArithmeticAndBLSGroupOps(t *testing.T) {
 		if err := BLS_PAIRING().Interpret(st); err != nil {
 			t.Fatalf("BLS_PAIRING(0) failed: %v", err)
 		}
-		if ok, err := st.Stack.PopBool(); err != nil || !ok {
-			t.Fatalf("BLS_PAIRING(0) = (%v, %v)", ok, err)
+		// with no pairs aggregated the verification reports false
+		if ok, err := st.Stack.PopBool(); err != nil || ok {
+			t.Fatalf("BLS_PAIRING(0) = (%v, %v), want false", ok, err)
 		}
 
 		st = newFuncTestState(t, nil)

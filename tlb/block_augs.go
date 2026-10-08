@@ -1,23 +1,25 @@
-// Package tlb: writable augmentation semantics for the block/state augmented
-// dictionaries.
-//
-// Every augmentation below mirrors the corresponding C++ Aug_* implementation
-// from the TON reference sources. Citations point into the local checkout at
-// /Users/xssnick/dev/ton/ton (crypto/block/block-parse.{h,cpp} and
-// crypto/block/block.tlb). The generic fork/empty behaviour of all
-// AugmentationCheckData subclasses is
-//
-//	eval_fork  = extra_type.add_values (block-parse.h:223-225)
-//	eval_empty = extra_type.null_value (block-parse.h:226-228)
-//
-// so per-augmentation only eval_leaf (and explicit overrides) differ.
+// Package tlb implements writable augmentation semantics for block and state
+// dictionaries. Unless noted otherwise, fork extras use the extra type's
+// addition rule and empty dictionaries use its null encoding.
 package tlb
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
+)
+
+var (
+	_ cell.Augmentation = AugShardAccounts{}
+	_ cell.Augmentation = AugShardAccountBlocks{}
+	_ cell.Augmentation = AugAccountTransactions{}
+	_ cell.Augmentation = AugInMsgDescr{}
+	_ cell.Augmentation = AugOutMsgDescr{}
+	_ cell.Augmentation = AugOutMsgQueue{}
+	_ cell.Augmentation = AugDispatchQueue{}
+	_ cell.Augmentation = AugShardFees{}
 )
 
 // ImportFees is the import_fees$_ TLB type (crypto/block/block.tlb:186-187):
@@ -61,16 +63,18 @@ func (f ImportFees) ToCell() (*cell.Cell, error) {
 // shared low-level helpers
 // ===========================================================================
 
-// rawGrams captures a Grams (VarUInteger 16) field bit-exactly: 4-bit byte
-// length plus the value bytes. It allows re-appending the original bits the
-// same way C++ cb.append_cellslice_bool does, while also exposing the numeric
-// value. Chain-validated data is always canonically encoded
-// (VarUInteger::validate_skip requires a non-zero leading byte,
-// block-parse.cpp:303-306), so raw and canonical encodings coincide for it.
+// rawGrams captures a Grams (VarUInteger 16) field bit-exactly: a 4-bit byte
+// length plus the value bytes. Numeric decoding stays lazy for raw-copy paths.
+// Chain-validated values cannot contain a leading zero byte, so their raw and
+// canonical encodings coincide.
+//
+// The value lives in a fixed buffer — fifteen bytes is the most VarUInteger 16
+// can carry — so loading one costs no heap. The struct travels by value; the
+// Augmentation contract forbids retaining borrowed slices anyway, and a copy of
+// the bytes is what makes that safe.
 type rawGrams struct {
 	ln   uint64
-	data []byte
-	val  *big.Int
+	data [15]byte
 }
 
 func loadRawGrams(loader *cell.Slice) (rawGrams, error) {
@@ -79,13 +83,14 @@ func loadRawGrams(loader *cell.Slice) (rawGrams, error) {
 		return rawGrams{}, fmt.Errorf("failed to load grams length: %w", err)
 	}
 	if ln == 0 {
-		return rawGrams{ln: 0, val: big.NewInt(0)}, nil
+		return rawGrams{}, nil
 	}
-	data, err := loader.LoadSlice(uint(ln) * 8)
-	if err != nil {
+	var g rawGrams
+	g.ln = ln
+	if err = loader.LoadSliceInto(g.data[:ln], uint(ln)*8); err != nil {
 		return rawGrams{}, fmt.Errorf("failed to load grams value: %w", err)
 	}
-	return rawGrams{ln: ln, data: data, val: new(big.Int).SetBytes(data)}, nil
+	return g, nil
 }
 
 func (g rawGrams) appendTo(b *cell.Builder) error {
@@ -95,7 +100,36 @@ func (g rawGrams) appendTo(b *cell.Builder) error {
 	if g.ln == 0 {
 		return nil
 	}
-	return b.StoreSlice(g.data, uint(g.ln)*8)
+	return b.StoreSlice(g.data[:g.ln], uint(g.ln)*8)
+}
+
+func (g rawGrams) integer() (*big.Int, error) {
+	if g.ln > 0 && g.data[0] == 0 {
+		return nil, fmt.Errorf("grams value has a leading zero byte")
+	}
+	return new(big.Int).SetBytes(g.data[:g.ln]), nil
+}
+
+// value128 is integer() without the big.Int: the same canonical-form check, the
+// value as a fixed 128-bit pair.
+func (g rawGrams) value128() (gramsU128, error) {
+	if g.ln > 0 && g.data[0] == 0 {
+		return gramsU128{}, fmt.Errorf("grams value has a leading zero byte")
+	}
+	var v gramsU128
+	for i := uint64(0); i < g.ln; i++ {
+		v.hi = v.hi<<8 | v.lo>>56
+		v.lo = v.lo<<8 | uint64(g.data[i])
+	}
+	return v, nil
+}
+
+func loadCanonicalGrams(loader *cell.Slice) (*big.Int, error) {
+	grams, err := loadRawGrams(loader)
+	if err != nil {
+		return nil, err
+	}
+	return grams.integer()
 }
 
 // rawExtraDict captures the ExtraCurrencyCollection part of a
@@ -131,52 +165,46 @@ func (d rawExtraDict) appendTo(b *cell.Builder) error {
 	return b.StoreRef(d.root)
 }
 
-func (d rawExtraDict) dictionary() *cell.Dictionary {
-	if !d.present {
-		return nil
-	}
-	return d.root.AsDict(32)
-}
-
-// storeCanonicalGrams stores a Grams value canonically, mirroring
-// VarUInteger::store_integer_value (block-parse.cpp:319-322): minimal byte
-// length, used by C++ t_Grams.store_integer_ref / add_values.
+// storeCanonicalGrams stores a Grams value using the minimal byte length
+// required by VarUInteger 16. Negative values are rejected by StoreBigVarUInt.
 func storeCanonicalGrams(b *cell.Builder, v *big.Int) error {
-	if v == nil {
-		return fmt.Errorf("grams value is nil")
-	}
-	if v.Sign() < 0 {
-		return fmt.Errorf("grams value is negative")
-	}
 	return b.StoreBigVarUInt(v, 16)
 }
 
 // addCurrencyCollectionSlices consumes one CurrencyCollection from each slice
-// and appends their sum, mirroring CurrencyCollection::add_values
-// (block-parse.cpp:619-621): the grams sum is stored canonically
-// (tlblib.hpp:217-220) and extra currency dictionaries are merged with
-// per-entry VarUIntegerPos addition (HashmapE::add_values,
-// block-parse.cpp:514-527); subtrees unique to one side are reused as is.
+// and appends their sum. The grams sum is stored canonically; extra currency
+// dictionaries are merged by key with VarUIntegerPos addition, while subtrees
+// unique to one side are reused as-is.
 func addCurrencyCollectionSlices(b *cell.Builder, left, right *cell.Slice) error {
-	lg, err := left.LoadBigCoins()
-	if err != nil {
-		return fmt.Errorf("failed to load left grams: %w", err)
+	if err := addGramsSlices(b, left, right); err != nil {
+		return err
 	}
+
+	// Nearly every amount that exists carries no extra currencies, and merging
+	// two absent dictionaries yields one zero bit — exactly what StoreDict
+	// writes for an empty one. Taking that shortcut avoids building two
+	// Dictionary values only to throw them away.
+	absent, err := bothExtraDictsAbsent(left, right)
+	if err != nil {
+		return err
+	}
+	if absent {
+		if _, err = left.LoadBoolBit(); err != nil {
+			return fmt.Errorf("failed to load left extra currencies: %w", err)
+		}
+		if _, err = right.LoadBoolBit(); err != nil {
+			return fmt.Errorf("failed to load right extra currencies: %w", err)
+		}
+		return b.StoreUInt(0, 1)
+	}
+
 	ld, err := left.LoadDict(32)
 	if err != nil {
 		return fmt.Errorf("failed to load left extra currencies: %w", err)
 	}
-	rg, err := right.LoadBigCoins()
-	if err != nil {
-		return fmt.Errorf("failed to load right grams: %w", err)
-	}
 	rd, err := right.LoadDict(32)
 	if err != nil {
 		return fmt.Errorf("failed to load right extra currencies: %w", err)
-	}
-
-	if err = storeCanonicalGrams(b, new(big.Int).Add(lg, rg)); err != nil {
-		return fmt.Errorf("failed to store grams sum: %w", err)
 	}
 
 	extra, err := addExtraCurrencyDicts(ld, rd)
@@ -190,9 +218,7 @@ func addCurrencyCollectionSlices(b *cell.Builder, left, right *cell.Slice) error
 }
 
 // storeEmptyCurrencyCollection appends the CurrencyCollection null value:
-// zero grams (4 zero bits) plus an empty extra dict (1 zero bit), as stored by
-// C++ t_CurrencyCollection.null_value (Grams null 4 bits + HashmapE null 1 bit,
-// see ImportFees::null_value storing 4+4+1 zero bits, block-parse.h:797-799).
+// zero grams (4 zero bits) plus an empty extra dictionary (1 zero bit).
 func storeEmptyCurrencyCollection(b *cell.Builder) error {
 	return b.StoreUInt(0, 5)
 }
@@ -202,9 +228,8 @@ func storeEmptyCurrencyCollection(b *cell.Builder) error {
 // ===========================================================================
 
 // skipMaybeAnycast skips Maybe Anycast and returns the anycast rewrite depth
-// (0 when absent), per Maybe_Anycast::skip_get_depth (block-parse.cpp:75-79)
-// and Anycast::skip_get_depth (block-parse.h:43-45): depth:(#<= 30) is a 5-bit
-// integer <= 30 followed by depth rewrite bits.
+// (0 when absent). The depth:(#<= 30) field is a 5-bit integer followed by that
+// many rewrite-prefix bits.
 func skipMaybeAnycast(s *cell.Slice) (uint64, error) {
 	present, err := s.LoadBoolBit()
 	if err != nil {
@@ -217,17 +242,16 @@ func skipMaybeAnycast(s *cell.Slice) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("failed to load anycast depth: %w", err)
 	}
-	if depth > 30 {
-		return 0, fmt.Errorf("anycast depth %d is above 30", depth)
+	if depth == 0 || depth > 30 {
+		return 0, fmt.Errorf("anycast depth %d is outside 1..30", depth)
 	}
-	if _, err = s.LoadSlice(uint(depth)); err != nil {
+	if err = s.SkipBits(uint(depth)); err != nil {
 		return 0, fmt.Errorf("failed to skip anycast rewrite prefix: %w", err)
 	}
 	return depth, nil
 }
 
-// skipMsgAddressIntGetDepth skips MsgAddressInt and returns the anycast depth,
-// mirroring MsgAddressInt::skip_get_depth (block-parse.cpp:101-115).
+// skipMsgAddressIntGetDepth skips MsgAddressInt and returns its anycast depth.
 func skipMsgAddressIntGetDepth(s *cell.Slice) (uint64, error) {
 	tag, err := s.LoadUInt(2)
 	if err != nil {
@@ -239,7 +263,7 @@ func skipMsgAddressIntGetDepth(s *cell.Slice) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if _, err = s.LoadSlice(8 + 256); err != nil {
+		if err = s.SkipBits(8 + 256); err != nil {
 			return 0, fmt.Errorf("failed to skip std address body: %w", err)
 		}
 		return depth, nil
@@ -252,7 +276,7 @@ func skipMsgAddressIntGetDepth(s *cell.Slice) (uint64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to load var address length: %w", err)
 		}
-		if _, err = s.LoadSlice(32 + uint(addrLen)); err != nil {
+		if err = s.SkipBits(32 + uint(addrLen)); err != nil {
 			return 0, fmt.Errorf("failed to skip var address body: %w", err)
 		}
 		return depth, nil
@@ -266,7 +290,7 @@ func skipMsgAddressInt(s *cell.Slice) error {
 	return err
 }
 
-// skipMsgAddressExt mirrors MsgAddressExt (block-parse.cpp:59-70):
+// skipMsgAddressExt skips either MsgAddressExt encoding:
 // addr_none$00 or addr_extern$01 len:(## 9) external_address:(bits len).
 func skipMsgAddressExt(s *cell.Slice) error {
 	tag, err := s.LoadUInt(2)
@@ -281,7 +305,7 @@ func skipMsgAddressExt(s *cell.Slice) error {
 		if err != nil {
 			return fmt.Errorf("failed to load external address length: %w", err)
 		}
-		if _, err = s.LoadSlice(uint(ln)); err != nil {
+		if err = s.SkipBits(uint(ln)); err != nil {
 			return fmt.Errorf("failed to skip external address: %w", err)
 		}
 		return nil
@@ -290,21 +314,43 @@ func skipMsgAddressExt(s *cell.Slice) error {
 	}
 }
 
-// intMsgInfoView is the part of int_msg_info$0 needed by the augmentation
-// leaves, per CommonMsgInfo::unpack for Record_int_msg_info
-// (block-parse.cpp:684-690).
+// messageExtraFlagsVersion is the global version since which ihr_fee no longer
+// contributes to the imported/exported value of a message.
+const messageExtraFlagsVersion = uint32(12)
+
+// intMsgInfoView is the subset of int_msg_info$0 needed by augmentation leaves.
 type intMsgInfoView struct {
-	valueGrams *big.Int     // value:CurrencyCollection grams part
+	valueGrams rawGrams     // value:CurrencyCollection grams part
 	valueExtra rawExtraDict // value:CurrencyCollection extra part, raw
 	ihrFee     rawGrams
-	createdLT  uint64
+}
+
+func (v intMsgInfoView) valueWithRemainingFee(remaining gramsU128, globalVersion uint32) (gramsU128, error) {
+	value, err := v.valueGrams.value128()
+	if err != nil {
+		return gramsU128{}, fmt.Errorf("message value: %w", err)
+	}
+
+	if globalVersion < messageExtraFlagsVersion {
+		ihrFee, err := v.ihrFee.value128()
+		if err != nil {
+			return gramsU128{}, fmt.Errorf("message ihr fee: %w", err)
+		}
+		if value, err = value.add(ihrFee); err != nil {
+			return gramsU128{}, err
+		}
+	}
+	return value.add(remaining)
 }
 
 func parseIntMsgInfoView(msg *cell.Cell) (intMsgInfoView, error) {
-	s, err := msg.BeginParse()
-	if err != nil {
+	// Nothing the view carries points back at the slice — rawGrams is a fixed
+	// array and rawExtraDict keeps a cell — so the loader stays local.
+	var sv cell.Slice
+	if err := msg.BeginParseInto(&sv); err != nil {
 		return intMsgInfoView{}, fmt.Errorf("failed to parse message: %w", err)
 	}
+	s := &sv
 
 	flags, err := s.LoadUInt(4) // int_msg_info$0 ihr_disabled:Bool bounce:Bool bounced:Bool
 	if err != nil {
@@ -336,27 +382,38 @@ func parseIntMsgInfoView(msg *cell.Cell) (intMsgInfoView, error) {
 	if _, err = loadRawGrams(s); err != nil { // fwd_fee
 		return intMsgInfoView{}, fmt.Errorf("failed to load fwd fee: %w", err)
 	}
-	createdLT, err := s.LoadUInt(64)
-	if err != nil {
-		return intMsgInfoView{}, fmt.Errorf("failed to load created lt: %w", err)
+	if _, err = loadMsgCreatedLTAndAt(s); err != nil {
+		return intMsgInfoView{}, err
 	}
 
 	return intMsgInfoView{
-		valueGrams: valueGrams.val,
+		valueGrams: valueGrams,
 		valueExtra: valueExtra,
 		ihrFee:     ihrFee,
-		createdLT:  createdLT,
 	}, nil
 }
 
-// messageCreatedLT mirrors CommonMsgInfo::get_created_lt
-// (block-parse.cpp:714-737): defined for int_msg_info$0 and ext_out_msg_info$11,
-// fails for ext_in_msg_info$10.
-func messageCreatedLT(msg *cell.Cell) (uint64, error) {
-	s, err := msg.BeginParse()
+// loadMsgCreatedLTAndAt consumes the created_lt:uint64 created_at:uint32 tail
+// shared by int_msg_info$0 and ext_out_msg_info$11.
+func loadMsgCreatedLTAndAt(s *cell.Slice) (uint64, error) {
+	createdLT, err := s.LoadUInt(64)
 	if err != nil {
+		return 0, fmt.Errorf("failed to load created lt: %w", err)
+	}
+	if _, err = s.LoadUInt(32); err != nil {
+		return 0, fmt.Errorf("failed to load created at: %w", err)
+	}
+	return createdLT, nil
+}
+
+// messageCreatedLT reads created_lt from int_msg_info$0 or
+// ext_out_msg_info$11. External inbound messages do not contain this field.
+func messageCreatedLT(msg *cell.Cell) (uint64, error) {
+	var parsed cell.Slice
+	if err := msg.BeginParseInto(&parsed); err != nil {
 		return 0, fmt.Errorf("failed to parse message: %w", err)
 	}
+	s := &parsed
 
 	isExt, err := s.LoadBoolBit()
 	if err != nil {
@@ -375,13 +432,13 @@ func messageCreatedLT(msg *cell.Cell) (uint64, error) {
 		if err = skipCurrencyCollectionBoundary(s); err != nil {
 			return 0, fmt.Errorf("failed to skip value: %w", err)
 		}
-		if _, err = s.LoadBigCoins(); err != nil { // ihr_fee
+		if err = skipGrams(s); err != nil { // ihr_fee
 			return 0, fmt.Errorf("failed to skip ihr fee: %w", err)
 		}
-		if _, err = s.LoadBigCoins(); err != nil { // fwd_fee
+		if err = skipGrams(s); err != nil { // fwd_fee
 			return 0, fmt.Errorf("failed to skip fwd fee: %w", err)
 		}
-		return s.LoadUInt(64)
+		return loadMsgCreatedLTAndAt(s)
 	}
 
 	isOut, err := s.LoadBoolBit()
@@ -398,23 +455,23 @@ func messageCreatedLT(msg *cell.Cell) (uint64, error) {
 	if err = skipMsgAddressExt(s); err != nil {
 		return 0, fmt.Errorf("failed to skip dest address: %w", err)
 	}
-	return s.LoadUInt(64)
+	return loadMsgCreatedLTAndAt(s)
 }
 
-// msgEnvelopeView is the part of a MsgEnvelope needed by augmentation leaves,
-// per MsgEnvelope::unpack (block-parse.cpp:832-839). Both msg_envelope#4
-// (crypto/block/block.tlb:167-169) and the current upstream msg_envelope_v2#5
-// (not present in the local block.tlb; layout matches this package's
-// MsgEnvelope parser) are accepted.
+// msgEnvelopeView is the subset of MsgEnvelope needed by augmentation leaves.
+// It accepts msg_envelope#4 and msg_envelope_v2#5; v2 may append emitted_lt and
+// metadata after the message reference.
 type msgEnvelopeView struct {
 	fwdFeeRemaining rawGrams
+	fwdFeeValue     gramsU128
 	msg             *cell.Cell
-	emittedLT       *uint64 // msg_envelope_v2 only
+	emittedLT       uint64
+	hasEmittedLT    bool
+	v2              bool
 }
 
-func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
-	s, err := env.BeginParse()
-	if err != nil {
+func parseMsgEnvelopePrefix(env *cell.Cell, s *cell.Slice) (msgEnvelopeView, error) {
+	if err := env.BeginParseInto(s); err != nil {
 		return msgEnvelopeView{}, fmt.Errorf("failed to parse message envelope: %w", err)
 	}
 
@@ -443,21 +500,82 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 		return msgEnvelopeView{}, fmt.Errorf("failed to load message ref: %w", err)
 	}
 
-	view := msgEnvelopeView{fwdFeeRemaining: fwdFeeRemaining, msg: msg}
-	if tag == 4 {
-		return view, nil
-	}
+	return msgEnvelopeView{fwdFeeRemaining: fwdFeeRemaining, msg: msg, v2: tag == 5}, nil
+}
 
+func loadMsgEnvelopeEmittedLT(view *msgEnvelopeView, s *cell.Slice) error {
 	hasEmittedLT, err := s.LoadBoolBit()
 	if err != nil {
-		return msgEnvelopeView{}, fmt.Errorf("failed to load emitted lt flag: %w", err)
+		return fmt.Errorf("failed to load emitted lt flag: %w", err)
 	}
 	if hasEmittedLT {
 		emittedLT, err := s.LoadUInt(64)
 		if err != nil {
-			return msgEnvelopeView{}, fmt.Errorf("failed to load emitted lt: %w", err)
+			return fmt.Errorf("failed to load emitted lt: %w", err)
 		}
-		view.emittedLT = &emittedLT
+		view.emittedLT = emittedLT
+		view.hasEmittedLT = true
+	}
+	return nil
+}
+
+func skipMsgMetadata(s *cell.Slice) error {
+	tag, err := s.LoadUInt(4)
+	if err != nil {
+		return fmt.Errorf("failed to load metadata tag: %w", err)
+	}
+	if tag != 0 {
+		return fmt.Errorf("unsupported metadata tag %d", tag)
+	}
+	if _, err = s.LoadUInt(32); err != nil {
+		return fmt.Errorf("failed to load metadata depth: %w", err)
+	}
+	if err = skipMsgAddressInt(s); err != nil {
+		return fmt.Errorf("failed to skip metadata initiator: %w", err)
+	}
+	if _, err = s.LoadUInt(64); err != nil {
+		return fmt.Errorf("failed to load metadata initiator lt: %w", err)
+	}
+	return nil
+}
+
+func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
+	var s cell.Slice
+	view, err := parseMsgEnvelopePrefix(env, &s)
+	if err != nil {
+		return view, err
+	}
+	view.fwdFeeValue, err = view.fwdFeeRemaining.value128()
+	if err != nil {
+		return msgEnvelopeView{}, fmt.Errorf("remaining forward fee: %w", err)
+	}
+	if !view.v2 {
+		return view, nil
+	}
+
+	if err = loadMsgEnvelopeEmittedLT(&view, &s); err != nil {
+		return msgEnvelopeView{}, err
+	}
+	hasMetadata, err := s.LoadBoolBit()
+	if err != nil {
+		return msgEnvelopeView{}, fmt.Errorf("failed to load metadata flag: %w", err)
+	}
+	if hasMetadata {
+		if err = skipMsgMetadata(&s); err != nil {
+			return msgEnvelopeView{}, fmt.Errorf("failed to load metadata: %w", err)
+		}
+	}
+	return view, nil
+}
+
+func parseMsgEnvelopeEmissionView(env *cell.Cell) (msgEnvelopeView, error) {
+	var s cell.Slice
+	view, err := parseMsgEnvelopePrefix(env, &s)
+	if err != nil || !view.v2 {
+		return view, err
+	}
+	if err = loadMsgEnvelopeEmittedLT(&view, &s); err != nil {
+		return msgEnvelopeView{}, err
 	}
 	return view, nil
 }
@@ -469,169 +587,156 @@ func parseMsgEnvelopeView(env *cell.Cell) (msgEnvelopeView, error) {
 // AugShardAccounts implements the augmentation of ShardAccounts
 // (crypto/block/block.tlb:263: _ (HashmapAugE 256 ShardAccount DepthBalanceInfo)).
 //
-// Leaf rule (Aug_ShardAccounts::eval_leaf, block-parse.cpp:1161-1169 ->
-// Account::skip_copy_depth_balance, block-parse.cpp:987-999): the extra of a
-// ShardAccount leaf is depth_balance$_ split_depth:(#<= 30)
+// Leaf rule: the extra of a ShardAccount leaf is
+// depth_balance$_ split_depth:(#<= 30)
 // balance:CurrencyCollection where split_depth is the anycast rewrite depth of
 // the account address (0 without anycast) and balance is the account balance
 // copied bit-exactly; account_none yields the DepthBalanceInfo null value.
 //
-// Fork rule (DepthBalanceInfo::add_values, block-parse.cpp:1153-1157):
-// split_depth = max(left, right), balance = left + right.
+// Fork rule: split_depth = max(left, right), balance = left + right.
 //
-// Empty value (DepthBalanceInfo::null_value, block-parse.cpp:1148-1150):
-// zero split_depth and zero balance (10 zero bits).
+// Empty value: zero split_depth and zero balance (10 zero bits).
 type AugShardAccounts struct{}
 
 func (AugShardAccounts) SkipExtra(loader *cell.Slice) error {
 	return skipDepthBalanceInfoBoundary(loader)
 }
 
-func (AugShardAccounts) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := b.StoreUInt(0, 5); err != nil { // split_depth:(#<= 30)
-		return nil, err
+func (AugShardAccounts) EmptyExtra(dst *cell.Builder) error {
+	if err := dst.StoreUInt(0, 5); err != nil { // split_depth:(#<= 30)
+		return err
 	}
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugShardAccounts) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
+func (AugShardAccounts) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
 	// ShardAccount: account_descr$_ account:^Account last_trans_hash:bits256
-	// last_trans_lt:uint64 (block.tlb:259-260); eval_leaf prefetches the account
-	// ref without touching the bits (block-parse.cpp:1162-1164).
-	account, err := v.PeekRefCell()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load account ref of shard account: %w", err)
+	// last_trans_lt:uint64. The account ref is read without consuming inline bits.
+	// Parsing the ref straight into a local slice keeps the child trace on the
+	// slice: peeking the cell first would copy it only to carry that trace, and
+	// parsing it would allocate a second time.
+	var sv cell.Slice
+	if err := v.PreloadRefInto(&sv); err != nil {
+		return fmt.Errorf("failed to load account ref of shard account: %w", err)
 	}
-
-	s, err := account.BeginParse()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse account: %w", err)
-	}
+	s := &sv
 
 	isAccount, err := s.LoadBoolBit()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load account tag: %w", err)
+		return fmt.Errorf("failed to load account tag: %w", err)
 	}
 
-	b := cell.BeginCell()
 	if !isAccount {
-		// account_none$0 -> DepthBalanceInfo null value (block-parse.cpp:990-991).
-		if err = b.StoreUInt(0, 5); err != nil {
-			return nil, err
+		// account_none$0 maps to the DepthBalanceInfo null value.
+		if err = dst.StoreUInt(0, 5); err != nil {
+			return err
 		}
-		if err = storeEmptyCurrencyCollection(b); err != nil {
-			return nil, err
+		if err = storeEmptyCurrencyCollection(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		return nil
 	}
 
 	// account$1 addr:MsgAddressInt storage_stat:StorageInfo storage:AccountStorage
 	depth, err := skipMsgAddressIntGetDepth(s)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read account address: %w", err)
+		return fmt.Errorf("failed to read account address: %w", err)
 	}
-	if err = b.StoreUInt(depth, 5); err != nil { // split_depth:(#<= 30)
-		return nil, err
+	if err = dst.StoreUInt(depth, 5); err != nil { // split_depth:(#<= 30)
+		return err
 	}
 
-	// storage_stat:StorageInfo. The local C++ checkout predates the current
-	// StorageInfo layout; the skip below follows the schema this package parses
-	// (StorageUsed cells/bits as VarUInteger 7, StorageExtraInfo, last_paid,
-	// Maybe due_payment), matching current mainnet blocks, cf. tlb/account.go
-	// StorageInfo.
-	if _, err = loadVarUInt(s, 7); err != nil {
-		return nil, fmt.Errorf("failed to skip storage cells used: %w", err)
+	// storage_stat:StorageInfo contains StorageUsed cells/bits as VarUInteger 7,
+	// StorageExtraInfo, last_paid, and an optional due_payment.
+	if err = skipVarUInt(s, 7); err != nil {
+		return fmt.Errorf("failed to skip storage cells used: %w", err)
 	}
-	if _, err = loadVarUInt(s, 7); err != nil {
-		return nil, fmt.Errorf("failed to skip storage bits used: %w", err)
+	if err = skipVarUInt(s, 7); err != nil {
+		return fmt.Errorf("failed to skip storage bits used: %w", err)
 	}
 	storageExtraTag, err := s.LoadUInt(3)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load storage extra tag: %w", err)
+		return fmt.Errorf("failed to load storage extra tag: %w", err)
 	}
 	switch storageExtraTag {
 	case 0b000: // storage_extra_none$000
 	case 0b001: // storage_extra_info$001 dict_hash:uint256
-		if _, err = s.LoadSlice(256); err != nil {
-			return nil, fmt.Errorf("failed to skip storage extra dict hash: %w", err)
+		if err = s.SkipBits(256); err != nil {
+			return fmt.Errorf("failed to skip storage extra dict hash: %w", err)
 		}
 	default:
-		return nil, fmt.Errorf("unknown storage extra tag %b", storageExtraTag)
+		return fmt.Errorf("unknown storage extra tag %b", storageExtraTag)
 	}
 	if _, err = s.LoadUInt(32); err != nil { // last_paid
-		return nil, fmt.Errorf("failed to skip storage last paid: %w", err)
+		return fmt.Errorf("failed to skip storage last paid: %w", err)
 	}
 	hasDue, err := s.LoadBoolBit()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load due payment flag: %w", err)
+		return fmt.Errorf("failed to load due payment flag: %w", err)
 	}
 	if hasDue {
-		if _, err = s.LoadBigCoins(); err != nil {
-			return nil, fmt.Errorf("failed to skip due payment: %w", err)
+		if err = skipGrams(s); err != nil {
+			return fmt.Errorf("failed to skip due payment: %w", err)
 		}
 	}
 
 	// storage:AccountStorage = last_trans_lt:uint64 balance:CurrencyCollection
-	// state:AccountState; the balance is copied bit-exactly
-	// (AccountStorage::skip_copy_balance, block-parse.cpp:937-939).
+	// state:AccountState; the balance is copied bit-exactly.
 	if _, err = s.LoadUInt(64); err != nil {
-		return nil, fmt.Errorf("failed to skip last transaction lt: %w", err)
+		return fmt.Errorf("failed to skip last transaction lt: %w", err)
 	}
 	balanceGrams, err := loadRawGrams(s)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load account balance grams: %w", err)
+		return fmt.Errorf("failed to load account balance grams: %w", err)
 	}
 	balanceExtra, err := loadRawExtraDict(s)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load account balance extra: %w", err)
+		return fmt.Errorf("failed to load account balance extra: %w", err)
 	}
-	if err = balanceGrams.appendTo(b); err != nil {
-		return nil, err
+	if err = balanceGrams.appendTo(dst); err != nil {
+		return err
 	}
-	if err = balanceExtra.appendTo(b); err != nil {
-		return nil, err
+	if err = balanceExtra.appendTo(dst); err != nil {
+		return err
 	}
 
-	// state:AccountState is skipped for structural validation only, mirroring
-	// t_AccountState.skip at the end of skip_copy_balance.
+	// State is skipped after the balance so the remaining structure is validated.
 	if err = skipAccountState(s); err != nil {
-		return nil, fmt.Errorf("failed to skip account state: %w", err)
+		return fmt.Errorf("failed to skip account state: %w", err)
 	}
 
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugShardAccounts) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	// DepthBalanceInfo::add_values (block-parse.cpp:1153-1157).
+func (AugShardAccounts) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
 	d1, err := leftExtra.LoadUInt(5)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load left split depth: %w", err)
+		return fmt.Errorf("failed to load left split depth: %w", err)
 	}
 	d2, err := rightExtra.LoadUInt(5)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load right split depth: %w", err)
+		return fmt.Errorf("failed to load right split depth: %w", err)
 	}
 	if d1 > 30 || d2 > 30 {
-		return nil, fmt.Errorf("split depth above 30")
+		return fmt.Errorf("split depth above 30")
 	}
 
-	b := cell.BeginCell()
 	depth := d1
 	if d2 > depth {
 		depth = d2
 	}
-	if err = b.StoreUInt(depth, 5); err != nil {
-		return nil, err
+	if err = dst.StoreUInt(depth, 5); err != nil {
+		return err
 	}
-	if err = addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil {
-		return nil, err
+	if err = addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
 // skipAccountState skips AccountState (block.tlb:265-268):
@@ -650,7 +755,7 @@ func skipAccountState(s *cell.Slice) error {
 		return fmt.Errorf("failed to load account state tag: %w", err)
 	}
 	if frozen { // account_frozen$01 state_hash:bits256
-		if _, err = s.LoadSlice(256); err != nil {
+		if err = s.SkipBits(256); err != nil {
 			return fmt.Errorf("failed to skip frozen state hash: %w", err)
 		}
 	}
@@ -700,14 +805,13 @@ func skipStateInit(s *cell.Slice) error {
 // AugShardAccountBlocks implements the augmentation of ShardAccountBlocks
 // (block.tlb:341: _ (HashmapAugE 256 AccountBlock CurrencyCollection)).
 //
-// Leaf rule (Aug_ShardAccountBlocks::eval_leaf, block-parse.cpp:1634-1637 ->
-// AccountBlock::get_total_fees, block-parse.cpp:1628-1632): skip acc_trans#5
-// and account_addr, then extract the root extra of the inner
+// Leaf rule: skip acc_trans#5 and account_addr, then extract the root extra of
+// the inner
 // (HashmapAug 64 ^Transaction CurrencyCollection) dictionary and re-store it
 // canonically; i.e. the extra of an AccountBlock is the total fees of all its
 // transactions.
 //
-// Fork rule: CurrencyCollection::add_values (block-parse.cpp:619-621).
+// Fork rule: add the two CurrencyCollections component-wise.
 // Empty value: CurrencyCollection null (5 zero bits).
 type AugShardAccountBlocks struct{}
 
@@ -715,71 +819,65 @@ func (AugShardAccountBlocks) SkipExtra(loader *cell.Slice) error {
 	return skipCurrencyCollectionBoundary(loader)
 }
 
-func (AugShardAccountBlocks) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+func (AugShardAccountBlocks) EmptyExtra(dst *cell.Builder) error {
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugShardAccountBlocks) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
-	// acc_trans#5 account_addr:bits256, advanced blindly like C++
-	// get_total_fees (cs.advance(4 + 256), block-parse.cpp:1629).
+func (AugShardAccountBlocks) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
+	// acc_trans#5 and account_addr:bits256 precede the transactions dictionary.
 	if _, err := v.LoadUInt(4); err != nil {
-		return nil, fmt.Errorf("failed to skip account block tag: %w", err)
+		return fmt.Errorf("failed to skip account block tag: %w", err)
 	}
-	if _, err := v.LoadSlice(256); err != nil {
-		return nil, fmt.Errorf("failed to skip account block address: %w", err)
+	if err := v.SkipBits(256); err != nil {
+		return fmt.Errorf("failed to skip account block address: %w", err)
 	}
 
-	// transactions:(HashmapAug 64 ^Transaction CurrencyCollection); extract the
-	// root node extra (HashmapAug::extract_extra, block-parse.cpp:1100-1103).
+	// transactions:(HashmapAug 64 ^Transaction CurrencyCollection); extract its
+	// root-node extra.
 	dict, err := v.ToAugDictWithValueAndAugmentation(64, AugAccountTransactions{}, skipAugRefValue)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load account transactions dict: %w", err)
+		return fmt.Errorf("failed to load account transactions dict: %w", err)
 	}
-	rootExtra, err := dict.LoadRootExtra()
-	if err != nil {
-		return nil, fmt.Errorf("failed to extract account transactions root extra: %w", err)
+	var rootExtra cell.Slice
+	if err := dict.LoadRootExtraInto(&rootExtra); err != nil {
+		return fmt.Errorf("failed to extract account transactions root extra: %w", err)
 	}
 
-	// total_fees.fetch + store canonically re-encodes the CurrencyCollection
-	// (block-parse.cpp:1631-1636).
-	return canonicalCurrencyCollectionFromSlice(rootExtra)
+	// Re-encode the extracted CurrencyCollection canonically.
+	return storeCanonicalCurrencyCollectionFromSlice(&rootExtra, dst)
 }
 
-func (AugShardAccountBlocks) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil {
-		return nil, err
+func (AugShardAccountBlocks) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	if err := addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-// canonicalCurrencyCollectionFromSlice re-encodes a CurrencyCollection read
-// from the slice: canonical grams plus the original extra dictionary root,
-// which is what C++ block::CurrencyCollection fetch+store does
-// (block.cpp:1289-1299).
-func canonicalCurrencyCollectionFromSlice(s *cell.Slice) (*cell.Cell, error) {
-	grams, err := s.LoadBigCoins()
+// storeCanonicalCurrencyCollectionFromSlice re-encodes a CurrencyCollection read
+// from the slice: canonical grams plus the original extra dictionary root.
+func storeCanonicalCurrencyCollectionFromSlice(s *cell.Slice, dst *cell.Builder) error {
+	grams, err := loadGramsU128(s)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load grams: %w", err)
+		return fmt.Errorf("failed to load grams: %w", err)
 	}
 	extra, err := loadRawExtraDict(s)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load extra currencies: %w", err)
+		return fmt.Errorf("failed to load extra currencies: %w", err)
 	}
 
-	b := cell.BeginCell()
-	if err = storeCanonicalGrams(b, grams); err != nil {
-		return nil, err
+	if err = grams.storeTo(dst); err != nil {
+		return err
 	}
-	if err = extra.appendTo(b); err != nil {
-		return nil, err
+	if err = extra.appendTo(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
 // ===========================================================================
@@ -789,12 +887,10 @@ func canonicalCurrencyCollectionFromSlice(s *cell.Slice) (*cell.Cell, error) {
 // AugAccountTransactions implements the augmentation of the transaction
 // dictionary inside an AccountBlock (block.tlb:337-339).
 //
-// Leaf rule (Aug_AccountTransactions::eval_leaf, block-parse.cpp:1599-1604 ->
-// Transaction::get_total_fees, block-parse.cpp:1583-1594): the extra of a
-// ^Transaction leaf is the transaction's total_fees:CurrencyCollection,
-// canonically re-encoded.
+// Leaf rule: the extra of a ^Transaction leaf is the transaction's
+// total_fees:CurrencyCollection, canonically re-encoded.
 //
-// Fork rule: CurrencyCollection::add_values (block-parse.cpp:619-621).
+// Fork rule: add the two CurrencyCollections component-wise.
 // Empty value: CurrencyCollection null (5 zero bits).
 type AugAccountTransactions struct{}
 
@@ -802,57 +898,54 @@ func (AugAccountTransactions) SkipExtra(loader *cell.Slice) error {
 	return skipCurrencyCollectionBoundary(loader)
 }
 
-func (AugAccountTransactions) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+func (AugAccountTransactions) EmptyExtra(dst *cell.Builder) error {
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugAccountTransactions) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
-	tx, err := v.PeekRefCell() // value is ^Transaction, prefetched like C++ (block-parse.cpp:1600)
-	if err != nil {
-		return nil, fmt.Errorf("failed to load transaction ref: %w", err)
+func (AugAccountTransactions) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
+	// value is ^Transaction; see AugShardAccounts.LeafExtra on why the ref is
+	// parsed straight into a local slice rather than peeked as a cell first.
+	var sv cell.Slice
+	if err := v.PreloadRefInto(&sv); err != nil {
+		return fmt.Errorf("failed to load transaction ref: %w", err)
 	}
+	s := &sv
 
-	s, err := tx.BeginParse()
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse transaction: %w", err)
-	}
-
-	// Transaction::get_total_fees (block-parse.cpp:1583-1594).
+	// Validate the constructor before locating total_fees after the header.
 	tag, err := s.LoadUInt(4)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load transaction tag: %w", err)
+		return fmt.Errorf("failed to load transaction tag: %w", err)
 	}
 	if tag != 0b0111 {
-		return nil, fmt.Errorf("invalid transaction tag %b", tag)
+		return fmt.Errorf("invalid transaction tag %b", tag)
 	}
 	// account_addr:bits256 lt:uint64 prev_trans_hash:bits256 prev_trans_lt:uint64
 	// now:uint32 outmsg_cnt:uint15
-	if _, err = s.LoadSlice(256 + 64 + 256 + 64 + 32 + 15); err != nil {
-		return nil, fmt.Errorf("failed to skip transaction header: %w", err)
+	if err = s.SkipBits(256 + 64 + 256 + 64 + 32 + 15); err != nil {
+		return fmt.Errorf("failed to skip transaction header: %w", err)
 	}
 	// orig_status:AccountStatus end_status:AccountStatus (2 bits each)
 	if _, err = s.LoadUInt(4); err != nil {
-		return nil, fmt.Errorf("failed to skip account statuses: %w", err)
+		return fmt.Errorf("failed to skip account statuses: %w", err)
 	}
 	// ^[ in_msg:(Maybe ^(Message Any)) out_msgs:(HashmapE 15 ^(Message Any)) ]
 	if _, err = s.LoadRefCell(); err != nil {
-		return nil, fmt.Errorf("failed to skip transaction io ref: %w", err)
+		return fmt.Errorf("failed to skip transaction io ref: %w", err)
 	}
 
-	return canonicalCurrencyCollectionFromSlice(s)
+	return storeCanonicalCurrencyCollectionFromSlice(s, dst)
 }
 
-func (AugAccountTransactions) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil {
-		return nil, err
+func (AugAccountTransactions) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	if err := addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
 // ===========================================================================
@@ -862,252 +955,215 @@ func (AugAccountTransactions) CombineExtra(leftExtra, rightExtra *cell.Slice) (*
 // AugInMsgDescr implements the augmentation of InMsgDescr
 // (block.tlb:188: _ (HashmapAugE 256 InMsg ImportFees)).
 //
-// Leaf rule (Aug_InMsgDescr::eval_leaf, block-parse.h:841-848 ->
-// InMsg::get_import_fees, block-parse.cpp:1741-1835): C++ DERIVES the
-// ImportFees from the InMsg itself (message headers, envelope fees and the fee
-// fields of the InMsg record) rather than trusting a stored extra, so this
-// implementation performs the same derivation; callers only Set the InMsg
-// value and the extra is computed. The per-variant rules are documented inline.
+// Leaf rule: derive ImportFees from the InMsg message headers, envelope fees,
+// and record fee fields. Callers set only the InMsg value; the dictionary
+// computes the extra according to the variant-specific rules below.
 //
-// Fork rule: ImportFees::add_values (block-parse.cpp:1650-1652), i.e.
-// fees_collected added as Grams and value_imported added as CurrencyCollection.
-// Empty value: ImportFees::null_value (block-parse.h:797-799), 4+4+1 zero bits.
-type AugInMsgDescr struct{}
+// Fork rule: add fees_collected as Grams and value_imported as a
+// CurrencyCollection. Empty value: 4+4+1 zero bits.
+type AugInMsgDescr struct {
+	GlobalVersion uint32
+}
 
 func (AugInMsgDescr) SkipExtra(loader *cell.Slice) error {
-	if _, err := loader.LoadBigCoins(); err != nil { // fees_collected:Grams
+	if err := skipGrams(loader); err != nil { // fees_collected:Grams
 		return err
 	}
 	return skipCurrencyCollectionBoundary(loader) // value_imported:CurrencyCollection
 }
 
-func (AugInMsgDescr) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := b.StoreUInt(0, 4); err != nil { // fees_collected: zero Grams
-		return nil, err
+func (AugInMsgDescr) EmptyExtra(dst *cell.Builder) error {
+	if err := dst.StoreUInt(0, 4); err != nil { // fees_collected: zero Grams
+		return err
 	}
-	if err := storeEmptyCurrencyCollection(b); err != nil { // value_imported: zero
-		return nil, err
+	if err := storeEmptyCurrencyCollection(dst); err != nil { // value_imported: zero
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugInMsgDescr) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
+func (a AugInMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
 	tag, err := v.LoadUInt(3)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load in msg tag: %w", err)
+		return fmt.Errorf("failed to load in msg tag: %w", err)
 	}
 	if tag == 0b001 {
-		// current upstream 5-bit variants msg_import_deferred_fin$00100 and
-		// msg_import_deferred_tr$00101 (dispatch queue feature; not present in
-		// the local ton checkout's block.tlb). Their import fees derivation is
-		// validated bit-exactly against mainnet InMsgDescr data in tests.
+		// Dispatch-queue variants msg_import_deferred_fin$00100 and
+		// msg_import_deferred_tr$00101 use five-bit tags.
 		rest, err := v.LoadUInt(2)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load deferred in msg tag: %w", err)
+			return fmt.Errorf("failed to load deferred in msg tag: %w", err)
 		}
-		return augInMsgDescrDeferredLeaf(v, rest)
+		return augInMsgDescrDeferredLeaf(&v, rest, a.GlobalVersion, dst)
 	}
 
-	b := cell.BeginCell()
 	switch tag {
-	case 0b000: // msg_import_ext: no value and no import fees (block-parse.cpp:1743-1744)
-		if err = b.StoreUInt(0, 4); err != nil {
-			return nil, err
+	case 0b000: // msg_import_ext: no value and no import fees
+		if err = dst.StoreUInt(0, 4); err != nil {
+			return err
 		}
-		if err = storeEmptyCurrencyCollection(b); err != nil {
-			return nil, err
+		if err = storeEmptyCurrencyCollection(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		return nil
 
-	case 0b010: // msg_import_ihr (block-parse.cpp:1745-1759)
-		// msg:^(Message Any) transaction:^Transaction ihr_fee:Grams proof_created:^Cell
-		if v.RefsNum() < 3 {
-			return nil, fmt.Errorf("msg_import_ihr must have 3 refs")
-		}
-		msg, err := v.LoadRefCell()
-		if err != nil {
-			return nil, err
-		}
-		info, err := parseIntMsgInfoView(msg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to parse imported message: %w", err)
-		}
-		if _, err = v.LoadRefCell(); err != nil { // transaction
-			return nil, err
-		}
-		ihrFee, err := v.LoadBigCoins()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load ihr fee: %w", err)
-		}
-		if _, err = v.LoadRefCell(); err != nil { // proof_created
-			return nil, err
-		}
-		if ihrFee.Cmp(info.ihrFee.val) != 0 {
-			return nil, fmt.Errorf("in msg ihr fee %s does not match message ihr fee %s", ihrFee, info.ihrFee.val)
-		}
-		// fees_collected := ihr_fee (original bits)
-		if err = info.ihrFee.appendTo(b); err != nil {
-			return nil, err
-		}
-		// value_imported := ihr_fee + msg.value (canonical sum, message extra dict reused)
-		if err = storeCanonicalGrams(b, new(big.Int).Add(info.ihrFee.val, info.valueGrams)); err != nil {
-			return nil, err
-		}
-		if err = info.valueExtra.appendTo(b); err != nil {
-			return nil, err
-		}
-		return b.EndCell(), nil
+	case 0b010: // msg_import_ihr
+		return errors.New("msg_import_ihr is unsupported")
 
-	case 0b011: // msg_import_imm (block-parse.cpp:1760-1766)
+	case 0b011: // msg_import_imm
 		// in_msg:^MsgEnvelope transaction:^Transaction fwd_fee:Grams
 		if v.RefsNum() < 2 {
-			return nil, fmt.Errorf("msg_import_imm must have 2 refs")
+			return fmt.Errorf("msg_import_imm must have 2 refs")
 		}
 		if _, err = v.LoadRefCell(); err != nil {
-			return nil, err
+			return err
 		}
 		if _, err = v.LoadRefCell(); err != nil {
-			return nil, err
+			return err
 		}
-		fwdFee, err := loadRawGrams(v)
+		fwdFee, err := loadRawGrams(&v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load fwd fee: %w", err)
+			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
 		// fees_collected := fwd_fee (original bits); value_imported := 0
-		if err = fwdFee.appendTo(b); err != nil {
-			return nil, err
+		if err = fwdFee.appendTo(dst); err != nil {
+			return err
 		}
-		if err = storeEmptyCurrencyCollection(b); err != nil {
-			return nil, err
+		if err = storeEmptyCurrencyCollection(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		return nil
 
-	case 0b100: // msg_import_fin (block-parse.cpp:1767-1786)
+	case 0b100: // msg_import_fin
 		// in_msg:^MsgEnvelope transaction:^Transaction fwd_fee:Grams
 		if v.RefsNum() < 2 {
-			return nil, fmt.Errorf("msg_import_fin must have 2 refs")
+			return fmt.Errorf("msg_import_fin must have 2 refs")
 		}
 		envCell, err := v.LoadRefCell()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		env, err := parseMsgEnvelopeView(envCell)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse in msg envelope: %w", err)
+			return fmt.Errorf("failed to parse in msg envelope: %w", err)
 		}
 		if _, err = v.LoadRefCell(); err != nil { // transaction
-			return nil, err
+			return err
 		}
-		fwdFee, err := v.LoadBigCoins()
+		fwdFee, err := loadGramsU128(&v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load fwd fee: %w", err)
+			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
-		if fwdFee.Cmp(env.fwdFeeRemaining.val) != 0 {
-			return nil, fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
-				fwdFee, env.fwdFeeRemaining.val)
+		if fwdFee != env.fwdFeeValue {
+			return fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
+				fwdFee, env.fwdFeeValue)
 		}
 		info, err := parseIntMsgInfoView(env.msg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse enveloped message: %w", err)
+			return fmt.Errorf("failed to parse enveloped message: %w", err)
 		}
 		// fees_collected := fwd_fee_remaining (original bits)
-		if err = env.fwdFeeRemaining.appendTo(b); err != nil {
-			return nil, err
+		if err = env.fwdFeeRemaining.appendTo(dst); err != nil {
+			return err
 		}
-		// value_imported := msg.value + msg.ihr_fee + fwd_fee_remaining
-		sum := new(big.Int).Add(info.valueGrams, info.ihrFee.val)
-		sum.Add(sum, env.fwdFeeRemaining.val)
-		if err = storeCanonicalGrams(b, sum); err != nil {
-			return nil, err
+		// value_imported := msg.value + pre-v12 ihr_fee + fwd_fee_remaining
+		sum, err := info.valueWithRemainingFee(env.fwdFeeValue, a.GlobalVersion)
+		if err != nil {
+			return err
 		}
-		if err = info.valueExtra.appendTo(b); err != nil {
-			return nil, err
+		if err = sum.storeTo(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		if err = info.valueExtra.appendTo(dst); err != nil {
+			return err
+		}
+		return nil
 
-	case 0b101: // msg_import_tr (block-parse.cpp:1787-1807)
+	case 0b101: // msg_import_tr
 		// in_msg:^MsgEnvelope out_msg:^MsgEnvelope transit_fee:Grams
 		if v.RefsNum() < 2 {
-			return nil, fmt.Errorf("msg_import_tr must have 2 refs")
+			return fmt.Errorf("msg_import_tr must have 2 refs")
 		}
 		envCell, err := v.LoadRefCell()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		env, err := parseMsgEnvelopeView(envCell)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse in msg envelope: %w", err)
+			return fmt.Errorf("failed to parse in msg envelope: %w", err)
 		}
 		if _, err = v.LoadRefCell(); err != nil { // out_msg
-			return nil, err
+			return err
 		}
-		transitFee, err := v.LoadBigCoins()
+		transitFee, err := loadGramsU128(&v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load transit fee: %w", err)
+			return fmt.Errorf("failed to load transit fee: %w", err)
 		}
-		if transitFee.Cmp(env.fwdFeeRemaining.val) > 0 {
-			return nil, fmt.Errorf("transit fee %s is above envelope remaining fee %s",
-				transitFee, env.fwdFeeRemaining.val)
+		if transitFee.greater(env.fwdFeeValue) {
+			return fmt.Errorf("transit fee %s is above envelope remaining fee %s",
+				transitFee, env.fwdFeeValue)
 		}
 		info, err := parseIntMsgInfoView(env.msg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse enveloped message: %w", err)
+			return fmt.Errorf("failed to parse enveloped message: %w", err)
 		}
-		// fees_collected := transit_fee (canonical store, block-parse.cpp:1800)
-		if err = storeCanonicalGrams(b, transitFee); err != nil {
-			return nil, err
+		// fees_collected := transit_fee (canonical encoding)
+		if err = transitFee.storeTo(dst); err != nil {
+			return err
 		}
-		// value_imported := msg.value + msg.ihr_fee + fwd_fee_remaining
-		sum := new(big.Int).Add(info.valueGrams, info.ihrFee.val)
-		sum.Add(sum, env.fwdFeeRemaining.val)
-		if err = storeCanonicalGrams(b, sum); err != nil {
-			return nil, err
+		// value_imported := msg.value + pre-v12 ihr_fee + fwd_fee_remaining
+		sum, err := info.valueWithRemainingFee(env.fwdFeeValue, a.GlobalVersion)
+		if err != nil {
+			return err
 		}
-		if err = info.valueExtra.appendTo(b); err != nil {
-			return nil, err
+		if err = sum.storeTo(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		if err = info.valueExtra.appendTo(dst); err != nil {
+			return err
+		}
+		return nil
 
-	case 0b110, 0b111: // msg_discard_fin / msg_discard_tr (block-parse.cpp:1808-1827)
+	case 0b110, 0b111: // msg_discard_fin / msg_discard_tr
 		// in_msg:^MsgEnvelope transaction_id:uint64 fwd_fee:Grams [proof_delivered:^Cell]
 		wantRefs := 1
 		if tag == 0b111 {
 			wantRefs = 2
 		}
 		if v.RefsNum() < wantRefs {
-			return nil, fmt.Errorf("msg_discard must have %d refs", wantRefs)
+			return fmt.Errorf("msg_discard must have %d refs", wantRefs)
 		}
 		if _, err = v.LoadRefCell(); err != nil { // in_msg
-			return nil, err
+			return err
 		}
 		if _, err = v.LoadUInt(64); err != nil { // transaction_id
-			return nil, err
+			return err
 		}
-		fwdFee, err := loadRawGrams(v)
+		fwdFee, err := loadRawGrams(&v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load fwd fee: %w", err)
+			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
 		if tag == 0b111 {
 			if _, err = v.LoadRefCell(); err != nil { // proof_delivered
-				return nil, err
+				return err
 			}
 		}
 		// fees_collected := fwd_fee; value_imported := fwd_fee (original bits, empty extra)
-		if err = fwdFee.appendTo(b); err != nil {
-			return nil, err
+		if err = fwdFee.appendTo(dst); err != nil {
+			return err
 		}
-		if err = fwdFee.appendTo(b); err != nil {
-			return nil, err
+		if err = fwdFee.appendTo(dst); err != nil {
+			return err
 		}
-		if err = b.StoreBoolBit(false); err != nil {
-			return nil, err
+		if err = dst.StoreBoolBit(false); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		return nil
 
 	default:
-		return nil, fmt.Errorf("unknown in msg tag %b", tag)
+		return fmt.Errorf("unknown in msg tag %b", tag)
 	}
 }
 
@@ -1118,89 +1174,73 @@ func (AugInMsgDescr) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
 //	    fwd_fee:Grams = InMsg;
 //	msg_import_deferred_tr$00101 in_msg:^MsgEnvelope out_msg:^MsgEnvelope = InMsg;
 //
-// deferred_fin follows the msg_import_fin rule (fees_collected :=
-// fwd_fee_remaining, which must equal the stored fwd_fee; value_imported :=
-// msg.value + msg.ihr_fee + fwd_fee_remaining); deferred_tr collects no fees
-// (fees_collected := 0) and imports msg.value + msg.ihr_fee +
-// fwd_fee_remaining. Both rules are validated bit-exactly against real mainnet
-// InMsgDescr extras in tests, since the local ton checkout predates them.
-func augInMsgDescrDeferredLeaf(v *cell.Slice, rest uint64) (*cell.Cell, error) {
+// deferred_fin collects fwd_fee_remaining, which must equal the stored fwd_fee;
+// deferred_tr collects no fees. Both import msg.value plus fwd_fee_remaining,
+// and global versions before 12 also include msg.ihr_fee.
+func augInMsgDescrDeferredLeaf(v *cell.Slice, rest uint64, globalVersion uint32, dst *cell.Builder) error {
 	if rest > 1 {
-		return nil, fmt.Errorf("unknown deferred in msg tag %b", 0b00100|rest)
+		return fmt.Errorf("unknown deferred in msg tag %b", 0b00100|rest)
 	}
 
 	if v.RefsNum() < 2 {
-		return nil, fmt.Errorf("deferred in msg must have 2 refs")
+		return fmt.Errorf("deferred in msg must have 2 refs")
 	}
 	envCell, err := v.LoadRefCell()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	env, err := parseMsgEnvelopeView(envCell)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse in msg envelope: %w", err)
+		return fmt.Errorf("failed to parse in msg envelope: %w", err)
 	}
 	if _, err = v.LoadRefCell(); err != nil { // transaction / out_msg
-		return nil, err
+		return err
 	}
 
 	info, err := parseIntMsgInfoView(env.msg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse enveloped message: %w", err)
+		return fmt.Errorf("failed to parse enveloped message: %w", err)
 	}
 
-	b := cell.BeginCell()
 	if rest == 0 { // msg_import_deferred_fin
-		fwdFee, err := v.LoadBigCoins()
+		fwdFee, err := loadGramsU128(v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load fwd fee: %w", err)
+			return fmt.Errorf("failed to load fwd fee: %w", err)
 		}
-		if fwdFee.Cmp(env.fwdFeeRemaining.val) != 0 {
-			return nil, fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
-				fwdFee, env.fwdFeeRemaining.val)
+		if fwdFee != env.fwdFeeValue {
+			return fmt.Errorf("in msg fwd fee %s does not match envelope remaining fee %s",
+				fwdFee, env.fwdFeeValue)
 		}
 		// fees_collected := fwd_fee_remaining (original bits)
-		if err = env.fwdFeeRemaining.appendTo(b); err != nil {
-			return nil, err
+		if err = env.fwdFeeRemaining.appendTo(dst); err != nil {
+			return err
 		}
 	} else { // msg_import_deferred_tr
 		// fees_collected := 0
-		if err = b.StoreUInt(0, 4); err != nil {
-			return nil, err
+		if err = dst.StoreUInt(0, 4); err != nil {
+			return err
 		}
 	}
 
-	// value_imported := msg.value + msg.ihr_fee + fwd_fee_remaining
-	sum := new(big.Int).Add(info.valueGrams, info.ihrFee.val)
-	sum.Add(sum, env.fwdFeeRemaining.val)
-	if err = storeCanonicalGrams(b, sum); err != nil {
-		return nil, err
+	// value_imported := msg.value + pre-v12 ihr_fee + fwd_fee_remaining
+	sum, err := info.valueWithRemainingFee(env.fwdFeeValue, globalVersion)
+	if err != nil {
+		return err
 	}
-	if err = info.valueExtra.appendTo(b); err != nil {
-		return nil, err
+	if err = sum.storeTo(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	if err = info.valueExtra.appendTo(dst); err != nil {
+		return err
+	}
+	return nil
 }
 
-func (AugInMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	// ImportFees::add_values (block-parse.cpp:1650-1652).
-	lg, err := leftExtra.LoadBigCoins()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load left fees collected: %w", err)
+func (AugInMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	if err := addGramsSlices(dst, leftExtra, rightExtra); err != nil {
+		return fmt.Errorf("failed to combine fees collected: %w", err)
 	}
-	rg, err := rightExtra.LoadBigCoins()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load right fees collected: %w", err)
-	}
-
-	b := cell.BeginCell()
-	if err = storeCanonicalGrams(b, new(big.Int).Add(lg, rg)); err != nil {
-		return nil, err
-	}
-	if err = addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil {
-		return nil, err
-	}
-	return b.EndCell(), nil
+	return addCurrencyCollectionSlices(dst, leftExtra, rightExtra)
 }
 
 // ===========================================================================
@@ -1210,34 +1250,36 @@ func (AugInMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell
 // AugOutMsgDescr implements the augmentation of OutMsgDescr
 // (block.tlb:212: _ (HashmapAugE 256 OutMsg CurrencyCollection)).
 //
-// Leaf rule (Aug_OutMsgDescr::eval_leaf, block-parse.h:864-871 ->
-// OutMsg::get_export_value, block-parse.cpp:1918-1955): only queued exports
-// (msg_export_new, msg_export_tr, msg_export_tr_req) carry a value equal to
-// msg.value + msg.ihr_fee + envelope fwd_fee_remaining; all other variants,
-// including every dequeue record, evaluate to the zero CurrencyCollection.
+// Leaf rule: queued new, transit, transit-requested and deferred export
+// variants carry msg.value plus envelope fwd_fee_remaining. Global versions
+// before 12 also include msg.ihr_fee. All other variants, including every
+// dequeue record, evaluate to the zero CurrencyCollection.
 //
-// Fork rule: CurrencyCollection::add_values (block-parse.cpp:619-621).
+// Fork rule: add the two CurrencyCollections component-wise.
 // Empty value: CurrencyCollection null (5 zero bits).
-type AugOutMsgDescr struct{}
+type AugOutMsgDescr struct {
+	GlobalVersion uint32
+}
 
 func (AugOutMsgDescr) SkipExtra(loader *cell.Slice) error {
 	return skipCurrencyCollectionBoundary(loader)
 }
 
-func (AugOutMsgDescr) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+func (AugOutMsgDescr) EmptyExtra(dst *cell.Builder) error {
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugOutMsgDescr) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
+func (a AugOutMsgDescr) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v, tagView cell.Slice
+	value.CopyInto(&v)
+	v.CopyInto(&tagView)
 
-	tag3, err := v.Copy().LoadUInt(3)
+	tag3, err := tagView.LoadUInt(3)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load out msg tag: %w", err)
+		return fmt.Errorf("failed to load out msg tag: %w", err)
 	}
 	tag := tag3
 	tagBits := uint(3)
@@ -1245,91 +1287,90 @@ func (AugOutMsgDescr) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
 	case 0b110: // msg_export_deq$1100 / msg_export_deq_short$1101
 		tagBits = 4
 	case 0b101:
-		// current upstream 5-bit variants msg_export_new_defer$10100 and
-		// msg_export_deferred_tr$10101 (dispatch queue feature; not present in
-		// the local ton checkout's block.tlb).
+		// Dispatch-queue variants msg_export_new_defer$10100 and
+		// msg_export_deferred_tr$10101 use five-bit tags.
 		tagBits = 5
 	}
 	if tagBits != 3 {
-		tag, err = v.Copy().LoadUInt(tagBits)
+		v.CopyInto(&tagView)
+		tag, err = tagView.LoadUInt(tagBits)
 		if err != nil {
-			return nil, fmt.Errorf("failed to load out msg long tag: %w", err)
+			return fmt.Errorf("failed to load out msg long tag: %w", err)
 		}
 	}
 
-	zero := func(needBits uint, needRefs int) (*cell.Cell, error) {
+	zero := func(needBits uint, needRefs int) error {
 		if v.BitsLeft() < needBits || v.RefsNum() < needRefs {
-			return nil, fmt.Errorf("truncated out msg with tag %b", tag)
+			return fmt.Errorf("truncated out msg with tag %b", tag)
 		}
-		b := cell.BeginCell()
-		if err := storeEmptyCurrencyCollection(b); err != nil {
-			return nil, err
+		if err := storeEmptyCurrencyCollection(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		return nil
 	}
 
-	exported := func() (*cell.Cell, error) {
+	exported := func() error {
 		if _, err = v.LoadUInt(tagBits); err != nil {
-			return nil, err
+			return err
 		}
 		if v.RefsNum() < 2 {
-			return nil, fmt.Errorf("out msg with tag %b must have 2 refs", tag)
+			return fmt.Errorf("out msg with tag %b must have 2 refs", tag)
 		}
 		envCell, err := v.LoadRefCell()
 		if err != nil {
-			return nil, err
+			return err
 		}
 		if _, err = v.LoadRefCell(); err != nil { // transaction / imported
-			return nil, err
+			return err
 		}
 		env, err := parseMsgEnvelopeView(envCell)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse out msg envelope: %w", err)
+			return fmt.Errorf("failed to parse out msg envelope: %w", err)
 		}
 		info, err := parseIntMsgInfoView(env.msg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse enveloped message: %w", err)
+			return fmt.Errorf("failed to parse enveloped message: %w", err)
 		}
 
-		// exported value = msg.value + msg.ihr_fee + fwd_fee_remaining
-		b := cell.BeginCell()
-		sum := new(big.Int).Add(info.valueGrams, info.ihrFee.val)
-		sum.Add(sum, env.fwdFeeRemaining.val)
-		if err = storeCanonicalGrams(b, sum); err != nil {
-			return nil, err
+		// exported value = msg.value + pre-v12 ihr_fee + fwd_fee_remaining
+		sum, err := info.valueWithRemainingFee(env.fwdFeeValue, a.GlobalVersion)
+		if err != nil {
+			return err
 		}
-		if err = info.valueExtra.appendTo(b); err != nil {
-			return nil, err
+		if err = sum.storeTo(dst); err != nil {
+			return err
 		}
-		return b.EndCell(), nil
+		if err = info.valueExtra.appendTo(dst); err != nil {
+			return err
+		}
+		return nil
 	}
 
 	switch tag {
-	case 0b000: // msg_export_ext (block-parse.cpp:1920-1924)
+	case 0b000: // msg_export_ext
 		return zero(3, 2)
-	case 0b010: // msg_export_imm (block-parse.cpp:1925-1926)
+	case 0b010: // msg_export_imm
 		return zero(3, 3)
-	case 0b100: // msg_export_deq_imm (block-parse.cpp:1927-1928)
+	case 0b100: // msg_export_deq_imm
 		return zero(3, 2)
-	case 0b1100: // msg_export_deq (block-parse.cpp:1929-1930)
+	case 0b1100: // msg_export_deq
 		return zero(4+63, 1)
-	case 0b1101: // msg_export_deq_short (block-parse.cpp:1931-1932)
+	case 0b1101: // msg_export_deq_short
 		return zero(4+256+32+64+64, 0)
-	case 0b001, 0b011, 0b111: // msg_export_new / msg_export_tr / msg_export_tr_req (block-parse.cpp:1933-1950)
+	case 0b001, 0b011, 0b111: // msg_export_new / msg_export_tr / msg_export_tr_req
 		return exported()
-	case 0b10100, 0b10101: // msg_export_new_defer / msg_export_deferred_tr (upstream), same value rule
+	case 0b10100, 0b10101: // msg_export_new_defer / msg_export_deferred_tr, same value rule
 		return exported()
 	default:
-		return nil, fmt.Errorf("unknown out msg tag %b", tag)
+		return fmt.Errorf("unknown out msg tag %b", tag)
 	}
 }
 
-func (AugOutMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil {
-		return nil, err
+func (AugOutMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	if err := addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
 // ===========================================================================
@@ -1339,68 +1380,159 @@ func (AugOutMsgDescr) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cel
 // AugOutMsgQueue implements the augmentation of OutMsgQueue
 // (block.tlb:214: _ (HashmapAugE 352 EnqueuedMsg uint64)).
 //
-// Leaf rule (Aug_OutMsgQueue::eval_leaf, block-parse.cpp:2004-2009): the
-// uint64 extra of an EnqueuedMsg is derived from the message envelope
-// referenced by the value (the enqueued_lt bits are NOT used):
-//   - the local (pre msg_envelope_v2) checkout takes the created_lt of the
-//     message inside the envelope (MsgEnvelope::get_created_lt,
-//     block-parse.cpp:858-864 -> CommonMsgInfo::get_created_lt, :714-737);
-//   - current upstream (MsgEnvelope::get_emitted_lt) prefers the explicit
-//     emitted_lt of a msg_envelope_v2#5 when present and falls back to the
-//     message created_lt otherwise; this implementation follows the upstream
-//     rule since mainnet queues contain v2 envelopes.
+// Leaf rule: derive the uint64 extra from the referenced message envelope,
+// ignoring EnqueuedMsg.enqueued_lt. An explicit emitted_lt in
+// msg_envelope_v2#5 takes precedence; otherwise use the enclosed message's
+// created_lt.
 //
-// Fork rule (Aug_OutMsgQueue::eval_fork, block-parse.cpp:1994-1998):
-// min(left, right). Empty value (eval_empty, :2000-2002): 0.
+// Fork rule: min(left, right). Empty value: 0.
 type AugOutMsgQueue struct{}
 
 func (AugOutMsgQueue) SkipExtra(loader *cell.Slice) error {
 	return skipUint64Boundary(loader)
 }
 
-func (AugOutMsgQueue) EmptyExtra() (*cell.Cell, error) {
-	return cell.BeginCell().MustStoreUInt(0, 64).EndCell(), nil
+func (AugOutMsgQueue) EmptyExtra(dst *cell.Builder) error {
+	return dst.StoreUInt(0, 64)
 }
 
-func (AugOutMsgQueue) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	v := value.Copy()
-	// EnqueuedMsg: enqueued_lt:uint64 out_msg:^MsgEnvelope; C++ fetches the ref
-	// without reading enqueued_lt (cs.fetch_ref_to, block-parse.cpp:2006).
+func (AugOutMsgQueue) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
+	// EnqueuedMsg stores enqueued_lt inline and MsgEnvelope by reference; only the
+	// reference contributes to the leaf extra.
 	envCell, err := v.PeekRefCell()
 	if err != nil {
-		return nil, fmt.Errorf("failed to load enqueued message envelope: %w", err)
+		return fmt.Errorf("failed to load enqueued message envelope: %w", err)
 	}
 
-	env, err := parseMsgEnvelopeView(envCell)
+	env, err := parseMsgEnvelopeEmissionView(envCell)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse enqueued message envelope: %w", err)
+		return fmt.Errorf("failed to parse enqueued message envelope: %w", err)
 	}
 
 	var lt uint64
-	if env.emittedLT != nil {
-		lt = *env.emittedLT
+	if env.hasEmittedLT {
+		lt = env.emittedLT
 	} else {
 		lt, err = messageCreatedLT(env.msg)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read message created lt: %w", err)
+			return fmt.Errorf("failed to read message created lt: %w", err)
 		}
 	}
-	return cell.BeginCell().MustStoreUInt(lt, 64).EndCell(), nil
+	return dst.StoreUInt(lt, 64)
 }
 
-func (AugOutMsgQueue) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
+func (AugOutMsgQueue) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
 	l, err := leftExtra.LoadUInt(64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load left lt: %w", err)
+		return fmt.Errorf("failed to load left lt: %w", err)
 	}
 	r, err := rightExtra.LoadUInt(64)
 	if err != nil {
-		return nil, fmt.Errorf("failed to load right lt: %w", err)
+		return fmt.Errorf("failed to load right lt: %w", err)
 	}
 	if r < l {
 		l = r
 	}
-	return cell.BeginCell().MustStoreUInt(l, 64).EndCell(), nil
+	return dst.StoreUInt(l, 64)
+}
+
+// ===========================================================================
+// AugDispatchQueue: HashmapAugE 256 AccountDispatchQueue DispatchQueueAugData
+// ===========================================================================
+
+// AugDispatchQueue implements the augmentation of DispatchQueue
+// (_ (HashmapAugE 256 AccountDispatchQueue DispatchQueueAugData)),
+// mirroring C++ Aug_DispatchQueue (block-parse.cpp).
+//
+// Leaf rule: the minimal lt key of the account's messages dictionary and its
+// total_balance when present in the account_dispatch_queue$000 constructor.
+//
+// Fork rule: min(left, right), and add balances when both are present. A mixed
+// fork uses the old constructor. Empty value: the old constructor with lt = 0.
+type AugDispatchQueue struct{}
+
+func (AugDispatchQueue) SkipExtra(loader *cell.Slice) error {
+	_, hasBalance, err := loadDispatchQueueAugHeader(loader)
+	if err != nil {
+		return err
+	}
+	if hasBalance {
+		return skipCurrencyCollectionBoundary(loader)
+	}
+	return nil
+}
+
+func (AugDispatchQueue) EmptyExtra(dst *cell.Builder) error {
+	return dst.StoreUInt(0, 64)
+}
+
+func (AugDispatchQueue) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var v cell.Slice
+	value.CopyInto(&v)
+	isOld, err := v.LoadBoolBit()
+	if err != nil {
+		return fmt.Errorf("failed to load account dispatch queue tag: %w", err)
+	}
+	if !isOld {
+		tag, err := v.LoadUInt(2)
+		if err != nil || tag != 0 {
+			return fmt.Errorf("invalid account dispatch queue tag")
+		}
+	}
+	messages, err := v.LoadRefCell()
+	if err != nil {
+		return fmt.Errorf("failed to load account dispatch queue messages: %w", err)
+	}
+	if _, err = v.LoadUInt(48); err != nil {
+		return fmt.Errorf("failed to load account dispatch queue count: %w", err)
+	}
+	key, _, err := messages.AsDict(64).LoadMinMax(false, false)
+	if err != nil {
+		return fmt.Errorf("failed to find minimal account dispatch queue lt: %w", err)
+	}
+	minLT := key.MustBeginParse().MustLoadUInt(64)
+	if err = storeDispatchQueueAugHeader(dst, minLT, !isOld); err != nil {
+		return err
+	}
+	if !isOld {
+		return storeCanonicalCurrencyCollectionFromSlice(&v, dst)
+	}
+	return nil
+}
+
+func (AugDispatchQueue) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	l, leftHasBalance, err := loadDispatchQueueAugHeader(leftExtra)
+	if err != nil {
+		return fmt.Errorf("failed to load left lt: %w", err)
+	}
+	r, rightHasBalance, err := loadDispatchQueueAugHeader(rightExtra)
+	if err != nil {
+		return fmt.Errorf("failed to load right lt: %w", err)
+	}
+	if r < l {
+		l = r
+	}
+	hasBalance := leftHasBalance && rightHasBalance
+	if err = storeDispatchQueueAugHeader(dst, l, hasBalance); err != nil {
+		return err
+	}
+	if hasBalance {
+		return addCurrencyCollectionSlices(dst, leftExtra, rightExtra)
+	}
+	if leftHasBalance {
+		_, err = loadCanonicalGrams(leftExtra)
+		if err == nil {
+			_, err = leftExtra.LoadDict(32)
+		}
+	} else if rightHasBalance {
+		_, err = loadCanonicalGrams(rightExtra)
+		if err == nil {
+			_, err = rightExtra.LoadDict(32)
+		}
+	}
+	return err
 }
 
 // ===========================================================================
@@ -1410,63 +1542,53 @@ func (AugOutMsgQueue) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cel
 // AugShardFees implements the augmentation of ShardFees
 // (block.tlb:449: _ (HashmapAugE 96 ShardFeeCreated ShardFeeCreated)).
 //
-// Leaf rule (Aug_ShardFees::eval_leaf, block-parse.cpp:2289-2291): the extra
-// is a verbatim copy of the leaf value, which must parse as ShardFeeCreated
-// with nothing left over (cs.empty_ext()).
+// Leaf rule: the extra is a verbatim copy of the leaf value, which must parse as
+// ShardFeeCreated with no trailing bits or references.
 //
-// Fork rule (ShardFeeCreated::add_values, block-parse.cpp:2282-2284):
-// component-wise CurrencyCollection addition of fees and create.
-// Empty value (ShardFeeCreated::null_value, block-parse.cpp:2278-2280):
-// two zero CurrencyCollections (10 zero bits).
+// Fork rule: add the fees and create CurrencyCollections component-wise.
+// Empty value: two zero CurrencyCollections (10 zero bits).
 type AugShardFees struct{}
 
 func (AugShardFees) SkipExtra(loader *cell.Slice) error {
 	return skipShardFeeCreatedBoundary(loader)
 }
 
-func (AugShardFees) EmptyExtra() (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+func (AugShardFees) EmptyExtra(dst *cell.Builder) error {
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	if err := storeEmptyCurrencyCollection(b); err != nil {
-		return nil, err
+	if err := storeEmptyCurrencyCollection(dst); err != nil {
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
 
-func (AugShardFees) LeafExtra(value *cell.Slice) (*cell.Cell, error) {
-	check := value.Copy()
-	if err := skipShardFeeCreatedBoundary(check); err != nil {
-		return nil, fmt.Errorf("shard fee value is not a valid ShardFeeCreated: %w", err)
+func (AugShardFees) LeafExtra(value *cell.Slice, dst *cell.Builder) error {
+	var check cell.Slice
+	value.CopyInto(&check)
+	if err := skipShardFeeCreatedBoundary(&check); err != nil {
+		return fmt.Errorf("shard fee value is not a valid ShardFeeCreated: %w", err)
 	}
 	if check.BitsLeft() != 0 || check.RefsNum() != 0 {
-		return nil, fmt.Errorf("shard fee value has %d trailing bits and %d trailing refs",
+		return fmt.Errorf("shard fee value has %d trailing bits and %d trailing refs",
 			check.BitsLeft(), check.RefsNum())
 	}
-	return value.Copy().ToCell()
+	value.ToBuilderInto(dst)
+	return nil
 }
 
-func (AugShardFees) CombineExtra(leftExtra, rightExtra *cell.Slice) (*cell.Cell, error) {
-	b := cell.BeginCell()
-	if err := addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil { // fees
-		return nil, err
+func (AugShardFees) CombineExtra(leftExtra, rightExtra *cell.Slice, dst *cell.Builder) error {
+	if err := addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil { // fees
+		return err
 	}
-	if err := addCurrencyCollectionSlices(b, leftExtra, rightExtra); err != nil { // create
-		return nil, err
+	if err := addCurrencyCollectionSlices(dst, leftExtra, rightExtra); err != nil { // create
+		return err
 	}
-	return b.EndCell(), nil
+	return nil
 }
-
-// NOTE: a writable augmentation for DispatchQueue (HashmapAugE 256
-// AccountDispatchQueue uint64) is intentionally NOT provided: the local
-// authoritative TON checkout (crypto/block/block.tlb) predates the dispatch
-// queue format and contains neither the TLB schema nor Aug_DispatchQueue, so
-// there is no source to derive exact semantics from. The read-only parser in
-// out_msg_queue.go remains available.
 
 // ===========================================================================
-// wrapper types and writable constructors
+// wrapper types and constructors
 // ===========================================================================
 
 // InMsgDescrAugDict wraps InMsgDescr (HashmapAugE 256 InMsg ImportFees).
@@ -1479,22 +1601,14 @@ type OutMsgDescrAugDict struct {
 	*cell.AugmentedDictionary
 }
 
-func (d *InMsgDescrAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, AugInMsgDescr{}, false)
+// LoadInMsgDescrAugDict loads a writable InMsgDescr dictionary using the rules
+// active at globalVersion.
+func LoadInMsgDescrAugDict(loader *cell.Slice, globalVersion uint32) (*InMsgDescrAugDict, error) {
+	dict, err := loader.LoadAugDict(256, AugInMsgDescr{GlobalVersion: globalVersion}, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	d.AugmentedDictionary = dict
-	return nil
-}
-
-func (d *InMsgDescrAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, AugInMsgDescr{}, true)
-	if err != nil {
-		return err
-	}
-	d.AugmentedDictionary = dict
-	return nil
+	return &InMsgDescrAugDict{AugmentedDictionary: dict}, nil
 }
 
 func (d *InMsgDescrAugDict) ToCell() (*cell.Cell, error) {
@@ -1508,22 +1622,14 @@ func (d *InMsgDescrAugDict) getAugmentedDictionary() *cell.AugmentedDictionary {
 	return d.AugmentedDictionary
 }
 
-func (d *OutMsgDescrAugDict) LoadFromCell(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, AugOutMsgDescr{}, false)
+// LoadOutMsgDescrAugDict loads a writable OutMsgDescr dictionary using the
+// rules active at globalVersion.
+func LoadOutMsgDescrAugDict(loader *cell.Slice, globalVersion uint32) (*OutMsgDescrAugDict, error) {
+	dict, err := loader.LoadAugDict(256, AugOutMsgDescr{GlobalVersion: globalVersion}, false)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	d.AugmentedDictionary = dict
-	return nil
-}
-
-func (d *OutMsgDescrAugDict) LoadFromCellAsProof(loader *cell.Slice) error {
-	dict, err := loader.LoadAugDict(256, AugOutMsgDescr{}, true)
-	if err != nil {
-		return err
-	}
-	d.AugmentedDictionary = dict
-	return nil
+	return &OutMsgDescrAugDict{AugmentedDictionary: dict}, nil
 }
 
 func (d *OutMsgDescrAugDict) ToCell() (*cell.Cell, error) {
@@ -1565,25 +1671,27 @@ func NewAccountTransactionsAugDict() (*AccountTransactionsAugDict, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AccountTransactionsAugDict{AugmentedDictionary: dict, wrapped: true}, nil
+	return &AccountTransactionsAugDict{AugmentedDictionary: dict}, nil
 }
 
-// NewInMsgDescrAugDict returns an empty writable InMsgDescr dictionary.
-func NewInMsgDescrAugDict() (*InMsgDescrAugDict, error) {
-	dict, err := cell.NewAugDict(256, AugInMsgDescr{})
+// NewInMsgDescrAugDict returns an empty writable InMsgDescr dictionary using
+// the rules active at globalVersion.
+func NewInMsgDescrAugDict(globalVersion uint32) (*InMsgDescrAugDict, error) {
+	dict, err := cell.NewAugDict(256, AugInMsgDescr{GlobalVersion: globalVersion})
 	if err != nil {
 		return nil, err
 	}
-	return &InMsgDescrAugDict{dict}, nil
+	return &InMsgDescrAugDict{AugmentedDictionary: dict}, nil
 }
 
-// NewOutMsgDescrAugDict returns an empty writable OutMsgDescr dictionary.
-func NewOutMsgDescrAugDict() (*OutMsgDescrAugDict, error) {
-	dict, err := cell.NewAugDict(256, AugOutMsgDescr{})
+// NewOutMsgDescrAugDict returns an empty writable OutMsgDescr dictionary using
+// the rules active at globalVersion.
+func NewOutMsgDescrAugDict(globalVersion uint32) (*OutMsgDescrAugDict, error) {
+	dict, err := cell.NewAugDict(256, AugOutMsgDescr{GlobalVersion: globalVersion})
 	if err != nil {
 		return nil, err
 	}
-	return &OutMsgDescrAugDict{dict}, nil
+	return &OutMsgDescrAugDict{AugmentedDictionary: dict}, nil
 }
 
 // NewOutMsgQueueAugDict returns an empty writable OutMsgQueue dictionary.

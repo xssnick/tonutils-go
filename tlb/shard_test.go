@@ -1,10 +1,13 @@
 package tlb
 
 import (
+	"encoding/binary"
 	"encoding/hex"
+	"hash/crc32"
+	"testing"
+
 	"github.com/xssnick/tonutils-go/address"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"testing"
 )
 
 func TestShardState_LoadFromCell(t *testing.T) {
@@ -36,6 +39,19 @@ func TestShardState_LoadFromCell(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if _, err = cell.FromBOC(cellBytes); err == nil {
+				t.Fatal("legacy fixture with an ordinary root level-mask mismatch must be rejected")
+			}
+
+			// The captured fixture predates strict C++ descriptor validation. Its
+			// root has mask 1 although all references have mask 0; normalize only
+			// this test copy.
+			if cellBytes[12] != 0x24 {
+				t.Fatalf("unexpected legacy root descriptor: %x", cellBytes[12])
+			}
+			cellBytes[12] = 0x04
+			binary.LittleEndian.PutUint32(cellBytes[len(cellBytes)-4:], crc32.Checksum(cellBytes[:len(cellBytes)-4], crc32.MakeTable(crc32.Castagnoli)))
+
 			_cell, err := cell.FromBOC(cellBytes)
 			if err != nil {
 				t.Fatal(err)

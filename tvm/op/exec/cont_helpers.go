@@ -11,9 +11,22 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
-func loadContinuationFromCodeCell(state *vm.State, code *cell.Cell) (vm.Continuation, error) {
-	sl, err := state.Cells.BeginParse(code)
-	if err != nil {
+// packArgPair carries two signed operand fields in a single uint64 — the first
+// in the high half, the second in the low half, each a 32-bit two's complement
+// word. The pair survives values outside the nibbles the wire format holds,
+// which is what lets a constructor keep behaving like the old per-instruction
+// object when it is handed an out-of-range argument.
+func packArgPair(first, second int) uint64 {
+	return uint64(uint32(first))<<32 | uint64(uint32(second))
+}
+
+func unpackArgPair(args uint64) (first, second int) {
+	return int(int32(args >> 32)), int(int32(args))
+}
+
+func loadContinuationFromCodeCell(state *vm.State, code *cell.Cell, trace *cell.Trace) (vm.Continuation, error) {
+	sl := new(cell.Slice)
+	if err := state.Cells.BeginParseIntoWithTrace(code, trace, sl); err != nil {
 		return nil, err
 	}
 	return &vm.OrdinaryContinuation{
@@ -23,6 +36,14 @@ func loadContinuationFromCodeCell(state *vm.State, code *cell.Cell) (vm.Continua
 		},
 		Code: sl,
 	}, nil
+}
+
+func jumpToCodeCell(state *vm.State, code *cell.Cell, trace *cell.Trace) error {
+	var target cell.Slice
+	if err := state.Cells.BeginParseIntoWithTrace(code, trace, &target); err != nil {
+		return err
+	}
+	return state.JumpToCode(&target, state.CP)
 }
 
 func pushCurrentCode(state *vm.State) error {
@@ -40,7 +61,7 @@ func checkStackDepth(state *vm.State, depth int) error {
 }
 
 func defineSavedContinuation(reg *vm.Register, idx int, cont vm.Continuation) {
-	if reg.C[idx] == nil {
+	if vm.IsNullContinuation(reg.C[idx]) {
 		reg.C[idx] = cloneContinuation(cont)
 	}
 }
@@ -88,10 +109,11 @@ type refCodeOp struct {
 	fixedBits         int64
 	serializeSuffix   func() *cell.Builder
 	deserializeSuffix func(*cell.Slice) error
-	action            func(*vm.State, []*cell.Cell) error
+	action            func(*vm.State, []*cell.Cell, []*cell.Trace) error
+	refTraces         [4]*cell.Trace
 }
 
-func newRefCodeOp(name string, prefix helpers.BitPrefix, refsCount int, action func(*vm.State, []*cell.Cell) error) *refCodeOp {
+func newRefCodeOp(name string, prefix helpers.BitPrefix, refsCount int, action func(*vm.State, []*cell.Cell, []*cell.Trace) error) *refCodeOp {
 	if refsCount < 0 || refsCount > 4 {
 		panic("refCodeOp supports at most 4 references")
 	}
@@ -112,6 +134,7 @@ func bindRefCodeOp(op *refCodeOp, refs ...*cell.Cell) vm.OP {
 			continue
 		}
 		op.refs[i] = ref
+		op.refTraces[i] = ref.Trace()
 	}
 	return op
 }
@@ -135,10 +158,11 @@ func (op *refCodeOp) DeserializeMatched(code *cell.Slice) error {
 	}
 
 	for i := 0; i < op.refsNum; i++ {
-		ref, err := code.PeekRefCell()
+		ref, trace, err := code.PeekRefCellAtWithTrace(0)
 		if err != nil {
 			for ; i < op.refsNum; i++ {
 				op.refs[i] = nil
+				op.refTraces[i] = nil
 			}
 			return nil
 		}
@@ -146,6 +170,7 @@ func (op *refCodeOp) DeserializeMatched(code *cell.Slice) error {
 			return err
 		}
 		op.refs[i] = ref
+		op.refTraces[i] = trace
 	}
 	return nil
 }
@@ -175,7 +200,7 @@ func (op *refCodeOp) Interpret(state *vm.State) error {
 			return vmerr.Error(vmerr.CodeInvalidOpcode, fmt.Sprintf("no references left for a %s instruction", op.name))
 		}
 	}
-	return op.action(state, op.refs[:op.refsNum])
+	return op.action(state, op.refs[:op.refsNum], op.refTraces[:op.refsNum])
 }
 
 func sameStackValueType(x, y any) bool {
@@ -199,6 +224,13 @@ func sameStackValueType(x, y any) bool {
 	case vm.Continuation:
 		_, ok := y.(vm.Continuation)
 		return ok
+	case *cell.Cell:
+		switch y.(type) {
+		case *cell.Cell:
+			return true
+		default:
+			return false
+		}
 	default:
 		return reflect.TypeOf(x) == reflect.TypeOf(y)
 	}

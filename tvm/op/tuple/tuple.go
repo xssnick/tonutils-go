@@ -3,7 +3,6 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	tuplepkg "github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
@@ -11,34 +10,22 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return TUPLE(0) })
+	vm.ArgList = append(vm.ArgList, tupleOp)
 }
 
-// constant prefix, computed once instead of on every decode
-var tuplePrefix = helpers.UIntPrefix(0x6f0, 12)
+var tupleOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f0, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d TUPLE", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		return execMakeTuple(state, int(uint8(args)))
+	},
+})
 
-func TUPLE(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     tuplePrefix,
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d TUPLE", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return execMakeTuple(state, int(n))
-		},
-	}
+func TUPLE(n uint8) vm.OP {
+	return vm.Bind(tupleOp, uint64(n))
 }
 
 func execMakeTuple(state *vm.State, count int) error {

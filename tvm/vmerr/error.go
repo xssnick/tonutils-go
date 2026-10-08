@@ -2,10 +2,7 @@ package vmerr
 
 import (
 	"fmt"
-	"runtime/debug"
 )
-
-var TVMTraceEnabled = false
 
 type VMError struct {
 	Code  int64
@@ -58,9 +55,6 @@ func Virtualization(virtualization int, msg ...string) VirtualizationError {
 	}
 	if len(msg) > 0 && msg[0] != "" {
 		e.Msg = msg[0]
-	}
-	if TVMTraceEnabled {
-		e.trace = string(debug.Stack())
 	}
 	return e
 }
@@ -154,9 +148,9 @@ func makeBoxedErrors() [16]error {
 }
 
 // Err returns an error for code with the default message. For small codes it
-// returns a shared pre-boxed value unless stack traces are enabled.
+// returns a shared pre-boxed value.
 func Err(code int64) error {
-	if !TVMTraceEnabled && code >= 0 && code < int64(len(boxedErrors)) {
+	if code >= 0 && code < int64(len(boxedErrors)) {
 		return boxedErrors[code]
 	}
 	return Error(code)
@@ -171,10 +165,6 @@ func Error(code int64, msg ...string) VMError {
 		e.Msg = defaultErrorMsg(code)
 	} else {
 		e.Msg = msg[0]
-	}
-
-	if TVMTraceEnabled {
-		e.trace = string(debug.Stack())
 	}
 
 	return e

@@ -3,14 +3,13 @@ package exec
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
 	vm.List = append(vm.List, func() vm.OP { return RET() })
-	vm.List = append(vm.List, func() vm.OP { return RETARGS(0) })
+	vm.ArgList = append(vm.ArgList, retArgsOp)
 	vm.List = append(vm.List, func() vm.OP { return RETBOOL() })
 	vm.List = append(vm.List, func() vm.OP { return RETDATA() })
 	vm.List = append(vm.List, func() vm.OP { return IFRET() })
@@ -28,28 +27,19 @@ func RET() *helpers.SimpleOP {
 	}
 }
 
-func RETARGS(params int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 4,
-		Action: func(state *vm.State) error {
-			return state.Return(params)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("RETARGS %d", params)
-		},
-		BitPrefix: helpers.SlicePrefix(12, []byte{0xDB, 0x20}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(params), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			params = int(val)
-			return nil
-		},
-	}
+var retArgsOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(12, []byte{0xDB, 0x20})),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		return state.Return(int(int32(args)))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("RETARGS %d", int32(args))
+	},
+})
+
+func RETARGS(params int) vm.OP {
+	return vm.Bind(retArgsOp, uint64(uint32(params)))
 }
 
 func RETBOOL() *helpers.SimpleOP {

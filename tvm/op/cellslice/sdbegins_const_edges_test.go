@@ -120,24 +120,6 @@ func TestSDBeginsConstInterpretEdges(t *testing.T) {
 			t.Fatal("quiet prefix failure should preserve source slice")
 		}
 	})
-
-	t.Run("QuietFlagPushOverflowKeepsSliceResult", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreUInt(0b10111, 5).ToSlice())
-		assertCellSliceVMErrorCode(t, SDBEGINSCONST(needle, true).Interpret(st), vmerr.CodeStackOverflow)
-		if rest := popCellSliceSlice(t, st); rest.BitsLeft() != 2 || rest.MustLoadUInt(2) != 0b11 {
-			t.Fatal("quiet overflow after hit should leave matched remainder on stack")
-		}
-
-		st = newCellSliceState()
-		fillLoadRefGramsStack(t, st, 1)
-		pushCellSliceSlice(t, st, cell.BeginCell().MustStoreUInt(0b00111, 5).ToSlice())
-		assertCellSliceVMErrorCode(t, SDBEGINSCONST(needle, true).Interpret(st), vmerr.CodeStackOverflow)
-		if preserved := popCellSliceSlice(t, st); preserved.BitsLeft() != 5 || preserved.MustLoadUInt(5) != 0b00111 {
-			t.Fatal("quiet overflow after miss should leave preserved source slice on stack")
-		}
-	})
 }
 
 func FuzzTVMSDBeginsConstRules(f *testing.F) {

@@ -212,7 +212,7 @@ func TestDictSetAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x21)); err != nil {
 		t.Fatalf("push addref key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push addref root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -245,7 +245,7 @@ func TestDictSetAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x33)); err != nil {
 		t.Fatalf("push replace-miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push replace-miss root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -346,7 +346,7 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x44)); err != nil {
 		t.Fatalf("push setget-add-ref key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setget-add-ref root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -379,7 +379,7 @@ func TestDictSetGetAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x44)); err != nil {
 		t.Fatalf("push setget-replace-miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setget-replace-miss root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -533,7 +533,7 @@ func TestDictDeleteGetAdditionalBranches(t *testing.T) {
 
 func TestDictMinMaxAdditionalBranches(t *testing.T) {
 	state := newDictTestState()
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push empty minmax root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -551,7 +551,7 @@ func TestDictMinMaxAdditionalBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push empty remmin root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -874,11 +874,11 @@ func TestPopSubdictPrefixUnsignedAndErrorPaths(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push unsigned prefix bits: %v", err)
 	}
-	bits, prefix, err := popSubdictPrefix(state, 8, dictKeyUnsignedInt)
+	prefix, err := popSubdictPrefix(state, 8, dictKeyUnsignedInt)
 	if err != nil {
 		t.Fatalf("popSubdictPrefix unsigned failed: %v", err)
 	}
-	if bits != 2 || prefix.MustBeginParse().MustLoadUInt(2) != 0b11 {
+	if prefix.bits != 2 || prefix.integer == nil || prefix.integer.Uint64() != 0b11 {
 		t.Fatalf("unexpected unsigned prefix result")
 	}
 
@@ -889,7 +889,7 @@ func TestPopSubdictPrefixUnsignedAndErrorPaths(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(2)); err != nil {
 		t.Fatalf("push bad unsigned prefix bits: %v", err)
 	}
-	_, _, err = popSubdictPrefix(state, 8, dictKeyUnsignedInt)
+	_, err = popSubdictPrefix(state, 8, dictKeyUnsignedInt)
 	if err == nil {
 		t.Fatal("expected unsigned prefix overflow")
 	}
@@ -980,7 +980,7 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setgetoptref delete value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x11)); err != nil {
@@ -1014,7 +1014,7 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x22)); err != nil {
 		t.Fatalf("push setgetoptref insert key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setgetoptref insert root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1041,13 +1041,13 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	}
 
 	state = newDictTestState()
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setgetoptref delete-miss value: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(0x22)); err != nil {
 		t.Fatalf("push setgetoptref delete-miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setgetoptref delete-miss root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1075,7 +1075,7 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
 		t.Fatalf("push setgetoptref invalid-key key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setgetoptref invalid-key root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1170,7 +1170,7 @@ func TestDictOptRefDeleteAndBuilderBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x44)); err != nil {
 		t.Fatalf("push setbuilder miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push setbuilder miss root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1237,7 +1237,7 @@ func TestPrefixMutationMissBranches(t *testing.T) {
 	if err := state.Stack.PushSlice(mustDictKeySlice(t, 0b11, 2)); err != nil {
 		t.Fatalf("push pfx replace miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push pfx replace miss root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(4)); err != nil {
@@ -1591,7 +1591,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1613,7 +1613,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1635,7 +1635,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1657,7 +1657,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1679,7 +1679,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1701,7 +1701,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushSlice(mustDictKeySlice(t, 0x1, 4)); err != nil {
 			t.Fatalf("push short key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1723,7 +1723,7 @@ func TestDictSetKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
 			t.Fatalf("push invalid key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1754,7 +1754,7 @@ func TestDictSetIntegerKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushInt(big.NewInt(128)); err != nil {
 			t.Fatalf("push invalid signed key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1783,7 +1783,7 @@ func TestDictSetIntegerKeyErrorPopOrder(t *testing.T) {
 		if err := state.Stack.PushAny(nil); err != nil {
 			t.Fatalf("push invalid key: %v", err)
 		}
-		if err := pushMaybeCell(state.Stack, nil); err != nil {
+		if err := state.Stack.PushMaybeCell(nil); err != nil {
 			t.Fatalf("push root: %v", err)
 		}
 		if err := state.Stack.PushInt(big.NewInt(8)); err != nil {
@@ -1804,18 +1804,18 @@ func TestDictSetIntegerKeyErrorPopOrder(t *testing.T) {
 		}
 	})
 
-	t.Run("signed pop set key encodes negative", func(t *testing.T) {
+	t.Run("signed pop set key keeps negative", func(t *testing.T) {
 		state := newDictTestState()
 		if err := state.Stack.PushInt(big.NewInt(-1)); err != nil {
 			t.Fatalf("push signed key: %v", err)
 		}
 
-		key, keyErr, err := popDictSetKey(state, 8, dictKeySignedInt)
+		key, keyErr, err := popDirectDictSetKey(state, 8, dictKeySignedInt)
 		if err != nil || keyErr != nil {
 			t.Fatalf("pop signed set key failed: keyErr=%v err=%v", keyErr, err)
 		}
-		if got := key.MustBeginParse().MustLoadUInt(8); got != 0xFF {
-			t.Fatalf("encoded signed key = %#x, want 0xff", got)
+		if key.integer.Cmp(big.NewInt(-1)) != 0 {
+			t.Fatalf("signed key = %v, want -1", key.integer)
 		}
 	})
 }
@@ -1872,7 +1872,7 @@ func TestDictGetIntegerKeyRangeSemantics(t *testing.T) {
 			t.Fatalf("push invalid key: %v", err)
 		}
 
-		_, _, err := popDictKey(state, 8, dictKeySignedInt, false)
+		_, _, err := popDirectDictKey(state, 8, dictKeySignedInt, false)
 		assertDictVMErrorCode(t, err, vmerr.CodeTypeCheck)
 		if state.Stack.Len() != 0 {
 			t.Fatalf("signed pop key type error should consume key, stack len=%d", state.Stack.Len())

@@ -20,19 +20,10 @@ import (
 const contOpsParityCaseCount = 215
 
 type contOpsParityCase struct {
-	name          string
-	code          *cell.Cell
-	stack         []any
-	exit          int32
-	skipReference func(int) string
-	goStack       []any
-}
-
-func contOpsDuplicateSaveReferenceSkip(version int) string {
-	if version >= 14 {
-		return "bundled reference emulator predates upstream control-register v14 silent duplicate save-list writes"
-	}
-	return ""
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  int32
 }
 
 func TestTVMCrossEmulatorContOps(t *testing.T) {
@@ -102,11 +93,7 @@ func FuzzTVMCrossEmulatorContOpsGlobalVersion(f *testing.F) {
 func runContCoreVersionedParityCase(t *testing.T, tt contOpsParityCase, version int) {
 	t.Helper()
 
-	skipReference := ""
-	if tt.skipReference != nil {
-		skipReference = tt.skipReference(version)
-	}
-	runContVersionedParityCaseWithExpected(t, tt.code, tt.stack, version, nil, skipReference, tt.goStack)
+	runContVersionedParityCaseWithExpected(t, tt.code, tt.stack, version, nil)
 }
 
 func contOpsParityCases(t *testing.T) []contOpsParityCase {
@@ -1719,9 +1706,7 @@ func contOpsParityCases(t *testing.T) []contOpsParityCase {
 				execop.SAVECTR(1).Serialize(),
 				execop.SAVECTR(1).Serialize(),
 			),
-			exit:          vmerr.CodeTypeCheck,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: vmerr.CodeTypeCheck,
 		},
 		{
 			name: "popsavectr_duplicate_save_ignored",
@@ -1763,11 +1748,7 @@ func contOpsParityCases(t *testing.T) []contOpsParityCase {
 func runContParityCase(t *testing.T, tt contOpsParityCase) {
 	t.Helper()
 
-	skipReference := ""
-	if tt.skipReference != nil {
-		skipReference = tt.skipReference(referenceRawRunGlobalVersion)
-	}
-	runContVersionedParityCase(t, tt.code, tt.stack, referenceRawRunGlobalVersion, tt.exit, skipReference, tt.goStack)
+	runContVersionedParityCase(t, tt.code, tt.stack, referenceRawRunGlobalVersion, tt.exit)
 }
 
 func TestTVMCrossEmulatorContOpsVersionedEdges(t *testing.T) {
@@ -1815,12 +1796,10 @@ func FuzzTVMCrossEmulatorContOpsVersionedEdges(f *testing.F) {
 const contOpsVersionedEdgeCaseCount = 13
 
 type contOpsVersionedEdgeCase struct {
-	name          string
-	code          *cell.Cell
-	stack         []any
-	exit          func(int) int32
-	skipReference func(int) string
-	goStack       []any
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  func(int) int32
 }
 
 func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
@@ -1889,9 +1868,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SAVECTR(1).Serialize(),
 				execop.SAVECTR(1).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "setretctr_duplicate",
@@ -1901,9 +1878,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				stackop.PUSHCONT(emptyBody).Serialize(),
 				execop.SETRETCTR(1).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "setaltctr_duplicate",
@@ -1913,9 +1888,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				stackop.PUSHCONT(emptyBody).Serialize(),
 				execop.SETALTCTR(1).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "savealtctr_duplicate",
@@ -1923,9 +1896,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SAVEALTCTR(1).Serialize(),
 				execop.SAVEALTCTR(1).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "setretctr_cell_duplicate",
@@ -1935,9 +1906,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				stackop.PUSHREF(cellValue).Serialize(),
 				execop.SETRETCTR(4).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "savectr_cell_duplicate",
@@ -1947,9 +1916,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SAVECTR(4).Serialize(),
 				execop.SAVECTR(4).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "savealtctr_cell_duplicate",
@@ -1960,9 +1927,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SETALTCTR(4).Serialize(),
 				execop.SAVEALTCTR(4).Serialize(),
 			),
-			exit:          duplicateSaveExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: duplicateSaveExit,
 		},
 		{
 			name: "setretctr_duplicate_wrong_type",
@@ -1984,9 +1949,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SETCONTCTRMANY(1<<1).Serialize(),
 				stackop.DROP().Serialize(),
 			),
-			exit:          setContManyDuplicateExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: setContManyDuplicateExit,
 		},
 		{
 			name: "setcontctrmanyx_duplicate",
@@ -2000,9 +1963,7 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 				execop.SETCONTCTRMANYX().Serialize(),
 				stackop.DROP().Serialize(),
 			),
-			exit:          setContManyDuplicateExit,
-			skipReference: contOpsDuplicateSaveReferenceSkip,
-			goStack:       []any{},
+			exit: setContManyDuplicateExit,
 		},
 	}
 }
@@ -2010,26 +1971,22 @@ func contOpsVersionedEdgeCases(t *testing.T) []contOpsVersionedEdgeCase {
 func runContOpsVersionedEdgeCase(t *testing.T, tt contOpsVersionedEdgeCase, version int) {
 	t.Helper()
 
-	skipReference := ""
-	if tt.skipReference != nil {
-		skipReference = tt.skipReference(version)
-	}
-	runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exit(version), skipReference, tt.goStack)
+	runContVersionedParityCase(t, tt.code, tt.stack, version, tt.exit(version))
 }
 
-func runContVersionedParityCase(t *testing.T, code *cell.Cell, stack []any, globalVersion int, wantExit int32, skipReference string, wantGoStack []any) {
+func runContVersionedParityCase(t *testing.T, code *cell.Cell, stack []any, globalVersion int, wantExit int32) {
 	t.Helper()
 
-	runContVersionedParityCaseWithExpected(t, code, stack, globalVersion, &wantExit, skipReference, wantGoStack)
+	runContVersionedParityCaseWithExpected(t, code, stack, globalVersion, &wantExit)
 }
 
 func runContVersionedParityCaseWithoutExpected(t *testing.T, code *cell.Cell, stack []any, globalVersion int) {
 	t.Helper()
 
-	runContVersionedParityCaseWithExpected(t, code, stack, globalVersion, nil, "", nil)
+	runContVersionedParityCaseWithExpected(t, code, stack, globalVersion, nil)
 }
 
-func runContVersionedParityCaseWithExpected(t *testing.T, code *cell.Cell, stack []any, globalVersion int, wantExit *int32, skipReference string, wantGoStack []any) {
+func runContVersionedParityCaseWithExpected(t *testing.T, code *cell.Cell, stack []any, globalVersion int, wantExit *int32) {
 	t.Helper()
 
 	code = prependRawMethodDrop(code)
@@ -2045,13 +2002,6 @@ func runContVersionedParityCaseWithExpected(t *testing.T, code *cell.Cell, stack
 	goRes, err := runGoCrossCodeWithVersion(code, cell.BeginCell().EndCell(), tuple.Tuple{}, goStack, globalVersion)
 	if err != nil {
 		t.Fatalf("go tvm execution failed: %v", err)
-	}
-	if skipReference != "" {
-		if wantExit != nil && goRes.exitCode != *wantExit {
-			t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, *wantExit)
-		}
-		assertContSkippedGoStack(t, goRes.stack, wantGoStack)
-		t.Skip(skipReference)
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(globalVersion)))
@@ -2080,32 +2030,5 @@ func runContVersionedParityCaseWithExpected(t *testing.T, code *cell.Cell, stack
 	}
 	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
 		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
-	}
-}
-
-func assertContSkippedGoStack(t *testing.T, got *cell.Cell, want []any) {
-	t.Helper()
-
-	if want == nil {
-		return
-	}
-	wantStack, err := buildCrossStack(want...)
-	if err != nil {
-		t.Fatalf("failed to build expected go stack: %v", err)
-	}
-	wantStackCell, err := stackToCell(wantStack)
-	if err != nil {
-		t.Fatalf("failed to serialize expected go stack: %v", err)
-	}
-	gotStackCell, err := normalizeStackCell(got)
-	if err != nil {
-		t.Fatalf("failed to normalize go stack: %v", err)
-	}
-	wantStackCell, err = normalizeStackCell(wantStackCell)
-	if err != nil {
-		t.Fatalf("failed to normalize expected go stack: %v", err)
-	}
-	if !bytes.Equal(gotStackCell.Hash(), wantStackCell.Hash()) {
-		t.Fatalf("go stack mismatch:\ngo=%s\nwant=%s", gotStackCell.Dump(), wantStackCell.Dump())
 	}
 }

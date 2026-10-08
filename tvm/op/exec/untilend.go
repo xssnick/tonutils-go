@@ -18,7 +18,7 @@ func UNTILEND() *helpers.SimpleOP {
 			}
 
 			after := state.Reg.C[0]
-			if cd := body.GetControlData(); cd == nil || cd.Save.C[0] == nil {
+			if cd := body.GetControlData(); cd == nil || vm.IsNullContinuation(cd.Save.C[0]) {
 				state.Reg.C[0] = &vm.UntilContinuation{
 					Body:  body,
 					After: after,

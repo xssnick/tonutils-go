@@ -455,7 +455,7 @@ func TestTupleInitRegistrationsInstantiateOps(t *testing.T) {
 	}
 
 	instantiated := 0
-	for _, getter := range vm.List {
+	for _, getter := range vm.AllOps() {
 		if getter == nil {
 			continue
 		}

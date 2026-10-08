@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	_UnknownNetworkID     = int32(-1)
-	_MaxValueSize         = 768
-	_MaxValueTTLSec       = 3600 + 60
-	_MaxOverlayNodeAgeSec = 10 * 60
-	_MaxAddressListSize   = 128
+	_UnknownNetworkID        = int32(-1)
+	_MaxValueSize            = 768
+	_MaxValueTTLSec          = 3600 + 60
+	_MaxOverlayNodeAgeSec    = 10 * 60
+	_MaxOverlayNodeFutureSec = 60
+	_MaxAddressListSize      = 128
 )
 
 func checkValueTTLAt(ttl int32, now int64) error {
@@ -225,7 +226,7 @@ func (n *Node) checkSignature(ourNetworkID int32) error {
 
 	nodeCopy := *n
 	nodeCopy.Signature = nil
-	toVerify, err := tl.Serialize(nodeCopy, true)
+	toVerify, err := tl.Serialize(&nodeCopy, true)
 	if err != nil {
 		return fmt.Errorf("failed to serialize node: %w", err)
 	}
@@ -304,13 +305,33 @@ func cloneAddressList(list *address.List) *address.List {
 	return address.CloneList(list)
 }
 
+func clonePublicKey(id any) any {
+	switch pub := id.(type) {
+	case keys.PublicKeyED25519:
+		pub.Key = append(ed25519.PublicKey(nil), pub.Key...)
+		return pub
+	case keys.PublicKeyAES:
+		pub.Key = append([]byte(nil), pub.Key...)
+		return pub
+	case keys.PublicKeyUnEnc:
+		pub.Key = append([]byte(nil), pub.Key...)
+		return pub
+	case keys.PublicKeyOverlay:
+		pub.Key = append([]byte(nil), pub.Key...)
+		return pub
+	default:
+		// Preserve unsupported types so validation can report the original error.
+		return id
+	}
+}
+
 func cloneNode(node *Node) *Node {
 	if node == nil {
 		return nil
 	}
 
 	return &Node{
-		ID:        node.ID,
+		ID:        clonePublicKey(node.ID),
 		AddrList:  cloneAddressList(node.AddrList),
 		Version:   node.Version,
 		Signature: append([]byte{}, node.Signature...),
@@ -321,7 +342,7 @@ func cloneNode(node *Node) *Node {
 // and static global config nodes.
 func BuildSignedNode(id any, list *address.List, version, networkID int32, key ed25519.PrivateKey) (*Node, error) {
 	node := &Node{
-		ID:       id,
+		ID:       clonePublicKey(id),
 		AddrList: cloneAddressList(list),
 		Version:  version,
 	}

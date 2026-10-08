@@ -286,7 +286,15 @@ func lookupNextDispatchQueueAccount(dispatchQueue *cell.AugmentedDictionary, add
 	if dispatchQueue == nil || dispatchQueue.IsEmpty() {
 		return nil, nil, cell.ErrNoSuchKeyInDict
 	}
-	return dispatchQueue.LookupNearestKey(cell.BeginCell().MustStoreSlice(addr, 256).EndCell(), true, allowEq, false)
+	// A raw leaf carries DispatchQueueAugData ahead of AccountDispatchQueue.
+	// Its constructor and optional balance must be skipped before loading the
+	// account's messages dictionary.
+	key, value, _, err := dispatchQueue.LookupNearestKeyExtra(
+		cell.BeginCell().MustStoreSlice(addr, 256).EndCell(), true, allowEq, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, value, nil
 }
 
 func lookupNextAccountDispatchMessage(messages *cell.Dictionary, lt uint64) (*cell.Cell, *cell.Slice, error) {

@@ -126,6 +126,32 @@ func TestCertificateV2Check(t *testing.T) {
 	}
 }
 
+func TestCertificateV2CheckUsesCanonicalLegacyIDForDefaultFlags(t *testing.T) {
+	issuerPub, issuerPriv := keyPairFromSeed(3)
+	overlayID := bytes.Repeat([]byte{0x33}, 32)
+	issuedToID := bytes.Repeat([]byte{0x44}, 32)
+	exp := uint32(time.Now().Add(time.Hour).Unix())
+	const maxSize = uint32(16 << 20)
+
+	certificate := CertificateV2{
+		IssuedBy: keys.PublicKeyED25519{Key: issuerPub},
+		ExpireAt: exp,
+		MaxSize:  maxSize,
+		Flags:    _CertFlagTrusted | _CertFlagAllowFEC,
+		Signature: mustSignTL(t, CertificateId{
+			OverlayID: overlayID,
+			Node:      issuedToID,
+			ExpireAt:  exp,
+			MaxSize:   maxSize,
+		}, issuerPriv),
+	}
+
+	result, err := certificate.Check(issuedToID, overlayID, 1024, true)
+	if err != nil || result != CertCheckResultTrusted {
+		t.Fatalf("canonical default-flags certificate check = %d, err=%v", result, err)
+	}
+}
+
 func TestBroadcastFECCalcID(t *testing.T) {
 	pub1, _ := keyPairFromSeed(11)
 	pub2, _ := keyPairFromSeed(12)

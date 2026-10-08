@@ -87,6 +87,28 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 	if err != nil {
 		return nil, err
 	}
+	return runReferenceTickTockShardAccountWithConfigB64AndLibraries(shardAccount, isTock, now, randSeed, configB64, libs)
+}
+
+func runReferenceTickTockShardAccountWithConfigRoot(shard *tlb.ShardAccount, isTock bool, now uint32, randSeed []byte, configRoot *cell.Cell) (*referenceTickTockResult, error) {
+	if shard == nil {
+		return nil, fmt.Errorf("reference tick/tock shard account is nil")
+	}
+	if configRoot == nil {
+		return nil, fmt.Errorf("reference tick/tock config root is nil")
+	}
+
+	shardCell, err := tlb.ToCell(shard)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize reference tick/tock shard account: %w", err)
+	}
+	return runReferenceTickTockShardAccountWithConfigB64AndLibraries(shardCell, isTock, now, randSeed, base64.StdEncoding.EncodeToString(configRoot.ToBOC()), nil)
+}
+
+func runReferenceTickTockShardAccountWithConfigB64AndLibraries(shardAccount *cell.Cell, isTock bool, now uint32, randSeed []byte, configB64 string, libs *cell.Cell) (*referenceTickTockResult, error) {
+	if shardAccount == nil {
+		return nil, fmt.Errorf("reference tick/tock shard account cell is nil")
+	}
 
 	cConfig := C.CString(configB64)
 	defer C.free(unsafe.Pointer(cConfig))
@@ -124,7 +146,7 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 	defer C.free(unsafe.Pointer(resPtr))
 
 	var raw referenceTickTockJSON
-	if err = json.Unmarshal([]byte(C.GoString(resPtr)), &raw); err != nil {
+	if err := json.Unmarshal([]byte(C.GoString(resPtr)), &raw); err != nil {
 		return nil, err
 	}
 	if !raw.Success {
@@ -147,7 +169,7 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 		}
 	}
 
-	exitCode, gasUsed, err := referenceTickTockComputePhase(txCell)
+	exitCode, gasUsed, accepted, err := referenceTickTockComputePhase(txCell)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +181,7 @@ func runReferenceTickTockWithConfigB64AndLibraries(code, data *cell.Cell, addr *
 	return &referenceTickTockResult{
 		exitCode:  exitCode,
 		gasUsed:   gasUsed,
-		accepted:  true,
+		accepted:  accepted,
 		txCell:    txCell,
 		shardCell: shardCell,
 		code:      codeCell,
@@ -248,23 +270,25 @@ func buildReferenceTickTockShardAccount(addr *address.Address, code, data *cell.
 	})
 }
 
-func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, error) {
+func referenceTickTockComputePhase(txCell *cell.Cell) (int64, int64, bool, error) {
 	var tx tlb.Transaction
 	if err := tlb.Parse(&tx, txCell); err != nil {
-		return 0, 0, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
+		return 0, 0, false, fmt.Errorf("failed to decode reference tick/tock transaction: %w", err)
 	}
 
 	desc, ok := tx.Description.(tlb.TransactionDescriptionTickTock)
 	if !ok {
-		return 0, 0, fmt.Errorf("unexpected reference transaction description type %T", tx.Description)
+		return 0, 0, false, fmt.Errorf("unexpected reference transaction description type %T", tx.Description)
 	}
 
-	vmPhase, ok := desc.ComputePhase.Phase.(tlb.ComputePhaseVM)
-	if !ok {
-		return 0, 0, fmt.Errorf("unexpected reference tick/tock compute phase type %T", desc.ComputePhase.Phase)
+	switch phase := desc.ComputePhase.Phase.(type) {
+	case tlb.ComputePhaseVM:
+		return int64(phase.Details.ExitCode), phase.Details.GasUsed.Int64(), true, nil
+	case tlb.ComputePhaseSkipped:
+		return 0, 0, false, nil
+	default:
+		return 0, 0, false, fmt.Errorf("unexpected reference tick/tock compute phase type %T", desc.ComputePhase.Phase)
 	}
-
-	return int64(vmPhase.Details.ExitCode), vmPhase.Details.GasUsed.Int64(), nil
 }
 
 func referenceTickTockAccountState(shardCell *cell.Cell) (*cell.Cell, *cell.Cell, error) {
@@ -277,8 +301,11 @@ func referenceTickTockAccountState(shardCell *cell.Cell) (*cell.Cell, *cell.Cell
 	if err := tlb.Parse(&acc, shard.Account); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode reference account state: %w", err)
 	}
-	if !acc.IsValid || acc.Status != tlb.AccountStatusActive || acc.StateInit == nil {
-		return nil, nil, fmt.Errorf("reference shard account is not active after tick/tock")
+	if !acc.IsValid {
+		return nil, nil, fmt.Errorf("reference shard account is invalid after tick/tock")
+	}
+	if acc.Status != tlb.AccountStatusActive || acc.StateInit == nil {
+		return nil, nil, nil
 	}
 	return acc.StateInit.Code, acc.StateInit.Data, nil
 }

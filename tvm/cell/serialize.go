@@ -7,6 +7,7 @@ import (
 
 var ErrTooBigValue = errors.New("too big value")
 var ErrLabelExceedsKeyBits = errors.New("label exceeds remaining key bits")
+var ErrInvalidDictForkNode = errors.New("invalid dictionary fork node")
 var ErrDictHasSpecialCells = errors.New("has special cells in tree structure")
 var ErrNegative = errors.New("value should be non negative")
 var ErrInvalidSize = errors.New("size should be positive")
@@ -19,6 +20,7 @@ var ErrTooMuchRefs = errors.New("too much refs")
 var ErrNotFit1023 = errors.New("cell data size should fit into 1023 bits")
 var ErrNoMoreRefs = errors.New("no more refs exists")
 var ErrAddressTypeNotSupported = errors.New("address type is not supported")
+var ErrVirtualizedCell = errors.New("virtualized cell cannot be serialized")
 
 func (c *Cell) ToBOC() []byte {
 	return c.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true})

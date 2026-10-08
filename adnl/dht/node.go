@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl/keys"
 	"math/bits"
@@ -79,7 +80,7 @@ func (c *Client) initNode(id []byte, addr string, serverKey ed25519.PublicKey, v
 	n := &dhtNode{
 		adnlId:     id,
 		addr:       addr,
-		serverKey:  serverKey,
+		serverKey:  append(ed25519.PublicKey(nil), serverKey...),
 		client:     c,
 		version:    version,
 		failedFrom: time.Now().UnixNano(),
@@ -97,11 +98,16 @@ func (n *dhtNode) absorb(other *dhtNode) {
 	node := cloneNode(snapshot.node)
 
 	n.mx.Lock()
+	defer n.mx.Unlock()
+
+	if snapshot.version <= n.version {
+		return
+	}
+
 	n.addr = snapshot.addr
 	n.serverKey = serverKey
 	n.version = snapshot.version
 	n.node = node
-	n.mx.Unlock()
 }
 
 func (n *dhtNode) snapshot() dhtNodeSnapshot {
@@ -145,9 +151,12 @@ func (n *dhtNode) findNodes(ctx context.Context, id []byte, K int32) (result []*
 
 	switch r := res.(type) {
 	case NodesList:
-		return filterValidNodes(r.List, n.clientNetworkID()), nil
+		nodes := filterValidNodes(r.List, n.clientNetworkID())
+		n.updateStatus(true)
+		return nodes, nil
 	}
 
+	n.updateStatus(false)
 	return nil, fmt.Errorf("failed to find nodes, unexpected response type %T", res)
 }
 
@@ -169,12 +178,20 @@ func (n *dhtNode) getSignedAddressList(ctx context.Context) (*Node, error) {
 
 	switch r := res.(type) {
 	case Node:
-		if err = r.validate(target.version, n.clientNetworkID()); err != nil {
+		if err = r.validate(0, n.clientNetworkID()); err != nil {
+			n.updateStatus(false)
 			return nil, fmt.Errorf("untrusted signed address list response: %w", err)
 		}
+		if !bytes.Equal(r.ID.(keys.PublicKeyED25519).Key, target.serverKey) {
+			n.updateStatus(false)
+			return nil, fmt.Errorf("untrusted signed address list response: unexpected node public key")
+		}
+
+		n.updateStatus(true)
 		return cloneNode(&r), nil
 	}
 
+	n.updateStatus(false)
 	return nil, fmt.Errorf("failed to get signed address list, unexpected response type %T", res)
 }
 
@@ -196,10 +213,12 @@ func (n *dhtNode) storePayload(ctx context.Context, payload []byte) error {
 
 	switch res.(type) {
 	case Stored:
+		n.updateStatus(true)
 		return nil
 	}
 
-	return fmt.Errorf("failed to find nodes, unexpected response type %T", res)
+	n.updateStatus(false)
+	return fmt.Errorf("failed to store value, unexpected response type %T", res)
 }
 
 func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any, err error) {
@@ -223,17 +242,22 @@ func (n *dhtNode) findValue(ctx context.Context, id []byte, K int32) (result any
 
 	switch r := res.(type) {
 	case ValueNotFoundResult:
-		return filterValidNodes(r.Nodes.List, n.clientNetworkID()), nil
+		nodes := filterValidNodes(r.Nodes.List, n.clientNetworkID())
+		n.updateStatus(true)
+		return nodes, nil
 	case ValueFoundResult:
 		if err = checkValueWithNetworkID(id, &r.Value, n.clientNetworkID()); err != nil {
+			n.updateStatus(false)
 			return nil, fmt.Errorf("corrupted value: %w", err)
 		}
 		if !isValueAcceptable(&r.Value) {
 			return n.findNodes(ctx, id, K)
 		}
+		n.updateStatus(true)
 		return &r.Value, nil
 	}
 
+	n.updateStatus(false)
 	return nil, fmt.Errorf("failed to find value, unexpected response type %T", res)
 }
 
@@ -315,7 +339,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		valueCopy.Signature = nil
 
 		signature := value.Signature
-		dataToCheck, err := tl.Serialize(valueCopy, true)
+		dataToCheck, err := tl.Serialize(&valueCopy, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize value: %w", err)
 		}
@@ -326,7 +350,7 @@ func checkValueWithNetworkID(id []byte, value *Value, ourNetworkID int32) error 
 		// check key signature
 		signature = value.KeyDescription.Signature
 		valueCopy.KeyDescription.Signature = nil
-		dataToCheck, err = tl.Serialize(valueCopy.KeyDescription, true)
+		dataToCheck, err = tl.Serialize(&valueCopy.KeyDescription, true)
 		if err != nil {
 			return fmt.Errorf("failed to serialize key description: %w", err)
 		}
@@ -401,6 +425,9 @@ func checkOverlayNode(node *overlay.Node, overlayID []byte, ourNetworkID int32) 
 	if !bytes.Equal(node.Overlay, overlayID) {
 		return fmt.Errorf("bad overlay id")
 	}
+	if int64(node.Version) > time.Now().Unix()+_MaxOverlayNodeFutureSec {
+		return fmt.Errorf("overlay node version is too far in the future")
+	}
 
 	pub, ok := node.ID.(keys.PublicKeyED25519)
 	if !ok {
@@ -434,7 +461,16 @@ func checkOverlayNode(node *overlay.Node, overlayID []byte, ourNetworkID int32) 
 	return nil
 }
 
+func overlayNodeVersionAcceptableAt(version int32, now int64) bool {
+	return int64(version) > now-_MaxOverlayNodeAgeSec && int64(version) <= now+_MaxOverlayNodeFutureSec
+}
+
 func isValueAcceptable(value *Value) bool {
+	now := time.Now().Unix()
+	if int64(value.TTL) <= now {
+		return false
+	}
+
 	switch value.KeyDescription.UpdateRule.(type) {
 	case UpdateRuleOverlayNodes:
 		var nodes overlay.NodesList
@@ -442,9 +478,8 @@ func isValueAcceptable(value *Value) bool {
 			return false
 		}
 
-		now := time.Now().Unix()
 		for _, node := range nodes.List {
-			if int64(node.Version)+_MaxOverlayNodeAgeSec > now {
+			if overlayNodeVersionAcceptableAt(node.Version, now) {
 				return true
 			}
 		}
@@ -486,7 +521,8 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) (dhtNodeS
 	reportLimit := t.Add(queryTimeout - 500*time.Millisecond)
 	err = peer.Query(ctx, req, res)
 	if err != nil {
-		if time.Now().After(reportLimit) {
+		// Hedge / search cancel must not mark the peer bad — we aborted the query ourselves.
+		if !errors.Is(err, context.Canceled) && time.Now().After(reportLimit) {
 			// to not report good nodes, because of our short deadline
 			n.updateStatus(false)
 		}
@@ -494,8 +530,6 @@ func (n *dhtNode) query(ctx context.Context, req, res tl.Serializable) (dhtNodeS
 	}
 	ping := time.Since(t)
 	atomic.StoreInt64(&n.ping, int64(ping))
-
-	n.updateStatus(true)
 
 	return target, nil
 }
@@ -540,11 +574,17 @@ func (n *dhtNode) markPingSuccess() {
 	if n == nil {
 		return
 	}
+
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	now := time.Now().UnixNano()
+	atomic.StoreInt32(&n.badScore, 0)
 	atomic.StoreUint32(&n.missedPings, 0)
 	atomic.StoreInt64(&n.lastPingAt, now)
 	atomic.StoreInt64(&n.pingEvery, int64(_pingIntervalDefault))
-	if atomic.LoadInt64(&n.readyAt) == 0 {
+	atomic.StoreInt64(&n.failedFrom, 0)
+	if !n.isReady() {
 		atomic.StoreInt64(&n.readyAt, now)
 	}
 }
@@ -553,6 +593,10 @@ func (n *dhtNode) markPingFailure() {
 	if n == nil {
 		return
 	}
+
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	missed := atomic.AddUint32(&n.missedPings, 1)
 	if missed <= _MaxFailCount {
 		return
@@ -567,8 +611,10 @@ func (n *dhtNode) markPingFailure() {
 		next = _pingIntervalMax
 	}
 	atomic.StoreInt64(&n.pingEvery, int64(next))
-	atomic.StoreInt64(&n.readyAt, 0)
-	atomic.StoreInt64(&n.failedFrom, time.Now().UnixNano())
+	if n.isReady() {
+		atomic.StoreInt64(&n.failedFrom, time.Now().UnixNano())
+		atomic.StoreInt64(&n.readyAt, 0)
+	}
 }
 
 func (c *Client) applyQueryPrefix(payload []byte) ([]byte, error) {
@@ -584,6 +630,9 @@ func (c *Client) applyQueryPrefix(payload []byte) ([]byte, error) {
 }
 
 func (n *dhtNode) updateStatus(isGood bool) {
+	n.mx.Lock()
+	defer n.mx.Unlock()
+
 	if isGood {
 		atomic.StoreInt32(&n.badScore, 0)
 		return
@@ -591,7 +640,13 @@ func (n *dhtNode) updateStatus(isGood bool) {
 
 	badScore := atomic.LoadInt32(&n.badScore)
 	if badScore <= _MaxFailCount {
-		atomic.AddInt32(&n.badScore, 1)
+		badScore++
+		atomic.StoreInt32(&n.badScore, badScore)
+	}
+	if badScore > _MaxFailCount && n.isReady() {
+		// Preserve the start of an outage so repeated failures do not delay eviction.
+		atomic.StoreInt64(&n.failedFrom, time.Now().UnixNano())
+		atomic.StoreInt64(&n.readyAt, 0)
 	}
 }
 

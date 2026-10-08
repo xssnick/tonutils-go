@@ -28,6 +28,15 @@ type PacketContent struct {
 	Rand2                       []byte
 
 	toSign []byte
+
+	// Backing storage for the pointer fields and for the single-message case.
+	// parsePacket points the fields above into the packet itself, so a decoded
+	// packet is one allocation instead of one per optional field.
+	seqnoStore, confirmSeqnoStore              int64
+	recvAddrVerStore, recvPriorityAddrVerStore int32
+	reinitDateStore, dstReinitDateStore        int32
+	fromStore                                  keys.PublicKeyED25519
+	messageStore                               [1]any
 }
 
 func (p *PacketContent) SeqnoValue() int64 {
@@ -60,6 +69,17 @@ func (p *PacketContent) DstReinitDateValue() int32 {
 
 var _PacketContentID uint32
 
+// _PublicKeyED25519ID is the boxed constructor of pub.ed25519, the only key
+// type a packet source may carry. It is derived from the registry rather than
+// spelled out so it cannot drift from what keys serializes.
+var _PublicKeyED25519ID = func() uint32 {
+	wire, err := tl.Serialize(keys.PublicKeyED25519{Key: make([]byte, ed25519.PublicKeySize)}, true)
+	if err != nil {
+		panic(err)
+	}
+	return binary.LittleEndian.Uint32(wire)
+}()
+
 func init() {
 	_PacketContentID = tl.CRC("adnl.packetContents rand1:bytes flags:# " +
 		"from:flags.0?PublicKey from_short:flags.1?adnl.id.short " +
@@ -72,27 +92,46 @@ func init() {
 
 var ErrTooShortData = errors.New("too short data")
 
-func parsePacket(data []byte) (_ *PacketContent, err error) {
-	orig := data
-
-	if len(data) < 4 {
-		return nil, ErrTooShortData
-	}
-
-	if _PacketContentID != binary.LittleEndian.Uint32(data[:4]) {
-		return nil, errors.New("not an adnl.packetContents")
-	}
-	data = data[4:]
-
-	var packet PacketContent
-
-	packet.Rand1, data, err = tl.FromBytesNoCopy(data)
-	if err != nil {
+// parsePacket decodes an adnl.packetContents by hand, field by field in schema
+// order. Every adnl.Message kind is decoded by parseMessageNoCopy; only the
+// address lists, which appear on root (handshake and reinit) packets and never
+// on channel traffic, are still handed to tl. The result aliases data the same
+// way the reflective decode did: rand, short id, signature and the fixed fields
+// of channel messages point into the datagram, which the caller consumes
+// before releasing it, while the payloads that handlers retain are copied by
+// the message parsers.
+func parsePacket(data []byte) (*PacketContent, error) {
+	packet := new(PacketContent)
+	if err := parsePacketInto(packet, data); err != nil {
 		return nil, err
 	}
 
+	return packet, nil
+}
+
+// parsePacketInto avoids allocating PacketContent itself on synchronous
+// receive paths. Nested messages may still allocate; packet and all slices
+// that alias data must not outlive data.
+func parsePacketInto(packet *PacketContent, data []byte) (err error) {
+	*packet = PacketContent{}
+	orig := data
+
 	if len(data) < 4 {
-		return nil, ErrTooShortData
+		return ErrTooShortData
+	}
+
+	if _PacketContentID != binary.LittleEndian.Uint32(data[:4]) {
+		return errors.New("not an adnl.packetContents")
+	}
+	data = data[4:]
+
+	packet.Rand1, data, err = tl.FromBytesNoCopy(data)
+	if err != nil {
+		return err
+	}
+
+	if len(data) < 4 {
+		return ErrTooShortData
 	}
 
 	flagsOffset := len(orig) - len(data)
@@ -100,22 +139,17 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	data = data[4:]
 
 	if flags&_FlagFrom != 0 {
-		if len(data) < 4 {
-			return nil, ErrTooShortData
-		}
-
-		var key keys.PublicKeyED25519
-		data, err = tl.ParseNoCopy(&key, data, true)
+		data, err = parsePublicKeyED25519(&packet.fromStore, data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse 'from' key, err: %w", err)
+			return fmt.Errorf("failed to parse 'from' key, err: %w", err)
 		}
 
-		packet.From = &key
+		packet.From = &packet.fromStore
 	}
 
 	if flags&_FlagFromShort != 0 {
 		if len(data) < 32 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
 		packet.FromIDShort = data[:32]
@@ -123,30 +157,43 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 	}
 
 	if flags&_FlagOneMessage != 0 {
-		var msg any
-		data, err = tl.ParseNoCopy(&msg, data, true)
+		data, err = parseMessageNoCopyInto(&packet.messageStore[0], data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse 'message', err: %w", err)
+			return fmt.Errorf("failed to parse 'message', err: %w", err)
 		}
 
-		packet.Messages = []any{msg}
+		packet.Messages = packet.messageStore[:1:1]
 	}
 
 	if flags&_FlagMultipleMessages != 0 {
 		if len(data) < 4 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
 		num := binary.LittleEndian.Uint32(data)
 		data = data[4:]
 
-		for i := uint32(0); i < num; i++ {
-			var msg any
-			data, err = tl.ParseNoCopy(&msg, data, true)
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse 'messages'[%d], err: %w", i, err)
+		if packet.Messages == nil && num > 0 {
+			// A message is at least its 4-byte constructor, so a count above
+			// a quarter of what is left cannot be satisfied and must not size
+			// the slice; the parse of the first missing message rejects it.
+			size := int(num)
+			if limit := len(data) / 4; size > limit {
+				size = limit
 			}
-			packet.Messages = append(packet.Messages, msg)
+			if size <= 1 {
+				packet.Messages = packet.messageStore[:0:1]
+			} else {
+				packet.Messages = make([]any, 0, size)
+			}
+		}
+
+		for i := uint32(0); i < num; i++ {
+			packet.Messages = append(packet.Messages, nil)
+			data, err = parseMessageNoCopyInto(&packet.Messages[len(packet.Messages)-1], data)
+			if err != nil {
+				return fmt.Errorf("failed to parse 'messages'[%d], err: %w", i, err)
+			}
 		}
 	}
 
@@ -154,80 +201,72 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		var list address.List
 		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse 'address', err: %w", err)
+			return fmt.Errorf("failed to parse 'address', err: %w", err)
 		}
 		packet.Address = &list
-
-		// TODO: check
-		// ppp, _ := json.Marshal(packet.Address)
-		// println("GOT SIMPLE", string(ppp))
 	}
 
 	if flags&_FlagPriorityAddress != 0 {
 		var list address.List
 		data, err = tl.ParseNoCopy(&list, data, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse 'priority address', err: %w", err)
+			return fmt.Errorf("failed to parse 'priority address', err: %w", err)
 		}
 		packet.PriorityAddress = &list
 	}
 
 	if flags&_FlagSeqno != 0 {
 		if len(data) < 8 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
-		seqno := int64(binary.LittleEndian.Uint64(data))
+		packet.seqnoStore = int64(binary.LittleEndian.Uint64(data))
+		packet.Seqno = &packet.seqnoStore
 		data = data[8:]
-
-		packet.Seqno = &seqno
 	}
 
 	if flags&_FlagConfirmSeqno != 0 {
 		if len(data) < 8 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
-		seqno := int64(binary.LittleEndian.Uint64(data))
+		packet.confirmSeqnoStore = int64(binary.LittleEndian.Uint64(data))
+		packet.ConfirmSeqno = &packet.confirmSeqnoStore
 		data = data[8:]
-
-		packet.ConfirmSeqno = &seqno
 	}
 
 	if flags&_FlagRecvAddrListVer != 0 {
 		if len(data) < 4 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
-		ver := int32(binary.LittleEndian.Uint32(data))
+		packet.recvAddrVerStore = int32(binary.LittleEndian.Uint32(data))
+		packet.RecvAddrListVersion = &packet.recvAddrVerStore
 		data = data[4:]
-
-		packet.RecvAddrListVersion = &ver
 	}
 
 	if flags&_FlagRecvPriorityAddrVer != 0 {
 		if len(data) < 4 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
-		ver := int32(binary.LittleEndian.Uint32(data))
+		packet.recvPriorityAddrVerStore = int32(binary.LittleEndian.Uint32(data))
+		packet.RecvPriorityAddrListVersion = &packet.recvPriorityAddrVerStore
 		data = data[4:]
-
-		packet.RecvPriorityAddrListVersion = &ver
 	}
 
 	if flags&_FlagReinitDate != 0 {
 		if len(data) < 8 {
-			return nil, ErrTooShortData
+			return ErrTooShortData
 		}
 
-		reinit := int32(binary.LittleEndian.Uint32(data))
+		packet.reinitDateStore = int32(binary.LittleEndian.Uint32(data))
+		packet.ReinitDate = &packet.reinitDateStore
 		data = data[4:]
-		packet.ReinitDate = &reinit
 
-		dstReinit := int32(binary.LittleEndian.Uint32(data))
+		packet.dstReinitDateStore = int32(binary.LittleEndian.Uint32(data))
+		packet.DstReinitDate = &packet.dstReinitDateStore
 		data = data[4:]
-		packet.DstReinitDate = &dstReinit
 	}
 
 	signatureStart, signatureEnd := -1, -1
@@ -235,25 +274,46 @@ func parsePacket(data []byte) (_ *PacketContent, err error) {
 		signatureStart = len(orig) - len(data)
 		packet.Signature, data, err = tl.FromBytesNoCopy(data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse signature: %w", err)
+			return fmt.Errorf("failed to parse signature: %w", err)
 		}
 		signatureEnd = len(orig) - len(data)
 	}
 
 	packet.Rand2, data, err = tl.FromBytesNoCopy(data)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse rand2: %w", err)
+		return fmt.Errorf("failed to parse rand2: %w", err)
 	}
 
 	if len(data) > 0 {
-		return nil, fmt.Errorf("too much data in packet")
+		return fmt.Errorf("too much data in packet")
 	}
 
 	if signatureStart >= 0 {
 		packet.toSign = buildPacketToSign(orig, flagsOffset, flags, signatureStart, signatureEnd)
 	}
 
-	return &packet, nil
+	return nil
+}
+
+// parsePublicKeyED25519 reads a boxed pub.ed25519 into key. The key bytes are
+// copied, as keys.PublicKeyED25519.Parse does, because the source key outlives
+// the datagram: the gateway and the peer learn it from root packets.
+func parsePublicKeyED25519(key *keys.PublicKeyED25519, data []byte) ([]byte, error) {
+	if len(data) < 4 {
+		return nil, ErrTooShortData
+	}
+	if id := binary.LittleEndian.Uint32(data); id != _PublicKeyED25519ID {
+		return nil, fmt.Errorf("invalid TL type id %08x, want pub.ed25519 for packet source", id)
+	}
+	data = data[4:]
+
+	if len(data) < ed25519.PublicKeySize {
+		return nil, ErrTooShortData
+	}
+
+	key.Key = make([]byte, ed25519.PublicKeySize)
+	copy(key.Key, data)
+	return data[ed25519.PublicKeySize:], nil
 }
 
 func buildPacketToSign(data []byte, flagsOffset int, flags uint32, signatureStart, signatureEnd int) []byte {

@@ -80,10 +80,6 @@ func TestSimpleOPLifecycle(t *testing.T) {
 	if op.MinGlobalVersion() != 13 {
 		t.Fatalf("unexpected min version: %d", op.MinGlobalVersion())
 	}
-	if !op.Reusable() {
-		t.Fatal("expected simple op to be reusable")
-	}
-
 	if err := op.Deserialize(encoded.MustBeginParse()); err != nil {
 		t.Fatalf("deserialize failed: %v", err)
 	}
@@ -131,61 +127,48 @@ func TestSimpleOPLifecycle(t *testing.T) {
 	}
 }
 
-func TestAdvancedOPLifecycle(t *testing.T) {
-	var decoded uint64
+func TestArgOPLifecycle(t *testing.T) {
 	called := 0
 
-	op := &AdvancedOP{
-		Action: func(state *vm.State) error {
+	op := NewArgOP(&ArgOP{
+		Prefixed: SinglePrefixed(helpersPrefixForTest()),
+		ArgBits:  3,
+		Action: func(state *vm.State, args uint64) error {
 			called++
-			return state.Stack.PushInt(big.NewInt(77))
+			return state.Stack.PushInt(big.NewInt(int64(args) + 72))
 		},
-		BitPrefix: helpersPrefixForTest(),
-		NameSerializer: func() string {
-			return "ADVANCED"
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(0x5, 3)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(3)
-			if err != nil {
-				return err
-			}
-			decoded = val
-			return nil
-		},
-		BaseGasPrice:  4,
-		FixedSizeBits: 3,
-		MinVersion:    21,
-	}
+		Name:         func(uint64) string { return "ADVANCED" },
+		BaseGasPrice: 4,
+		MinVersion:   21,
+	})
 
 	if len(op.GetPrefixes()) != 1 {
 		t.Fatalf("unexpected prefix count")
 	}
-	if op.SerializeText() != "ADVANCED" {
-		t.Fatalf("unexpected name: %q", op.SerializeText())
+	if op.SerializeArgsText(0x5) != "ADVANCED" {
+		t.Fatalf("unexpected name: %q", op.SerializeArgsText(0x5))
 	}
-	if op.InstructionBits() != 7 {
-		t.Fatalf("unexpected instruction bits: %d", op.InstructionBits())
+	if op.ArgInstructionBits(0x5) != 7 {
+		t.Fatalf("unexpected instruction bits: %d", op.ArgInstructionBits(0x5))
 	}
 	if op.MinGlobalVersion() != 21 {
 		t.Fatalf("unexpected min version: %d", op.MinGlobalVersion())
 	}
 
-	serialized := op.Serialize().EndCell()
+	serialized := op.SerializeArgs(0x5).EndCell()
 	if got := serialized.MustBeginParse().MustLoadUInt(7); got != 0b1010101 {
 		t.Fatalf("unexpected serialized value: %#b", got)
 	}
-	if err := op.Deserialize(serialized.MustBeginParse()); err != nil {
-		t.Fatalf("deserialize failed: %v", err)
+	decoded, err := op.DecodeArgs(nil, serialized.MustBeginParse())
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
 	}
 	if decoded != 0x5 {
-		t.Fatalf("unexpected decoded suffix: %d", decoded)
+		t.Fatalf("unexpected decoded operand: %d", decoded)
 	}
 
 	state := &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(10), GlobalVersion: vm.MaxSupportedGlobalVersion}
-	if err := op.Interpret(state); err != nil {
+	if err := op.InterpretArgs(state, decoded); err != nil {
 		t.Fatalf("interpret failed: %v", err)
 	}
 	if called != 1 {
@@ -199,22 +182,21 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 		t.Fatalf("unexpected pushed int: %s", got.String())
 	}
 
-	plain := &AdvancedOP{
-		Action:         func(*vm.State) error { return nil },
-		BitPrefix:      BytesPrefix(0x80),
-		NameSerializer: func() string { return "PLAIN" },
-	}
-	if err := plain.Deserialize(plain.Serialize().EndCell().MustBeginParse()); err != nil {
-		t.Fatalf("plain deserialize failed: %v", err)
+	// An opcode with no operand still round-trips through the shared instance.
+	plain := NewArgOP(&ArgOP{
+		Prefixed: SinglePrefixed(BytesPrefix(0x80)),
+		Action:   func(*vm.State, uint64) error { return nil },
+		Name:     func(uint64) string { return "PLAIN" },
+	})
+	if _, err := plain.DecodeArgs(nil, plain.SerializeArgs(0).EndCell().MustBeginParse()); err != nil {
+		t.Fatalf("plain decode failed: %v", err)
 	}
 
-	multiPrefix := &AdvancedOP{
-		BitPrefix: BytesPrefix(0x82),
-		Prefixes: []BitPrefix{
-			BytesPrefix(0x83),
-			SlicePrefix(4, []byte{0x90}),
-		},
-	}
+	multiPrefix := NewArgOP(&ArgOP{
+		Prefixed: NewPrefixed(BytesPrefix(0x83), BytesPrefix(0x90)),
+		Action:   func(*vm.State, uint64) error { return nil },
+		Name:     func(uint64) string { return "MULTI" },
+	})
 	prefixes := multiPrefix.GetPrefixes()
 	if len(prefixes) != 2 {
 		t.Fatalf("unexpected multi prefix count: %d", len(prefixes))
@@ -222,44 +204,46 @@ func TestAdvancedOPLifecycle(t *testing.T) {
 	if got := prefixes[0].MustLoadUInt(8); got != 0x83 {
 		t.Fatalf("unexpected first multi prefix: %#x", got)
 	}
-	if got := prefixes[1].MustLoadUInt(4); got != 0x9 {
+	if got := prefixes[1].MustLoadUInt(8); got != 0x90 {
 		t.Fatalf("unexpected second multi prefix: %#x", got)
 	}
 
-	variant := FullOpcodeVariant(&AdvancedOP{
-		Action:            func(*vm.State) error { return nil },
-		BitPrefix:         BytesPrefix(0x84),
-		Prefixes:          []BitPrefix{BytesPrefix(0x85)},
-		NameSerializer:    func() string { return "VARIANT" },
-		SerializeSuffix:   func() *cell.Builder { return cell.BeginCell().MustStoreUInt(0x7, 3) },
-		DeserializeSuffix: func(*cell.Slice) error { t.Fatal("variant suffix should be cleared"); return nil },
-		FixedSizeBits:     3,
-		MinVersion:        31,
-	}, UIntPrefix(0x12, 6))
-	if !variant.(interface{ Reusable() bool }).Reusable() {
-		t.Fatal("expected full opcode variant to be reusable")
+	// Prefixes of differing length would leave the default decoder guessing how
+	// far to skip, so building such an opcode without its own Decode is refused
+	// rather than silently mis-decoded.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected mixed-length prefixes without Decode to panic")
+			}
+		}()
+		NewArgOP(&ArgOP{
+			Prefixed: NewPrefixed(BytesPrefix(0x83), SlicePrefix(4, []byte{0x90})),
+			Action:   func(*vm.State, uint64) error { return nil },
+			Name:     func(uint64) string { return "MIXED" },
+		})
+	}()
+
+	// Bind drives a shared opcode through the plain OP interface.
+	bound := vm.Bind(op, 0x5)
+	if bound.SerializeText() != "ADVANCED" {
+		t.Fatalf("unexpected bound name: %q", bound.SerializeText())
 	}
-	if got := variant.(interface{ MinGlobalVersion() int }).MinGlobalVersion(); got != 31 {
-		t.Fatalf("unexpected variant min version: %d", got)
+	if got := bound.Serialize().EndCell().MustBeginParse().MustLoadUInt(7); got != 0b1010101 {
+		t.Fatalf("unexpected bound serialization: %#b", got)
 	}
-	if got := variant.(interface{ InstructionBits() int64 }).InstructionBits(); got != 6 {
-		t.Fatalf("unexpected variant instruction bits: %d", got)
-	}
-	if got := variant.Serialize().EndCell().MustBeginParse().MustLoadUInt(6); got != 0x12 {
-		t.Fatalf("unexpected variant prefix: %#x", got)
-	}
-	if err := variant.Deserialize(variant.Serialize().EndCell().MustBeginParse()); err != nil {
-		t.Fatalf("variant deserialize failed: %v", err)
+	if err := bound.Deserialize(bound.Serialize().EndCell().MustBeginParse()); err != nil {
+		t.Fatalf("bound deserialize failed: %v", err)
 	}
 
 	state = &vm.State{Stack: vm.NewStack(), Gas: vm.GasWithLimit(1), GlobalVersion: vm.MaxSupportedGlobalVersion}
-	failing := &AdvancedOP{
-		Action:         func(*vm.State) error { t.Fatal("action should not run"); return nil },
-		BitPrefix:      BytesPrefix(0x81),
-		NameSerializer: func() string { return "FAIL" },
-		BaseGasPrice:   2,
-	}
-	if err := failing.Interpret(state); err == nil {
+	failing := NewArgOP(&ArgOP{
+		Prefixed:     SinglePrefixed(BytesPrefix(0x81)),
+		Action:       func(*vm.State, uint64) error { t.Fatal("action should not run"); return nil },
+		Name:         func(uint64) string { return "FAIL" },
+		BaseGasPrice: 2,
+	})
+	if err := failing.InterpretArgs(state, 0); err == nil {
 		t.Fatal("expected out of gas")
 	}
 }
@@ -297,6 +281,59 @@ func TestMathHelpers(t *testing.T) {
 	if got := DivCeil(big.NewInt(-7), big.NewInt(3)); got.Int64() != -2 {
 		t.Fatalf("unexpected negative ceil result: %s", got)
 	}
+}
+
+// The padded key a truncated instruction selects decides how much gas the
+// reference VM charges before throwing inv_opcode, so the arithmetic is pinned
+// here together with the fact that the remainder is always consumed.
+func TestPeekZeroPaddedOpcode(t *testing.T) {
+	t.Run("PadsAndDrainsRemainder", func(t *testing.T) {
+		tests := []struct {
+			name string
+			raw  uint64
+			rest uint
+			bits uint
+			want uint64
+		}{
+			{name: "EmptyByte", bits: 8},
+			{name: "SingleBitByte", raw: 0b1, rest: 1, bits: 8, want: 0x80},
+			{name: "SevenBitsByte", raw: 0b1000001, rest: 7, bits: 8, want: 0x82},
+			{name: "EmptyNibble", bits: 4},
+			{name: "SingleBitNibble", raw: 0b1, rest: 1, bits: 4, want: 0b1000},
+			{name: "ThreeBitsNibble", raw: 0b011, rest: 3, bits: 4, want: 0b0110},
+			{name: "EmptyTriple", bits: 3},
+			{name: "TwoBitsTriple", raw: 0b11, rest: 2, bits: 3, want: 0b110},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				code := cell.BeginCell().MustStoreUInt(tt.raw, tt.rest).EndCell().MustBeginParse()
+				if got := PeekZeroPaddedOpcode(code, tt.bits); got != tt.want {
+					t.Fatalf("unexpected padded opcode: got %#b want %#b", got, tt.want)
+				}
+				if left := code.BitsLeft(); left != 0 {
+					t.Fatalf("remainder must be consumed, %d bits left", left)
+				}
+			})
+		}
+	})
+
+	// Padding only ever appends zeros, so an opcode-table key whose lowest bit is
+	// set can never be selected by a truncated instruction.
+	t.Run("TrailingOneKeysAreUnreachable", func(t *testing.T) {
+		for rest := uint(0); rest < 8; rest++ {
+			for raw := uint64(0); raw < 1<<rest; raw++ {
+				code := cell.BeginCell().MustStoreUInt(raw, rest).EndCell().MustBeginParse()
+				got := PeekZeroPaddedOpcode(code, 8)
+				if want := raw << (8 - rest); got != want {
+					t.Fatalf("raw %#b of %d bits: got %#x want %#x", raw, rest, got, want)
+				}
+				if got&1 != 0 {
+					t.Fatalf("raw %#b of %d bits padded to odd key %#x", raw, rest, got)
+				}
+			}
+		}
+	})
 }
 
 func helpersPrefixForTest() BitPrefix {

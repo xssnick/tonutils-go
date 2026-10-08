@@ -299,7 +299,7 @@ func pushPrefixDictOversizedKeyMissArgs(t *testing.T, state *vm.State, key *cell
 	if err := state.Stack.PushSlice(key.Copy()); err != nil {
 		t.Fatalf("push key: %v", err)
 	}
-	if err := pushMaybeCell(state.Stack, root); err != nil {
+	if err := state.Stack.PushMaybeCell(root); err != nil {
 		t.Fatalf("push root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {

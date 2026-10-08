@@ -3,6 +3,7 @@ package stack
 import (
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
@@ -13,17 +14,20 @@ import (
 func init() {
 	vm.List = append(vm.List,
 		func() vm.OP { return DUMPSTK() },
-		func() vm.OP { return DUMP(0) },
-		func() vm.OP { return DEBUG(1) },
 		func() vm.OP { return DEBUGSTR(nil) },
 		func() vm.OP { return STRDUMP() },
 	)
+	vm.ArgList = append(vm.ArgList, dumpOp, debugOp)
 }
 
 func DUMPSTK() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
-			state.Tracef("#DEBUG#: stack(%d values)\n%s", state.Stack.Len(), state.Stack.String())
+			if !state.TraceEnabled() {
+				return nil
+			}
+
+			state.Trace(debugStackString(state.Stack))
 			return nil
 		},
 		Name:      "DUMPSTK",
@@ -31,69 +35,63 @@ func DUMPSTK() *helpers.SimpleOP {
 	}
 }
 
-func DUMP(idx uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			if int(idx) >= state.Stack.Len() {
-				state.Tracef("#DEBUG#: s%d is absent", idx)
-				return nil
-			}
-
-			val, err := state.Stack.Get(int(idx))
-			if err != nil {
-				return nil
-			}
-
-			state.Tracef("#DEBUG#: s%d = %s", idx, debugValueString(val))
+var dumpOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xFE2, 12)),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		if !state.TraceEnabled() {
 			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("DUMP s%d", idx)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xFE2, 12),
-		FixedSizeBits: 4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			idx = uint8(v)
+		}
+
+		if int(args) >= state.Stack.Len() {
+			state.Tracef("#DEBUG#: s%d is absent", args)
 			return nil
-		},
-	}
+		}
+
+		val, err := state.Stack.Get(int(args))
+		if err != nil {
+			return nil
+		}
+
+		state.Tracef("#DEBUG#: s%d = %s", args, debugValueString(val))
+		return nil
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("DUMP s%d", args)
+	},
+})
+
+func DUMP(idx uint8) vm.OP {
+	return vm.Bind(dumpOp, uint64(idx))
 }
 
-func DEBUG(arg uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		Action: func(state *vm.State) error {
-			state.Tracef("DEBUG %d", arg)
+var debugOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xFE)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		if !state.TraceEnabled() {
 			return nil
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("DEBUG %d", arg)
-		},
-		BitPrefix:     helpers.BytesPrefix(0xFE),
-		FixedSizeBits: 8,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(arg), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			arg = uint8(v)
-			return nil
-		},
-	}
+		}
+
+		state.Tracef("DEBUG %d", args)
+		return nil
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("DEBUG %d", args)
+	},
+})
+
+func DEBUG(arg uint8) vm.OP {
+	return vm.Bind(debugOp, uint64(arg))
 }
 
 func STRDUMP() *helpers.SimpleOP {
 	return &helpers.SimpleOP{
 		Action: func(state *vm.State) error {
+			if !state.TraceEnabled() {
+				return nil
+			}
+
 			if state.Stack.Len() == 0 {
 				state.Tracef("#DEBUG#: s0 is absent")
 				return nil
@@ -189,6 +187,10 @@ func (op *debugStrOp) SerializeText() string {
 }
 
 func (op *debugStrOp) Interpret(state *vm.State) error {
+	if !state.TraceEnabled() {
+		return nil
+	}
+
 	state.Tracef("DEBUGSTR %X", op.data)
 	return nil
 }
@@ -211,10 +213,38 @@ func debugValueString(v any) string {
 		}
 		return x.WithoutTrace().MustToCell().Dump() + " [slice]"
 	case *cell.Builder:
+		if x == nil {
+			return "null [builder]"
+		}
 		return x.WithoutTrace().EndCell().Dump() + " [builder]"
 	case *cell.Cell:
+		if x == nil {
+			return "null [cell]"
+		}
 		return x.Dump() + " [cell]"
 	default:
 		return fmt.Sprintf("%v [%T]", x, x)
 	}
+}
+
+func debugStackString(stack *vm.Stack) string {
+	depth := stack.Len()
+	dumpDepth := depth
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "#DEBUG#: stack(%d values) : ", depth)
+	if dumpDepth > 255 {
+		b.WriteString("... ")
+		dumpDepth = 255
+	}
+	for i := dumpDepth - 1; i >= 0; i-- {
+		val, err := stack.Get(i)
+		if err != nil {
+			panic(err)
+		}
+		b.WriteString(debugValueString(val))
+		b.WriteByte(' ')
+	}
+
+	return b.String()
 }

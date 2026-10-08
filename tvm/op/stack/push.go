@@ -2,59 +2,37 @@ package stack
 
 import (
 	"fmt"
+
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-type OpPUSH struct {
-	helpers.Prefixed
-	stackIndex uint8
-}
-
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return PUSH(0) })
+	vm.ArgList = append(vm.ArgList, pushOp)
 }
 
-var pushPrefixed = helpers.SinglePrefixed(helpers.UIntPrefix(0x2, 4))
-
-func PUSH(stackIndex uint8) *OpPUSH {
-	return &OpPUSH{
-		Prefixed:   pushPrefixed,
-		stackIndex: stackIndex,
-	}
-}
-
-func (op *OpPUSH) Deserialize(code *cell.Slice) error {
-	prefix, err := code.LoadUInt(4)
-	if err != nil {
-		return err
-	}
-
-	if prefix == 0x02 {
-		index, err := code.LoadUInt(4)
+var pushOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x2, 4)),
+	ArgBits:  4,
+	Action: func(state *vm.State, args uint64) error {
+		return state.Stack.PushAt(int(args))
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		prefix, err := code.LoadUInt(4)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		op.stackIndex = uint8(index)
-		return nil
-	}
+		if prefix != 0x2 {
+			return 0, vm.ErrCorruptedOpcode
+		}
+		return code.LoadUInt(4)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("s%d PUSH", args)
+	},
+})
 
-	return vm.ErrCorruptedOpcode
-}
-
-func (op *OpPUSH) Serialize() *cell.Builder {
-	return helpers.Builder([]byte{0x20 | op.stackIndex})
-}
-
-func (op *OpPUSH) SerializeText() string {
-	return fmt.Sprintf("s%d PUSH", op.stackIndex)
-}
-
-func (op *OpPUSH) InstructionBits() int64 {
-	return 8
-}
-
-func (op *OpPUSH) Interpret(state *vm.State) error {
-	return state.Stack.PushAt(int(op.stackIndex))
+func PUSH(stackIndex uint8) vm.OP {
+	return vm.Bind(pushOp, uint64(stackIndex))
 }

@@ -41,7 +41,7 @@ func TestLeftShiftAndPow2ErrorEdges(t *testing.T) {
 	})
 
 	t.Run("LSHIFTCODEShortSuffix", func(t *testing.T) {
-		op := LSHIFTCODE(0)
+		op := LSHIFTCODE(1)
 		code := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell().MustBeginParse()
 		if err := op.Deserialize(code); err == nil {
 			t.Fatalf("LSHIFT# short suffix deserialize unexpectedly succeeded")
@@ -107,7 +107,7 @@ func FuzzTVMLeftShiftPow2RangeAndOverflowRules(f *testing.F) {
 		case 0:
 			err = LSHIFT().Interpret(st)
 		case 1:
-			err = LSHIFTCODE(int8(shift)).Interpret(st)
+			err = LSHIFTCODE(int(shift)).Interpret(st)
 		default:
 			err = POW2().Interpret(st)
 		}

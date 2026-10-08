@@ -19,6 +19,74 @@ import (
 //go:embed testdata/block_0_8000000000000000_71398501.boc
 var mainnetBlockBOC []byte
 
+const legacyMsgDescrGlobalVersion = uint32(11)
+
+func buildAugmentationEmptyExtra(aug cell.Augmentation) (*cell.Cell, error) {
+	var dst cell.Builder
+	if err := aug.EmptyExtra(&dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+func buildAugmentationLeafExtra(aug cell.Augmentation, value *cell.Slice) (*cell.Cell, error) {
+	view, err := boundedAugmentationView(value)
+	if err != nil {
+		return nil, err
+	}
+	var dst cell.Builder
+	if err = aug.LeafExtra(&view, &dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+func buildAugmentationCombinedExtra(aug cell.Augmentation, left, right *cell.Slice) (*cell.Cell, error) {
+	leftView, err := boundedAugmentationView(left)
+	if err != nil {
+		return nil, err
+	}
+	rightView, err := boundedAugmentationView(right)
+	if err != nil {
+		return nil, err
+	}
+	var dst cell.Builder
+	if err = aug.CombineExtra(&leftView, &rightView, &dst); err != nil {
+		return nil, err
+	}
+	return dst.EndCell(), nil
+}
+
+// boundedAugmentationView puts the input behind an unrelated bit prefix and
+// suffix. Augmentation implementations must consume only the supplied Slice
+// range; inspecting RawCell/BaseCell identity or metadata would observe the
+// wrapper instead of the augmentation value.
+func boundedAugmentationView(src *cell.Slice) (cell.Slice, error) {
+	var value cell.Builder
+	src.ToBuilderInto(&value)
+
+	var wrapper cell.Builder
+	if err := wrapper.StoreUInt(0b101, 3); err != nil {
+		return cell.Slice{}, err
+	}
+	if err := wrapper.StoreBuilder(&value); err != nil {
+		return cell.Slice{}, err
+	}
+	if err := wrapper.StoreUInt(0b11, 2); err != nil {
+		return cell.Slice{}, err
+	}
+
+	loader := wrapper.EndCell().MustBeginParse()
+	if err := loader.SkipBits(3); err != nil {
+		return cell.Slice{}, err
+	}
+	var view cell.Slice
+	if err := loader.FetchSubsliceInto(&view, value.BitsUsed(), value.RefsUsed()); err != nil {
+		return cell.Slice{}, err
+	}
+	return view, nil
+}
+
 func loadMainnetBlock(t *testing.T) *Block {
 	t.Helper()
 
@@ -100,7 +168,7 @@ func rebuildAugDictAndCompare(t *testing.T, name string, original, rebuilt *cell
 			t.Fatalf("%s: failed to capture extra %d: %v", name, i, err)
 		}
 
-		derivedExtra, err := aug.LeafExtra(item.Value.Copy())
+		derivedExtra, err := buildAugmentationLeafExtra(aug, item.Value.Copy())
 		if err != nil {
 			t.Fatalf("%s: failed to derive leaf extra %d (key %x): %v", name, i, item.Key.Hash(), err)
 		}
@@ -126,31 +194,33 @@ func rebuildAugDictAndCompare(t *testing.T, name string, original, rebuilt *cell
 func TestAugInMsgDescrRebuildFromMainnetBlock(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var original InMsgDescrAugDict
-	if err := LoadFromCell(&original, blk.Extra.InMsgDesc.MustBeginParse()); err != nil {
+	original, err := LoadInMsgDescrAugDict(blk.Extra.InMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load in msg descr: %v", err)
 	}
 
-	rebuilt, err := NewInMsgDescrAugDict()
+	rebuilt, err := NewInMsgDescrAugDict(legacyMsgDescrGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuildAugDictAndCompare(t, "InMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary, AugInMsgDescr{})
+	rebuildAugDictAndCompare(t, "InMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary,
+		AugInMsgDescr{GlobalVersion: legacyMsgDescrGlobalVersion})
 }
 
 func TestAugOutMsgDescrRebuildFromMainnetBlock(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var original OutMsgDescrAugDict
-	if err := LoadFromCell(&original, blk.Extra.OutMsgDesc.MustBeginParse()); err != nil {
+	original, err := LoadOutMsgDescrAugDict(blk.Extra.OutMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load out msg descr: %v", err)
 	}
 
-	rebuilt, err := NewOutMsgDescrAugDict()
+	rebuilt, err := NewOutMsgDescrAugDict(legacyMsgDescrGlobalVersion)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rebuildAugDictAndCompare(t, "OutMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary, AugOutMsgDescr{})
+	rebuildAugDictAndCompare(t, "OutMsgDescr", original.AugmentedDictionary, rebuilt.AugmentedDictionary,
+		AugOutMsgDescr{GlobalVersion: legacyMsgDescrGlobalVersion})
 }
 
 func TestAugShardAccountBlocksRebuildFromMainnetBlock(t *testing.T) {
@@ -250,7 +320,7 @@ func TestAugAccountTransactionsRebuildFromMainnetBlock(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			derived, err := AugAccountTransactions{}.LeafExtra(tx.Value.Copy())
+			derived, err := buildAugmentationLeafExtra(AugAccountTransactions{}, tx.Value.Copy())
 			if err != nil {
 				t.Fatalf("failed to derive tx %d extra: %v", i, err)
 			}
@@ -337,8 +407,8 @@ func TestAugCombineWithOnMainnetShardAccountBlocks(t *testing.T) {
 func TestImportFeesRoundTripAgainstMainnetExtras(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var descr InMsgDescrAugDict
-	if err := LoadFromCell(&descr, blk.Extra.InMsgDesc.MustBeginParse()); err != nil {
+	descr, err := LoadInMsgDescrAugDict(blk.Extra.InMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load in msg descr: %v", err)
 	}
 
@@ -380,11 +450,74 @@ func TestImportFeesRoundTripAgainstMainnetExtras(t *testing.T) {
 	mustCellHashEqual(t, "ImportFees root extra round-trip", serialized, rootExtraCell)
 }
 
+type mutableDescriptorDict interface {
+	ToCell() (*cell.Cell, error)
+	Set(*cell.Cell, *cell.Cell) error
+	Delete(*cell.Cell) error
+}
+
+func TestDecodedMessageDescriptorsRemainWritable(t *testing.T) {
+	key := cell.BeginCell().MustStoreUInt(0, 256).EndCell()
+	dummy := cell.BeginCell().EndCell()
+
+	tests := []struct {
+		name       string
+		descriptor *cell.Cell
+		new        func() (mutableDescriptorDict, error)
+		load       func(*cell.Slice) (mutableDescriptorDict, error)
+	}{
+		{
+			name:       "in",
+			descriptor: cell.BeginCell().MustStoreUInt(0, 3).EndCell(),
+			new: func() (mutableDescriptorDict, error) {
+				return NewInMsgDescrAugDict(legacyMsgDescrGlobalVersion)
+			},
+			load: func(s *cell.Slice) (mutableDescriptorDict, error) {
+				return LoadInMsgDescrAugDict(s, legacyMsgDescrGlobalVersion)
+			},
+		},
+		{
+			name: "out",
+			descriptor: cell.BeginCell().MustStoreUInt(0, 3).
+				MustStoreRef(dummy).MustStoreRef(dummy).EndCell(),
+			new: func() (mutableDescriptorDict, error) {
+				return NewOutMsgDescrAugDict(legacyMsgDescrGlobalVersion)
+			},
+			load: func(s *cell.Slice) (mutableDescriptorDict, error) {
+				return LoadOutMsgDescrAugDict(s, legacyMsgDescrGlobalVersion)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			empty, err := test.new()
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := empty.ToCell()
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, err := test.load(encoded.MustBeginParse())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = decoded.Set(key, test.descriptor); err != nil {
+				t.Fatalf("set decoded descriptor: %v", err)
+			}
+			if err = decoded.Delete(key); err != nil {
+				t.Fatalf("delete decoded descriptor: %v", err)
+			}
+		})
+	}
+}
+
 func TestMsgEnvelopeRoundTripAgainstMainnetEnvelopes(t *testing.T) {
 	blk := loadMainnetBlock(t)
 
-	var descr OutMsgDescrAugDict
-	if err := LoadFromCell(&descr, blk.Extra.OutMsgDesc.MustBeginParse()); err != nil {
+	descr, err := LoadOutMsgDescrAugDict(blk.Extra.OutMsgDesc.MustBeginParse(), legacyMsgDescrGlobalVersion)
+	if err != nil {
 		t.Fatalf("failed to load out msg descr: %v", err)
 	}
 
@@ -498,6 +631,9 @@ func TestAugShardAccountsSynthetic(t *testing.T) {
 	acc1 := synthAccountCell(t, addr1, big.NewInt(1_000_000_000), nil)
 	acc2 := synthAccountCell(t, addr2, big.NewInt(25), extra2)
 	accNone := cell.BeginCell().MustStoreBoolBit(false).EndCell() // account_none$0
+	if _, err := buildAugmentationLeafExtra(AugShardAccounts{}, synthShardAccountValue(t, acc1, 100).MustBeginParse()); err != nil {
+		t.Fatalf("ShardAccounts augmentation rejected a bounded value view: %v", err)
+	}
 
 	dict, err := NewShardAccountsAugDict()
 	if err != nil {
@@ -514,9 +650,8 @@ func TestAugShardAccountsSynthetic(t *testing.T) {
 		t.Fatalf("failed to set account none: %v", err)
 	}
 
-	// expected root extra, hand-computed per DepthBalanceInfo::add_values
-	// (split_depth = max = 0, balance = sum) and Aug_ShardAccounts::eval_leaf
-	// (account_none contributes the null DepthBalanceInfo).
+	// The root extra uses the maximum split_depth, sums balances, and treats
+	// account_none as the null DepthBalanceInfo.
 	expected := cell.BeginCell().
 		MustStoreUInt(0, 5).                          // split_depth
 		MustStoreBigCoins(big.NewInt(1_000_000_025)). // grams sum
@@ -617,9 +752,11 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = buildAugmentationLeafExtra(AugOutMsgQueue{}, synthEnqueuedMsgValue(t, 500, nil).MustBeginParse()); err != nil {
+		t.Fatalf("OutMsgQueue augmentation rejected a bounded value view: %v", err)
+	}
 
-	// v1 envelope: extra = created_lt of the enclosed message
-	// (Aug_OutMsgQueue::eval_leaf, block-parse.cpp:2004-2009)
+	// A v1 envelope uses the enclosed message's created_lt as its extra.
 	if err = dict.Set(queueKey(0x01), synthEnqueuedMsgValue(t, 500, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -627,12 +764,11 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// fork extra = min(left, right) (eval_fork, block-parse.cpp:1994-1998)
+	// A fork extra is the minimum of its child extras.
 	want := cell.BeginCell().MustStoreUInt(300, 64).EndCell()
 	mustCellHashEqual(t, "OutMsgQueue min extra", dict.GetRootExtra(), want)
 
-	// v2 envelope with explicit emitted_lt overrides the message created_lt
-	// (current upstream MsgEnvelope::get_emitted_lt)
+	// An explicit v2 emitted_lt overrides the message created_lt.
 	emitted := uint64(120)
 	if err = dict.Set(queueKey(0x44), synthEnqueuedMsgValue(t, 700, &emitted)); err != nil {
 		t.Fatal(err)
@@ -658,7 +794,7 @@ func TestAugOutMsgQueueSynthetic(t *testing.T) {
 	want = cell.BeginCell().MustStoreUInt(300, 64).EndCell()
 	mustCellHashEqual(t, "OutMsgQueue extra after delete", dict.GetRootExtra(), want)
 
-	// empty dict extra is 0 (eval_empty, block-parse.cpp:2000-2002)
+	// An empty dictionary has a zero extra.
 	empty, err := NewOutMsgQueueAugDict()
 	if err != nil {
 		t.Fatal(err)
@@ -692,6 +828,9 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 
 	valA := synthShardFeeCreatedValue(t, 100, 40, extraA)
 	valB := synthShardFeeCreatedValue(t, 23, 60, extraB)
+	if _, err = buildAugmentationLeafExtra(AugShardFees{}, valA.MustBeginParse()); err != nil {
+		t.Fatalf("ShardFees augmentation rejected a bounded value view: %v", err)
+	}
 
 	if err = dict.Set(shardFeeKey(0, 0x2000000000000000), valA); err != nil {
 		t.Fatal(err)
@@ -700,7 +839,7 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// leaf extra = value verbatim (Aug_ShardFees::eval_leaf, block-parse.cpp:2289-2291)
+	// A leaf extra is the value copied verbatim.
 	_, leafExtra, err := dict.LoadValueExtra(shardFeeKey(0, 0x2000000000000000))
 	if err != nil {
 		t.Fatal(err)
@@ -711,9 +850,8 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ShardFees leaf extra", leafCell, valA)
 
-	// fork extra = component-wise CurrencyCollection sums
-	// (ShardFeeCreated::add_values, block-parse.cpp:2282-2284), extra currency
-	// dictionaries merged per key
+	// A fork extra sums both CurrencyCollections component-wise and merges extra
+	// currency dictionaries by key.
 	mergedExtra := mustExtraDict(t, map[uint32]int64{3: 58, 9: 1})
 	want := cell.BeginCell().
 		MustStoreBigCoins(big.NewInt(123)).
@@ -748,8 +886,7 @@ func TestAugShardFeesSynthetic(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ShardFees reload extra", reloaded.GetRootExtra(), want)
 
-	// values that are not exactly a ShardFeeCreated must be rejected
-	// (cs.empty_ext() in eval_leaf)
+	// Values with trailing data are not exact ShardFeeCreated encodings.
 	bad := cell.BeginCell().MustStoreBuilder(valA.ToBuilder()).MustStoreUInt(1, 1).EndCell()
 	if err = dict.Set(shardFeeKey(0, 0x7000000000000000), bad); err == nil {
 		t.Fatal("expected trailing bits in ShardFeeCreated value to be rejected")
@@ -788,7 +925,7 @@ func TestImportFeesSyntheticRoundTrip(t *testing.T) {
 	}
 	mustCellHashEqual(t, "ImportFees synthetic round-trip", back, c)
 
-	// hand-built cell: 9 zero bits == zero ImportFees (ImportFees::null_value)
+	// Zero ImportFees is two zero-length Grams fields plus an empty dictionary bit.
 	var zero ImportFees
 	if err = LoadFromCell(&zero, cell.BeginCell().MustStoreUInt(0, 9).EndCell().MustBeginParse()); err != nil {
 		t.Fatal(err)
