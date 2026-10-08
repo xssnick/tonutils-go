@@ -4,6 +4,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -23,6 +24,14 @@ func newBBR(t *testing.T, initRate int64, opts BBRv2Options) (*BBRv2Controller, 
 	t.Helper()
 	tb := NewTokenBucket(initRate, "test-peer")
 	return NewBBRv2Controller(tb, opts), tb
+}
+
+func observeBBRWindow(bbr *BBRv2Controller, total, acked, elapsedMs int64) {
+	now := time.Now().UnixMilli()
+	bbr.lastProc.Store(now - elapsedMs)
+	bbr.lastAckTs.Store(now - elapsedMs)
+	bbr.rateAckTs.Add(-elapsedMs)
+	bbr.ObserveDelta(total, acked)
 }
 
 func TestBBR_InitialRateCanExceedMinRate(t *testing.T) {
@@ -99,6 +108,85 @@ func TestBBR_StartupIncreasesRate(t *testing.T) {
 
 	if tb.GetRate() != bbr.pacingRate.Load() {
 		t.Fatalf("limiter rate mismatch: tb=%d bbr=%d", tb.GetRate(), bbr.pacingRate.Load())
+	}
+}
+
+func TestBBR_SmallAckWindowsUseLongRateSample(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:        256 << 10,
+		InitialRate:    1 << 20,
+		DefaultRTTMs:   10,
+		MinSampleMs:    50,
+		MinRTTExpiryMs: 10_000,
+		HighLoss:       0.2,
+		Beta:           0.85,
+	}
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+
+	const ackedPerWindow = 75 << 10
+	for i := 0; i < 4; i++ {
+		observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	}
+	if got := bbr.btlbw.Load(); got != opts.InitialRate {
+		t.Fatalf("small ACK windows updated bandwidth before 250 ms: got=%d want=%d", got, opts.InitialRate)
+	}
+
+	observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	if got := bbr.btlbw.Load(); got <= opts.InitialRate {
+		t.Fatalf("accumulated ACK window did not update bandwidth: got=%d initial=%d", got, opts.InitialRate)
+	}
+
+	for i := 0; i < 15; i++ {
+		observeBBRWindow(bbr, ackedPerWindow, ackedPerWindow, 50)
+	}
+	if state := bbr.state.Load(); state == 0 {
+		t.Fatal("small ACK windows left controller stuck in Startup")
+	}
+}
+
+func TestBBR_LargeAckWindowKeepsFastRateSample(t *testing.T) {
+	opts := BBRv2Options{
+		MinRate:        256 << 10,
+		InitialRate:    1 << 20,
+		DefaultRTTMs:   10,
+		MinSampleMs:    50,
+		MinRTTExpiryMs: 10_000,
+		HighLoss:       0.2,
+		Beta:           0.85,
+	}
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.rateAcked.Store(64 << 10)
+
+	const acked = 256 << 10
+	observeBBRWindow(bbr, acked, acked, 50)
+
+	if got := bbr.btlbw.Load(); got < 4<<20 {
+		t.Fatalf("large ACK window did not update bandwidth immediately: got=%d", got)
+	}
+	if got := bbr.rateAcked.Load(); got != 0 {
+		t.Fatalf("large ACK window did not clear the long sample: got=%d", got)
+	}
+}
+
+func TestBBR_ResetForNewFlowClearsRateSample(t *testing.T) {
+	bbr, _ := newBBR(t, 1<<20, BBRv2Options{
+		MinRate:      256 << 10,
+		InitialRate:  1 << 20,
+		DefaultRTTMs: 10,
+	})
+	bbr.rateAcked.Store(64 << 10)
+	bbr.rateAckTs.Store(nowMs() - 100)
+
+	now := nowMs()
+	bbr.resetForNewFlow(now)
+
+	if got := bbr.rateAcked.Load(); got != 0 {
+		t.Fatalf("rate sample bytes were not reset: got=%d", got)
+	}
+	if got := bbr.rateAckTs.Load(); got != now {
+		t.Fatalf("rate sample timestamp was not reset: got=%d want=%d", got, now)
 	}
 }
 
@@ -355,6 +443,113 @@ func TestBBR_InflightAllowance(t *testing.T) {
 	}
 }
 
+func appLimitedOpts() BBRv2Options {
+	return BBRv2Options{
+		MinRate:            256 << 10,
+		InitialRate:        8 << 20,
+		DefaultRTTMs:       50,
+		MinSampleMs:        10,
+		BtlBwWindowSec:     10,
+		ProbeBwCycleMs:     200,
+		ProbeRTTDurationMs: 150,
+		MinRTTExpiryMs:     10_000,
+		HighLoss:           0.05,
+		Beta:               0.85,
+	}
+}
+
+func TestBBR_AppLimitedDoesNotDecayBtlBw(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	// peer keeps asking for small chunks: every sample sits far below the learned bandwidth
+	agedOverWindows := func(appLimited bool) int64 {
+		bbr, _ := newBBR(t, opts.InitialRate, opts)
+		bbr.ObserveRTT(opts.DefaultRTTMs)
+		bbr.btlbw.Store(learned)
+		bbr.SetAppLimited(appLimited)
+
+		now := nowMs()
+		for i := 0; i < 20; i++ {
+			now += winMs + 1
+			bbr.lastBtlBwDecay.Store(now - winMs - 1)
+			bbr.updateBtlBw(64<<10, now)
+		}
+
+		return bbr.btlbw.Load()
+	}
+
+	if aged := agedOverWindows(false); aged >= learned {
+		t.Fatalf("expected idle windows to age btlbw: got=%d learned=%d", aged, int64(learned))
+	}
+
+	if held := agedOverWindows(true); held != learned {
+		t.Fatalf("app-limited windows must not age btlbw: got=%d want=%d", held, int64(learned))
+	}
+}
+
+func TestBBR_AppLimitedDoesNotBankDecay(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.btlbw.Store(learned)
+
+	now := nowMs()
+	bbr.lastBtlBwDecay.Store(now)
+	bbr.SetAppLimited(true)
+	for i := 0; i < 5; i++ {
+		now += winMs
+		bbr.updateBtlBw(64<<10, now)
+	}
+
+	// the peer starts asking again: a decay window must not have piled up while it was quiet
+	bbr.SetAppLimited(false)
+	now += 10
+	bbr.updateBtlBw(64<<10, now)
+
+	if got := bbr.btlbw.Load(); got != learned {
+		t.Fatalf("decay fired right after an app-limited stretch: got=%d want=%d", got, int64(learned))
+	}
+}
+
+func TestBBR_AcksRightAfterAppLimitedStayAppLimited(t *testing.T) {
+	opts := appLimitedOpts()
+	winMs := int64(opts.BtlBwWindowSec * 1000)
+	const learned = 20 << 20
+
+	bbr, _ := newBBR(t, opts.InitialRate, opts)
+	bbr.ObserveRTT(opts.DefaultRTTMs)
+	bbr.btlbw.Store(learned)
+	bbr.SetAppLimited(true)
+
+	// the peer asks again: the flag drops before anything is acked, but those acks still measure the request size
+	bbr.OnNewSendBurst()
+	if bbr.appLimited.Load() {
+		t.Fatal("OnNewSendBurst must clear the flag")
+	}
+
+	now := nowMs()
+	bbr.lastBtlBwDecay.Store(now - winMs - 1)
+	bbr.updateBtlBw(64<<10, now)
+
+	if got := bbr.btlbw.Load(); got != learned {
+		t.Fatalf("ack right after an app-limited stretch aged btlbw: got=%d want=%d", got, int64(learned))
+	}
+
+	// past the grace window the same sample is a real measurement again
+	later := now + 2*opts.DefaultRTTMs + 1
+	bbr.lastBtlBwDecay.Store(later - winMs - 1)
+	bbr.updateBtlBw(64<<10, later)
+
+	if got := bbr.btlbw.Load(); got >= learned {
+		t.Fatalf("sample past the grace window must age btlbw: got=%d", got)
+	}
+}
+
 func approxI64(a, b, tol int64) bool {
 	d := a - b
 	if d < 0 {
@@ -438,4 +633,80 @@ func TestSendClock_ConcurrentRaces(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestBBR_ActivityRestartsAfterIdle(t *testing.T) {
+	for _, entry := range []string{"burst", "rtt", "delta"} {
+		t.Run(entry, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				bbr, tb := newBBR(t, 1<<20, BBRv2Options{MinRate: 32 << 10})
+				bbr.ObserveRTT(20)
+				bbr.state.Store(2)
+				bbr.fullBW.Store(1 << 20)
+				bbr.fullBWCount.Store(3)
+				bbr.rateAcked.Store(64 << 10)
+				_ = tb.ConsumeUpTo(1 << 20)
+				time.Sleep(2 * time.Second)
+
+				switch entry {
+				case "burst":
+					bbr.OnNewSendBurst()
+				case "rtt":
+					bbr.ObserveRTT(75)
+				case "delta":
+					bbr.ObserveDelta(1500, 1500)
+				}
+
+				if got := bbr.state.Load(); got != 0 {
+					t.Fatalf("state after idle = %d, want Startup", got)
+				}
+				if bbr.fullBW.Load() != 0 || bbr.fullBWCount.Load() != 0 {
+					t.Fatal("idle restart kept full-bandwidth detection")
+				}
+				if got := bbr.rateAcked.Load(); got != 0 {
+					t.Fatalf("delivery-rate sample after idle = %d, want 0", got)
+				}
+				if got := tb.GetTokensLeft(); got <= 0 {
+					t.Fatalf("idle restart did not prime packet pacing: bytes = %d", got)
+				}
+
+				// Confirmations observe RTT before their delivery sample.
+				if entry != "rtt" {
+					bbr.ObserveRTT(75)
+				}
+				bbr.ObserveDelta(1500, 1500)
+				if got := bbr.minRTT.Load(); got != 75 {
+					t.Fatalf("fresh flow min RTT = %d, want 75", got)
+				}
+			})
+		})
+	}
+}
+
+func TestBBR_RecentActivityDoesNotRestart(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bbr, _ := newBBR(t, 1<<20, BBRv2Options{MinRate: 32 << 10, MinSampleMs: 1000})
+		bbr.ObserveRTT(20)
+		bbr.state.Store(2)
+		bbr.fullBW.Store(1 << 20)
+		bbr.fullBWCount.Store(3)
+		bbr.rateAcked.Store(64 << 10)
+		time.Sleep(100 * time.Millisecond)
+
+		bbr.OnNewSendBurst()
+		bbr.ObserveRTT(75)
+		bbr.ObserveDelta(1500, 1500)
+		if got := bbr.state.Load(); got != 2 {
+			t.Fatalf("active flow state = %d, want ProbeBW", got)
+		}
+		if bbr.fullBW.Load() != 1<<20 || bbr.fullBWCount.Load() != 3 {
+			t.Fatal("recent activity reset full-bandwidth detection")
+		}
+		if got := bbr.rateAcked.Load(); got != 64<<10 {
+			t.Fatalf("active flow delivery sample = %d, want 64 KiB", got)
+		}
+		if got := bbr.minRTT.Load(); got != 20 {
+			t.Fatalf("active flow min RTT = %d, want 20", got)
+		}
+	})
 }

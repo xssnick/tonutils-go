@@ -36,11 +36,11 @@ func TestPFXDICTSWITCHZeroRootFlagUsesPFXDICTGETDispatch(t *testing.T) {
 				t.Fatal("opcode did not match")
 			}
 
-			op := getter()
-			if err := op.Deserialize(code); err != nil {
+			got, err := getter.decodeInstruction(nil, code)
+			if err != nil {
 				t.Fatalf("deserialize matched opcode: %v", err)
 			}
-			if got := op.SerializeText(); got != tt.want {
+			if got != tt.want {
 				t.Fatalf("matched opcode = %s, want %s", got, tt.want)
 			}
 			if code.BitsLeft() != 8 || code.RefsNum() != 1 {

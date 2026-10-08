@@ -192,9 +192,18 @@ func pushBinaryIntResult(state *vm.State, x, y *big.Int, fn func(*big.Int, *big.
 
 func pushCompareResult(state *vm.State, x, y *big.Int, fn func(*big.Int, *big.Int) bool) error {
 	if x == nil || y == nil {
-		return pushNaNOrOverflow(state, false)
+		return pushNaNComparisonResult(state, x, false)
 	}
 	return state.Stack.PushBool(fn(x, y))
+}
+
+// Called when either operand is NaN. The old exec_cmp pushed x unchanged;
+// PushInt copies a finite read-only operand before subsequent stack mutation.
+func pushNaNComparisonResult(state *vm.State, x *big.Int, quiet bool) error {
+	if x != nil && state.Historical.NaNComparison && state.GlobalVersion >= 0 && state.GlobalVersion <= 3 {
+		return state.Stack.PushInt(x)
+	}
+	return pushNaNOrOverflow(state, quiet)
 }
 
 func compareBigIntInt64(x *big.Int, y int64) int {

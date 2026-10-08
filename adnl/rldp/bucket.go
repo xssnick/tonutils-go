@@ -2,6 +2,7 @@ package rldp
 
 import (
 	"math"
+	"math/bits"
 	"sync/atomic"
 	"time"
 )
@@ -79,10 +80,19 @@ func (tb *TokenBucket) GetTokensLeft() int64 {
 }
 
 func (tb *TokenBucket) ConsumeUpTo(maxBytes int) int {
-	if maxBytes <= 0 {
+	return tb.consumeUnits(maxBytes, 1)
+}
+
+func (tb *TokenBucket) consumeUnits(maxUnits, unitBytes int) int {
+	if maxUnits <= 0 {
 		return 0
 	}
-	req := int64(maxBytes)
+	if int64(unitBytes) > math.MaxInt64/1000 {
+		return 0
+	}
+	unitMicro := int64(unitBytes) * 1000
+	hi, requested := bits.Mul64(uint64(maxUnits), uint64(unitMicro))
+	wholeRequest := hi == 0 && requested <= math.MaxInt64
 
 	for {
 		now := time.Now().UnixMicro()
@@ -108,17 +118,18 @@ func (tb *TokenBucket) ConsumeUpTo(maxBytes int) int {
 		}
 
 		currTokens := atomic.LoadInt64(&tb.tokens)
-		availableBytes := currTokens / 1000
-		if availableBytes <= 0 {
-			return 0
+		toConsume := int64(maxUnits)
+		micro := int64(requested)
+		// Full bursts need no division. Round down only when the budget
+		// cannot cover the whole request, preserving fractional packets.
+		if !wholeRequest || currTokens < micro {
+			toConsume = currTokens / unitMicro
+			if toConsume <= 0 {
+				return 0
+			}
+			micro = toConsume * unitMicro
 		}
 
-		toConsume := req
-		if availableBytes < toConsume {
-			toConsume = availableBytes
-		}
-
-		micro := toConsume * 1000
 		if atomic.CompareAndSwapInt64(&tb.tokens, currTokens, currTokens-micro) {
 			return int(toConsume)
 		}
@@ -131,9 +142,7 @@ func (tb *TokenBucket) ConsumePackets(maxPackets, partSize int) int {
 	if maxPackets <= 0 || partSize <= 0 {
 		return 0
 	}
-	wantBytes := int64(maxPackets) * int64(partSize)
-	gotBytes := tb.ConsumeUpTo(int(wantBytes))
-	return gotBytes / partSize
+	return tb.consumeUnits(maxPackets, partSize)
 }
 
 // SetBurst implements the interface used by the BBR controller for seeding

@@ -49,3 +49,42 @@ func (c *APIClient) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMe
 	}
 	return errUnexpectedResponse(resp)
 }
+
+func (c *APIClient) SendExternalMessageToAllNodes(ctx context.Context, msg *tlb.ExternalMessage) error {
+	var nodeCtxs []context.Context
+	if c.client.StickyNodeID(ctx) != 0 {
+		// balanced iteration excludes the node the context is pinned to, keep it as a target too
+		nodeCtxs = append(nodeCtxs, ctx)
+	}
+
+	nodeCtx, err := c.client.StickyContextNextNodeBalanced(ctx)
+	for err == nil {
+		nodeCtxs = append(nodeCtxs, nodeCtx)
+		nodeCtx, err = c.client.StickyContextNextNodeBalanced(nodeCtx)
+	}
+
+	if len(nodeCtxs) == 0 {
+		return fmt.Errorf("failed to select node to send message to: %w", err)
+	}
+
+	results := make(chan error, len(nodeCtxs))
+	for _, nodeCtx := range nodeCtxs {
+		go func() {
+			if sendErr := c.SendExternalMessage(nodeCtx, msg); sendErr != nil {
+				results <- fmt.Errorf("node %d: %w", c.client.StickyNodeID(nodeCtx), sendErr)
+				return
+			}
+			results <- nil
+		}()
+	}
+
+	var errs []error
+	for range nodeCtxs {
+		sendErr := <-results
+		if sendErr == nil {
+			return nil
+		}
+		errs = append(errs, sendErr)
+	}
+	return fmt.Errorf("failed to send message to any node: %w", errors.Join(errs...))
+}

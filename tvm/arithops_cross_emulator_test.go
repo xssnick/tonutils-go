@@ -21,7 +21,6 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
-
 	maxTVMInt := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 	minTVMInt := new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 256))
 
@@ -237,26 +236,26 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 		{name: "mulrshiftmod_257_range", code: codeFromBuilders(t, mathop.MULRSHIFTMOD_VAR().Serialize()), stack: []any{int64(2), int64(3), int64(257)}, exit: int32(vmerr.CodeRangeCheck)},
 		{name: "mulmodpow2_wide_product_shift0_zero", code: codeFromBuilders(t, mathop.MULMODPOW2_VAR().Serialize()), stack: []any{maxTVMInt, int64(2), int64(0)}, exit: 0},
 		{name: "mulrshiftmod_wide_product_shift0_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTMOD_VAR().Serialize()), stack: []any{maxTVMInt, int64(2), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulmodpow2_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(0).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulmodpow2r_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2RCODE(0).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulmodpow2c_code_wide_product_shift1_ok", code: codeFromBuilders(t, mathop.MULMODPOW2CCODE(0).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: 0},
-		{name: "mulmodpow2_code_underflow", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(0).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "mulmodpow2_code_type_top", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(0).Serialize()), stack: []any{int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "mulmodpow2r_code_type_bottom", code: codeFromBuilders(t, mathop.MULMODPOW2RCODE(0).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(2)}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "mulmodpow2c_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2CCODE(0).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulmodpow2_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(1).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulmodpow2r_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2RCODE(1).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulmodpow2c_code_wide_product_shift1_ok", code: codeFromBuilders(t, mathop.MULMODPOW2CCODE(1).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: 0},
+		{name: "mulmodpow2_code_underflow", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(1).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "mulmodpow2_code_type_top", code: codeFromBuilders(t, mathop.MULMODPOW2CODE(1).Serialize()), stack: []any{int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "mulmodpow2r_code_type_bottom", code: codeFromBuilders(t, mathop.MULMODPOW2RCODE(1).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(2)}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "mulmodpow2c_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULMODPOW2CCODE(1).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
 		{name: "mulmodpow2r_code_negative_round", code: codeFromBuilders(t, mathop.MULMODPOW2RCODE(2).Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
 		{name: "mulmodpow2c_code_negative_ceil", code: codeFromBuilders(t, mathop.MULMODPOW2CCODE(2).Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
-		{name: "mulrshift_code_underflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODE(0).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "mulrshift_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODE(0).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftr_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTRCODE(0).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftc_code_wide_product_shift1_ok", code: codeFromBuilders(t, mathop.MULRSHIFTCCODE(0).Serialize()), stack: []any{maxTVMInt, int64(2)}, exit: 0},
-		{name: "mulrshiftc_code_wide_product_shift1_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCCODE(0).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftmod_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(0).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftmodr_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(0).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftmodc_code_wide_product_shift1_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCCODEMOD(0).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "mulrshiftmod_code_underflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "mulrshiftmod_code_type_top", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "mulrshiftmodr_code_type_bottom", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(0).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(2)}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "mulrshift_code_underflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODE(1).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "mulrshift_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODE(1).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftr_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTRCODE(1).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftc_code_wide_product_shift1_ok", code: codeFromBuilders(t, mathop.MULRSHIFTCCODE(1).Serialize()), stack: []any{maxTVMInt, int64(2)}, exit: 0},
+		{name: "mulrshiftc_code_wide_product_shift1_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCCODE(1).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftmod_code_nan_x_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(1).Serialize()), stack: []any{vm.NaN{}, int64(2)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftmodr_code_nan_y_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(1).Serialize()), stack: []any{int64(2), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftmodc_code_wide_product_shift1_overflow", code: codeFromBuilders(t, mathop.MULRSHIFTCCODEMOD(1).Serialize()), stack: []any{maxTVMInt, int64(3)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "mulrshiftmod_code_underflow", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "mulrshiftmod_code_type_top", code: codeFromBuilders(t, mathop.MULRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "mulrshiftmodr_code_type_bottom", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(1).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(2)}, exit: int32(vmerr.CodeTypeCheck)},
 		{name: "mulrshiftmodr_code_negative_round", code: codeFromBuilders(t, mathop.MULRSHIFTRCODEMOD(2).Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
 		{name: "mulrshiftmodc_code_negative_ceil", code: codeFromBuilders(t, mathop.MULRSHIFTCCODEMOD(2).Serialize()), stack: []any{int64(-5), int64(3)}, exit: 0},
 		{name: "rshiftc_256_boundary", code: codeFromBuilders(t, mathop.RSHIFTC().Serialize()), stack: []any{int64(7), int64(256)}, exit: 0},
@@ -347,22 +346,22 @@ func TestTVMCrossEmulatorArithOps(t *testing.T) {
 		{name: "muladdrshiftmod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTMOD().Serialize()), stack: []any{maxTVMInt, int64(2), int64(0), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
 		{name: "muladdrshiftmodr_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTRMOD().Serialize()), stack: []any{maxTVMInt, int64(2), int64(0), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
 		{name: "muladdrshiftmodc_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCMOD().Serialize()), stack: []any{maxTVMInt, int64(2), int64(0), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "addrshift_code_mod_underflow", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(1)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "addrshift_code_mod_type_top", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(1), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "addrshift_code_mod_type_bottom", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(0).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(1)}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "addrshift_code_mod_nan_top", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(1), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "addrshiftr_code_mod_nan_bottom", code: codeFromBuilders(t, mathop.ADDRSHIFTRCODEMOD(0).Serialize()), stack: []any{vm.NaN{}, int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "addrshift_code_mod_wide_valid", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(0).Serialize()), stack: []any{maxTVMInt, maxTVMInt}, exit: 0},
+		{name: "addrshift_code_mod_underflow", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(1)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "addrshift_code_mod_type_top", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(1), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "addrshift_code_mod_type_bottom", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(1).Serialize()), stack: []any{cell.BeginCell().EndCell(), int64(1)}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "addrshift_code_mod_nan_top", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(1), vm.NaN{}}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "addrshiftr_code_mod_nan_bottom", code: codeFromBuilders(t, mathop.ADDRSHIFTRCODEMOD(1).Serialize()), stack: []any{vm.NaN{}, int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "addrshift_code_mod_wide_valid", code: codeFromBuilders(t, mathop.ADDRSHIFTCODEMOD(1).Serialize()), stack: []any{maxTVMInt, maxTVMInt}, exit: 0},
 		{name: "addrshiftr_code_mod_round_negative", code: codeFromBuilders(t, mathop.ADDRSHIFTRCODEMOD(3).Serialize()), stack: []any{int64(-9), int64(4)}, exit: 0},
 		{name: "addrshiftc_code_mod_ceil_negative", code: codeFromBuilders(t, mathop.ADDRSHIFTCCODEMOD(3).Serialize()), stack: []any{int64(-9), int64(4)}, exit: 0},
-		{name: "muladdrshift_code_mod_underflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(5), int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
-		{name: "muladdrshift_code_mod_type_top", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(0).Serialize()), stack: []any{int64(5), int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "muladdrshiftr_code_mod_type_middle", code: codeFromBuilders(t, mathop.MULADDRSHIFTRCODEMOD(0).Serialize()), stack: []any{int64(5), cell.BeginCell().EndCell(), int64(1)}, exit: int32(vmerr.CodeTypeCheck)},
-		{name: "muladdrshiftc_code_mod_nan_bottom", code: codeFromBuilders(t, mathop.MULADDRSHIFTCCODEMOD(0).Serialize()), stack: []any{vm.NaN{}, int64(2), int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "muladdrshift_code_mod_wide_valid", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(0).Serialize()), stack: []any{maxTVMInt, int64(2), int64(0)}, exit: 0},
-		{name: "muladdrshift_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(0).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "muladdrshiftr_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTRCODEMOD(0).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
-		{name: "muladdrshiftc_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCCODEMOD(0).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "muladdrshift_code_mod_underflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(5), int64(2)}, exit: int32(vmerr.CodeStackUnderflow)},
+		{name: "muladdrshift_code_mod_type_top", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(1).Serialize()), stack: []any{int64(5), int64(2), cell.BeginCell().EndCell()}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "muladdrshiftr_code_mod_type_middle", code: codeFromBuilders(t, mathop.MULADDRSHIFTRCODEMOD(1).Serialize()), stack: []any{int64(5), cell.BeginCell().EndCell(), int64(1)}, exit: int32(vmerr.CodeTypeCheck)},
+		{name: "muladdrshiftc_code_mod_nan_bottom", code: codeFromBuilders(t, mathop.MULADDRSHIFTCCODEMOD(1).Serialize()), stack: []any{vm.NaN{}, int64(2), int64(1)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "muladdrshift_code_mod_wide_valid", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(1).Serialize()), stack: []any{maxTVMInt, int64(2), int64(0)}, exit: 0},
+		{name: "muladdrshift_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCODEMOD(1).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "muladdrshiftr_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTRCODEMOD(1).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
+		{name: "muladdrshiftc_code_mod_wide_overflow", code: codeFromBuilders(t, mathop.MULADDRSHIFTCCODEMOD(1).Serialize()), stack: []any{maxTVMInt, int64(3), int64(0)}, exit: int32(vmerr.CodeIntOverflow)},
 		{name: "muladdrshiftc_code_mod_negative", code: codeFromBuilders(t, mathop.MULADDRSHIFTCCODEMOD(2).Serialize()), stack: []any{int64(-5), int64(3), int64(1)}, exit: 0},
 	}
 
@@ -869,12 +868,10 @@ func FuzzTVMCrossEmulatorArithOpsVersionedQuietEdges(f *testing.F) {
 }
 
 type arithParityCase struct {
-	name          string
-	code          *cell.Cell
-	stack         []any
-	exit          int32
-	skipReference string
-	goStack       []any
+	name  string
+	code  *cell.Cell
+	stack []any
+	exit  int32
 }
 
 func arithOpcodeCoverageCases(t *testing.T) []arithParityCase {
@@ -1074,6 +1071,7 @@ func runArithParityCases(t *testing.T, tests []arithParityCase) {
 	if _, err := os.Stat("vm/cross-emulate-test/lib/libemulator.dylib"); err != nil {
 		t.Skipf("reference emulator library is unavailable: %v", err)
 	}
+	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(referenceRawRunGlobalVersion)))
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1092,14 +1090,7 @@ func runArithParityCases(t *testing.T, tests []arithParityCase) {
 			if err != nil {
 				t.Fatalf("go tvm execution failed: %v", err)
 			}
-			if tt.skipReference != "" {
-				if goRes.exitCode != tt.exit {
-					t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, tt.exit)
-				}
-				assertArithSkippedGoStack(t, goRes.stack, tt.goStack)
-				t.Skip(tt.skipReference)
-			}
-			refRes, err := runReferenceCrossCode(code, cell.BeginCell().EndCell(), tuple.Tuple{}, refStack)
+			refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
 			if err != nil {
 				t.Fatalf("reference tvm execution failed: %v", err)
 			}
@@ -1156,13 +1147,6 @@ func runArithVersionedParityCaseWithExpected(t *testing.T, tt arithParityCase, g
 	if err != nil {
 		t.Fatalf("go tvm execution failed: %v", err)
 	}
-	if tt.skipReference != "" {
-		if expectedExit != nil && goRes.exitCode != *expectedExit {
-			t.Fatalf("unexpected go exit code: got=%d expected=%d", goRes.exitCode, *expectedExit)
-		}
-		assertArithSkippedGoStack(t, goRes.stack, tt.goStack)
-		t.Skip(tt.skipReference)
-	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(globalVersion)))
 	refRes, err := runReferenceCrossCodeViaEmulator(code, cell.BeginCell().EndCell(), refStack, *refCfg)
@@ -1190,33 +1174,6 @@ func runArithVersionedParityCaseWithExpected(t *testing.T, tt arithParityCase, g
 	}
 	if !bytes.Equal(goStackCell.Hash(), refStackCell.Hash()) {
 		t.Fatalf("stack mismatch:\ngo=%s\nreference=%s", goStackCell.Dump(), refStackCell.Dump())
-	}
-}
-
-func assertArithSkippedGoStack(t *testing.T, got *cell.Cell, want []any) {
-	t.Helper()
-
-	if want == nil {
-		return
-	}
-	wantStack, err := buildCrossStack(want...)
-	if err != nil {
-		t.Fatalf("failed to build expected go stack: %v", err)
-	}
-	wantStackCell, err := stackToCell(wantStack)
-	if err != nil {
-		t.Fatalf("failed to serialize expected go stack: %v", err)
-	}
-	gotStackCell, err := normalizeStackCell(got)
-	if err != nil {
-		t.Fatalf("failed to normalize go stack: %v", err)
-	}
-	wantStackCell, err = normalizeStackCell(wantStackCell)
-	if err != nil {
-		t.Fatalf("failed to normalize expected go stack: %v", err)
-	}
-	if !bytes.Equal(gotStackCell.Hash(), wantStackCell.Hash()) {
-		t.Fatalf("go stack mismatch:\ngo=%s\nwant=%s", gotStackCell.Dump(), wantStackCell.Dump())
 	}
 }
 

@@ -22,13 +22,14 @@ import (
 )
 
 type referenceSendMessageResult struct {
-	exitCode int64
-	gasUsed  int64
-	accepted bool
-	code     *cell.Cell
-	data     *cell.Cell
-	actions  *cell.Cell
-	vmLog    string
+	exitCode       int64
+	gasUsed        int64
+	accepted       bool
+	code           *cell.Cell
+	data           *cell.Cell
+	actions        *cell.Cell
+	missingLibrary *cell.Hash
+	vmLog          string
 }
 
 type referenceSendMessageConfig struct {
@@ -49,6 +50,7 @@ type referenceSendMessageJSON struct {
 	NewCode    string  `json:"new_code"`
 	NewData    string  `json:"new_data"`
 	Actions    *string `json:"actions"`
+	MissingLib *string `json:"missing_library"`
 	VMLog      string  `json:"vm_log"`
 }
 
@@ -162,15 +164,20 @@ func runReferenceSendMessageWithConfig(code, data, body *cell.Cell, amount uint6
 			return nil, fmt.Errorf("failed to decode reference actions: %w", err)
 		}
 	}
+	missingLibrary, err := parseCrossMissingLibrary(raw.MissingLib)
+	if err != nil {
+		return nil, err
+	}
 
 	return &referenceSendMessageResult{
-		exitCode: raw.VMExitCode,
-		gasUsed:  gasUsed,
-		accepted: raw.Accepted,
-		code:     codeCell,
-		data:     dataCell,
-		actions:  actionsCell,
-		vmLog:    referenceVMLog(raw.VMLog),
+		exitCode:       raw.VMExitCode,
+		gasUsed:        gasUsed,
+		accepted:       raw.Accepted,
+		code:           codeCell,
+		data:           dataCell,
+		actions:        actionsCell,
+		missingLibrary: missingLibrary,
+		vmLog:          referenceVMLog(raw.VMLog),
 	}, nil
 }
 

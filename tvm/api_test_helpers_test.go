@@ -18,8 +18,12 @@ type testTxParams struct {
 	Address *address.Address
 	Now     uint32
 	BlockLT int64
+	// BlockLTUint64 is the full-width block LT and overrides BlockLT.
+	BlockLTUint64 uint64
 	// LogicalTime is the per-transaction minimal LT.
 	LogicalTime int64
+	// LogicalTimeUint64 is the full-width minimal LT and overrides LogicalTime.
+	LogicalTimeUint64 uint64
 	// RandSeed is the block-level seed; the per-account c7 seed is derived
 	// from it and the account address.
 	RandSeed []byte
@@ -42,24 +46,26 @@ func (p testTxParams) blockContext() (*BlockContext, error) {
 	cfg := p.Config
 	if cfg == nil {
 		var err error
-		cfg, err = PrepareBlockchainConfig(p.ConfigRoot)
+		cfg, err = prepareBlockchainConfigLenient(p.ConfigRoot)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return cfg.NewBlockContext(BlockOptions{
-		Now:        p.Now,
-		BlockLT:    p.BlockLT,
-		RandSeed:   p.RandSeed,
-		PrevBlocks: p.PrevBlocks,
-		GlobalID:   p.GlobalID,
-		Libraries:  p.Libraries,
+		Now:           p.Now,
+		BlockLT:       p.BlockLT,
+		BlockLTUint64: p.BlockLTUint64,
+		RandSeed:      p.RandSeed,
+		PrevBlocks:    p.PrevBlocks,
+		GlobalID:      p.GlobalID,
+		Libraries:     p.Libraries,
 	})
 }
 
 func (p testTxParams) txOptions() TransactionOptions {
 	return TransactionOptions{
 		LogicalTime:                 p.LogicalTime,
+		LogicalTimeUint64:           p.LogicalTimeUint64,
 		RandSeed:                    p.AccountRandSeed,
 		Gas:                         p.Gas,
 		AccountStorageStat:          p.AccountStorageStat,
@@ -191,17 +197,7 @@ func mustTestPreparedBlockchainConfigWithVersion(version uint32) *PreparedBlockc
 	if err := dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
 		panic(err)
 	}
-	return MustPrepareBlockchainConfig(dict.AsCell())
-}
-
-func testSetAllowHigherVersionExecUsingLatest(t testing.TB, allow bool) {
-	t.Helper()
-
-	prev := AllowHigherVersionExecUsingLatest
-	AllowHigherVersionExecUsingLatest = allow
-	t.Cleanup(func() {
-		AllowHigherVersionExecUsingLatest = prev
-	})
+	return mustPrepareLenientTestConfig(dict.AsCell())
 }
 
 func mustTestExecutionConfig() ExecutionConfig {
@@ -235,7 +231,7 @@ func mustPrepareBlockchainConfigOrNil(root *cell.Cell) *PreparedBlockchainConfig
 	if root == nil {
 		return nil
 	}
-	return MustPrepareBlockchainConfig(root)
+	return mustPrepareLenientTestConfig(root)
 }
 
 // testResultTransaction parses the built transaction of a result, failing the
@@ -247,4 +243,14 @@ func testResultTransaction(t testing.TB, res *TransactionExecutionResult) *tlb.T
 		t.Fatalf("failed to parse result transaction: %v", err)
 	}
 	return tx
+}
+
+// mustPrepareLenientTestConfig prepares a possibly-partial test config with
+// the legacy fail-open loaders; the public PrepareBlockchainConfig is strict.
+func mustPrepareLenientTestConfig(configRoot *cell.Cell) *PreparedBlockchainConfig {
+	out, err := prepareBlockchainConfigLenient(configRoot)
+	if err != nil {
+		panic(err)
+	}
+	return out
 }

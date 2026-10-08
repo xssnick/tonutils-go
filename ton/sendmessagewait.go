@@ -13,6 +13,14 @@ import (
 var ErrTxWasNotConfirmed = errors.New("transaction was not confirmed in a given deadline, but it may still be confirmed later")
 
 func (c *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error) {
+	return c.sendExternalMessageWaitTransaction(ctx, ext, c.SendExternalMessage)
+}
+
+func (c *APIClient) SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, []byte, error) {
+	return c.sendExternalMessageWaitTransaction(ctx, ext, c.SendExternalMessageToAllNodes)
+}
+
+func (c *APIClient) sendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage, send func(context.Context, *tlb.ExternalMessage) error) (*tlb.Transaction, *BlockIDExt, []byte, error) {
 	block, err := c.CurrentMasterchainInfo(ctx)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to get block: %w", err)
@@ -25,11 +33,11 @@ func (c *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ext 
 
 	inMsgHash := ext.Body.Hash()
 
-	if err = c.SendExternalMessage(ctx, ext); err != nil {
+	if err = send(ctx, ext); err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to send message: %w", err)
 	}
 
-	tx, block, err := c.waitConfirmation(ctx, block, acc, ext)
+	tx, block, err := c.waitConfirmation(ctx, block, acc, ext, send)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -37,7 +45,7 @@ func (c *APIClient) SendExternalMessageWaitTransaction(ctx context.Context, ext 
 	return tx, block, inMsgHash, nil
 }
 
-func (c *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage) (*tlb.Transaction, *BlockIDExt, error) {
+func (c *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc *tlb.Account, ext *tlb.ExternalMessage, send func(context.Context, *tlb.ExternalMessage) error) (*tlb.Transaction, *BlockIDExt, error) {
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		// fallback timeout to not stuck forever with background context
 		var cancel context.CancelFunc
@@ -62,7 +70,7 @@ func (c *APIClient) waitConfirmation(ctx context.Context, block *BlockIDExt, acc
 
 		if accNew.LastTxLT == acc.LastTxLT {
 			// if not in block, maybe LS lost our message, send it again
-			if err = c.SendExternalMessage(ctx, ext); err != nil {
+			if err = send(ctx, ext); err != nil {
 				continue
 			}
 

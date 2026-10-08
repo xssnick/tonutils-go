@@ -7,12 +7,16 @@ import (
 	"sort"
 
 	"github.com/xssnick/tonutils-go/address"
+	"github.com/xssnick/tonutils-go/internal/fee"
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-var errConfigRootRequired = errors.New("config root is required")
+var (
+	errConfigRootRequired                = errors.New("config root is required")
+	errTransactionNegativeStoragePayment = errors.New("negative storage payment")
+)
 
 type preparedAddr256 [32]byte
 
@@ -23,8 +27,7 @@ type preparedSuspendedAddr struct {
 
 type preparedStoragePrice struct {
 	price tlb.ConfigStoragePrices
-	// slice is the raw dict value slice of the entry, matching the reference
-	// implementation's representation in the c7 unpacked config tuple.
+	// slice is the raw dictionary value stored in the c7 unpacked config tuple.
 	slice *cell.Slice
 }
 
@@ -60,13 +63,23 @@ type PreparedBlockchainConfig struct {
 	globalID    int32
 	hasGlobalID bool
 
-	specialAccounts map[preparedAddr256]struct{}
-	blackholeAddr   *preparedAddr256
-	suspendedUntil  uint32
-	suspended       map[preparedSuspendedAddr]struct{}
-	precompiled     map[preparedAddr256]uint64
-	workchains      map[int32]*tlb.WorkchainDescr
-	hasWorkchains   bool
+	// fundamentalAccounts is parameter 31 alone; the actual configuration
+	// contract is supplied separately by each block context.
+	fundamentalAccounts map[preparedAddr256]struct{}
+	// specialAccountOrder lists the fundamental smart contracts of param 31 in
+	// dictionary order, with the inferred configuration contract of param 0
+	// appended last and only when param 31 does not already list it.
+	// Dictionary-only collators use this order for tick/tock, so the
+	// order is consensus data and not a presentation detail.
+	specialAccountOrder [][32]byte
+	// configAddr is param 0 when it is present and exactly 256 bits wide.
+	configAddr     *preparedAddr256
+	blackholeAddr  *preparedAddr256
+	suspendedUntil uint32
+	suspended      map[preparedSuspendedAddr]struct{}
+	precompiled    map[preparedAddr256]uint64
+	workchains     map[int32]*tlb.WorkchainDescr
+	hasWorkchains  bool
 
 	// unpackedParams are the raw param roots for c7 unpacked config elements
 	// 1..6 (see preparedUnpackedParamIDs); nil when the param is absent.
@@ -74,8 +87,13 @@ type PreparedBlockchainConfig struct {
 }
 
 // PrepareBlockchainConfig derives the immutable per-epoch execution context from a
-// blockchain config root. The global version (config param 8) must be present
-// and within the supported range unless AllowHigherVersionExecUsingLatest is enabled.
+// blockchain config root. The global version (config param 8) must be present.
+// Versions newer than this implementation execute with all known version gates.
+//
+// Storage prices (18), gas prices (20/21), and message forward prices (24/25)
+// must be present and fully consumed. Size limits (43) may be absent, in which
+// case defaults apply. An absent workchain list (12) remains an empty list that
+// rejects every non-masterchain destination.
 func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
 	if configRoot == nil {
 		return nil, errConfigRootRequired
@@ -89,24 +107,72 @@ func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, 
 	if err = validateGlobalVersion(int(globalVersion.Version)); err != nil {
 		return nil, err
 	}
+	return prepareBlockchainConfigParams(bc, globalVersion, true)
+}
 
+// PrepareBlockchainConfigLenient accepts partial configs for tooling and
+// differential harnesses. The transaction executor must use the strict
+// PrepareBlockchainConfig.
+func PrepareBlockchainConfigLenient(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
+	return prepareBlockchainConfigLenient(configRoot)
+}
+
+func prepareBlockchainConfigLenient(configRoot *cell.Cell) (*PreparedBlockchainConfig, error) {
+	if configRoot == nil {
+		return nil, errConfigRootRequired
+	}
+	bc := tlb.BlockchainConfig{Root: configRoot}
+
+	globalVersion, err := bc.GetGlobalVersion()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load global version config param: %w", err)
+	}
+	if err = validateGlobalVersion(int(globalVersion.Version)); err != nil {
+		return nil, err
+	}
+	return prepareBlockchainConfigParams(bc, globalVersion, false)
+}
+
+// prepareBlockchainConfigParams derives the execution context from the validated
+// global version and the remaining config params. Strict mode rejects missing
+// or malformed mandatory params; lenient mode accepts partial emulation configs.
+func prepareBlockchainConfigParams(bc tlb.BlockchainConfig, globalVersion tlb.GlobalVersion, strict bool) (*PreparedBlockchainConfig, error) {
 	out := &PreparedBlockchainConfig{
-		root:         configRoot,
+		root:         bc.Root,
 		version:      effectiveGlobalVersion(globalVersion.Version),
 		capabilities: globalVersion.Capabilities,
-		sizeLimits:   transactionLoadSizeLimits(bc),
+	}
+
+	var err error
+	if strict {
+		if out.sizeLimits, err = transactionLoadSizeLimitsStrict(bc); err != nil {
+			return nil, err
+		}
+	} else {
+		out.sizeLimits = transactionLoadSizeLimits(bc)
 	}
 	for _, masterchain := range []bool{false, true} {
 		idx := transactionConfigMasterchainIndex(masterchain)
-		out.gasPrices[idx] = transactionLoadGasPrices(bc, masterchain)
-		out.fwdPrices[idx] = transactionLoadMsgForwardPrices(bc, masterchain)
+		if strict {
+			if out.gasPrices[idx], err = transactionLoadGasPricesStrict(bc, masterchain); err != nil {
+				return nil, err
+			}
+			if out.fwdPrices[idx], err = transactionLoadMsgForwardPricesStrict(bc, masterchain); err != nil {
+				return nil, err
+			}
+		} else {
+			out.gasPrices[idx] = transactionLoadGasPrices(bc, masterchain)
+			out.fwdPrices[idx] = transactionLoadMsgForwardPrices(bc, masterchain)
+		}
 		out.dueLimits[idx] = transactionLoadStorageDueLimits(out.gasPrices[idx])
 	}
-	if err = out.prepareStoragePrices(bc); err != nil {
+	if err = out.prepareStoragePrices(bc, strict); err != nil {
 		return nil, err
 	}
 	out.prepareGlobalID(bc)
-	out.prepareSpecialAccounts(bc)
+	if err = out.prepareSpecialAccounts(bc); err != nil {
+		return nil, err
+	}
 	out.prepareBlackhole(bc)
 	if err = out.prepareSuspended(bc); err != nil {
 		return nil, err
@@ -114,7 +180,9 @@ func PrepareBlockchainConfig(configRoot *cell.Cell) (*PreparedBlockchainConfig, 
 	if err = out.preparePrecompiled(bc); err != nil {
 		return nil, err
 	}
-	out.prepareWorkchains(bc)
+	if err = out.prepareWorkchains(bc, strict); err != nil {
+		return nil, err
+	}
 	for i, id := range preparedUnpackedParamIDs {
 		if param, err := bc.GetParam(id); err == nil {
 			out.unpackedParams[i] = param
@@ -145,6 +213,54 @@ func (c *PreparedBlockchainConfig) GlobalVersion() uint32 {
 // Capabilities returns the capability bit set of config param 8.
 func (c *PreparedBlockchainConfig) Capabilities() uint64 {
 	return c.capabilities
+}
+
+// GasPrices returns the gas limits and prices of config param 20 (masterchain)
+// or 21 (basechain), decoded when this config was prepared. ok is false only for
+// a lenient config prepared without the param; the strict constructor requires
+// both.
+//
+// It is returned by value because the prepared config is shared between
+// concurrently executing account lanes and must stay immutable.
+func (c *PreparedBlockchainConfig) GasPrices(masterchain bool) (tlb.ConfigGasLimitsPrices, bool) {
+	prices := c.gasPricesFor(masterchain)
+	if prices == nil {
+		return tlb.ConfigGasLimitsPrices{}, false
+	}
+	return *prices, true
+}
+
+// ConfigAddress returns the configuration contract address of config param 0.
+// ok is false when the param is absent or is not 256 bits wide, which is the
+// case prepareSpecialAccounts skips silently; this reports what it decided
+// rather than re-deciding it.
+func (c *PreparedBlockchainConfig) ConfigAddress() (addr [32]byte, ok bool) {
+	if c.configAddr == nil {
+		return [32]byte{}, false
+	}
+	return [32]byte(*c.configAddr), true
+}
+
+// SpecialAccounts returns the fundamental smart contracts of config param 31 in
+// dictionary order, with the configuration contract of param 0 appended last and
+// only when param 31 does not already list it. This reflects the dictionary;
+// BlockOptions.ConfigAddress changes execution classification without changing
+// this list.
+//
+// The order is part of the returned value: a masterchain collator runs tick and
+// tock in it, which decides logical time assignment and therefore block bytes.
+// The backing array is shared with the prepared config, so callers must treat it
+// as read-only.
+func (c *PreparedBlockchainConfig) SpecialAccounts() [][32]byte {
+	return c.specialAccountOrder
+}
+
+// IsSpecialAccount reports membership of the set SpecialAccounts enumerates, by
+// raw masterchain account id.
+func (c *PreparedBlockchainConfig) IsSpecialAccount(addr [32]byte) bool {
+	key := preparedAddr256(addr)
+	_, fundamental := c.fundamentalAccounts[key]
+	return fundamental || c.configAddr != nil && key == *c.configAddr
 }
 
 func (c *PreparedBlockchainConfig) globalVersion() uint32 {
@@ -178,10 +294,12 @@ func (c *PreparedBlockchainConfig) storageDueLimitsFor(masterchain bool) transac
 	return c.dueLimits[transactionConfigMasterchainIndex(masterchain)]
 }
 
-func (c *PreparedBlockchainConfig) prepareStoragePrices(bc tlb.BlockchainConfig) error {
+func (c *PreparedBlockchainConfig) prepareStoragePrices(bc tlb.BlockchainConfig, strict bool) error {
 	param, err := bc.GetParam(tlb.ConfigParamStoragePrices)
 	if err != nil {
-		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+		// Param 18 is mandatory in strict mode. Lenient tooling may use an empty
+		// price list when it is absent.
+		if !strict && errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
 			return nil
 		}
 		return fmt.Errorf("failed to load storage prices config param: %w", err)
@@ -200,8 +318,12 @@ func (c *PreparedBlockchainConfig) prepareStoragePrices(bc tlb.BlockchainConfig)
 		}
 
 		var price tlb.ConfigStoragePrices
-		if err = tlb.LoadFromCell(&price, entry.Value.Copy()); err != nil {
+		value := entry.Value.Copy()
+		if err = tlb.LoadFromCell(&price, value); err != nil {
 			return fmt.Errorf("failed to decode storage prices entry %d: %w", key, err)
+		}
+		if value.BitsLeft() != 0 || value.RefsNum() != 0 {
+			return fmt.Errorf("storage prices entry %d has trailing data", key)
 		}
 		if price.ValidSince != uint32(key) {
 			return fmt.Errorf("invalid storage prices entry %d: valid_since=%d", uint32(key), price.ValidSince)
@@ -226,27 +348,48 @@ func (c *PreparedBlockchainConfig) prepareGlobalID(bc tlb.BlockchainConfig) {
 	c.hasGlobalID = true
 }
 
-func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) {
-	c.specialAccounts = map[preparedAddr256]struct{}{}
-	if configAddr, err := bc.GetConfigAddress(); err == nil && len(configAddr) == 32 {
-		c.specialAccounts[preparedAddr256(configAddr)] = struct{}{}
+func (c *PreparedBlockchainConfig) prepareSpecialAccounts(bc tlb.BlockchainConfig) error {
+	c.fundamentalAccounts = map[preparedAddr256]struct{}{}
+	var configAddr *preparedAddr256
+	if addr, err := bc.GetConfigAddress(); err == nil && len(addr) == 32 {
+		stored := preparedAddr256(addr)
+		configAddr = &stored
+		c.configAddr = &stored
 	}
 
 	fundamental, err := bc.GetFundamentalSmartContractAddresses()
-	if err != nil || fundamental.Addresses == nil {
-		return
-	}
-	items, err := fundamental.Addresses.LoadAll(true)
 	if err != nil {
-		return
+		return fmt.Errorf("failed to load fundamental smart contracts config param: %w", err)
 	}
-	for _, item := range items {
+	if fundamental.Addresses == nil || fundamental.Addresses.GetKeySize() != 256 {
+		return errors.New("invalid fundamental smart contracts dictionary")
+	}
+	// The config root commonly comes from lazy CellDB state. Skipping pruned
+	// branches here silently turns fundamental contracts into ordinary accounts.
+	items, err := fundamental.Addresses.LoadAll()
+	if err != nil {
+		return fmt.Errorf("failed to load fundamental smart contracts dictionary: %w", err)
+	}
+	// The order is built here rather than derived from the map: map iteration is
+	// unordered, and the sequence below is what a masterchain collator executes.
+	order := make([][32]byte, 0, len(items)+1)
+	listed := false
+	for i, item := range items {
 		addr, err := item.Key.LoadSlice(256)
-		if err != nil || len(addr) != 32 {
-			continue
+		if err != nil || len(addr) != 32 || item.Key.BitsLeft() != 0 ||
+			item.Value.BitsLeft() != 0 || item.Value.RefsNum() != 0 {
+			return fmt.Errorf("invalid fundamental smart contract entry %d", i)
 		}
-		c.specialAccounts[preparedAddr256(addr)] = struct{}{}
+		stored := preparedAddr256(addr)
+		c.fundamentalAccounts[stored] = struct{}{}
+		order = append(order, stored)
+		listed = listed || configAddr != nil && stored == *configAddr
 	}
+	if configAddr != nil && !listed {
+		order = append(order, *configAddr)
+	}
+	c.specialAccountOrder = order
+	return nil
 }
 
 func (c *PreparedBlockchainConfig) prepareBlackhole(bc tlb.BlockchainConfig) {
@@ -272,7 +415,7 @@ func (c *PreparedBlockchainConfig) prepareSuspended(bc tlb.BlockchainConfig) err
 		return nil
 	}
 
-	items, err := list.Addresses.LoadAll(true)
+	items, err := list.Addresses.LoadAll()
 	if err != nil {
 		return fmt.Errorf("failed to load suspended address list: %w", err)
 	}
@@ -305,7 +448,7 @@ func (c *PreparedBlockchainConfig) preparePrecompiled(bc tlb.BlockchainConfig) e
 		return nil
 	}
 
-	items, err := precompiled.List.LoadAll(true)
+	items, err := precompiled.List.LoadAll()
 	if err != nil {
 		return fmt.Errorf("failed to load precompiled contracts list: %w", err)
 	}
@@ -324,52 +467,63 @@ func (c *PreparedBlockchainConfig) preparePrecompiled(bc tlb.BlockchainConfig) e
 	return nil
 }
 
-func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig) {
+func (c *PreparedBlockchainConfig) prepareWorkchains(bc tlb.BlockchainConfig, strict bool) error {
 	workchains, err := bc.GetWorkchains()
 	if err != nil || workchains == nil || workchains.Workchains == nil {
-		return
+		absent := err == nil || errors.Is(err, tlb.ErrBlockchainConfigParamAbsent)
+		if strict {
+			if !absent {
+				return fmt.Errorf("failed to load workchains config param: %w", err)
+			}
+			// Keep destination checks enabled with an empty list when param 12 is
+			// absent, rejecting every non-masterchain workchain.
+			c.hasWorkchains = true
+			c.workchains = map[int32]*tlb.WorkchainDescr{}
+		}
+		return nil
 	}
 	c.hasWorkchains = true
 	c.workchains = map[int32]*tlb.WorkchainDescr{}
 
-	items, err := workchains.Workchains.LoadAll(true)
+	// A production config commonly comes from a lazy CellDB tree. Its unresolved
+	// refs are pruned boundaries too, so skip-pruned traversal would silently
+	// turn a present workchain dictionary into a partial or empty map.
+	items, err := workchains.Workchains.LoadAll()
 	if err != nil {
-		return
+		if strict {
+			return fmt.Errorf("failed to load workchains config dict: %w", err)
+		}
+		return nil
 	}
 	for _, item := range items {
 		workchain, err := item.Key.LoadInt(32)
 		if err != nil {
+			if strict {
+				return fmt.Errorf("failed to decode workchain id: %w", err)
+			}
 			continue
 		}
 		var descr tlb.WorkchainDescr
 		if err = tlb.LoadFromCell(&descr, item.Value); err != nil {
+			if strict {
+				return fmt.Errorf("failed to decode workchain %d descriptor: %w", workchain, err)
+			}
 			continue
 		}
 		c.workchains[int32(workchain)] = &descr
 	}
+	return nil
 }
 
 // workchainDescr resolves a workchain descriptor from config param 12.
-// checksEnabled is false when the param is absent, which keeps the legacy
-// lenient behavior for partial emulation configs.
+// checksEnabled is false only for lenient (test-helper) configs prepared
+// without the param; strict configs keep checks enabled with an empty list.
 func (c *PreparedBlockchainConfig) workchainDescr(workchain int32) (descr *tlb.WorkchainDescr, found, checksEnabled bool) {
 	if !c.hasWorkchains {
 		return nil, false, false
 	}
 	descr, found = c.workchains[workchain]
 	return descr, found, true
-}
-
-func (c *PreparedBlockchainConfig) isSpecialAccount(addr *address.Address) bool {
-	if len(c.specialAccounts) == 0 || !transactionIsMasterchain(addr) {
-		return false
-	}
-	addrData := addr.Data()
-	if len(addrData) != 32 {
-		return false
-	}
-	_, ok := c.specialAccounts[preparedAddr256(addrData)]
-	return ok
 }
 
 func (c *PreparedBlockchainConfig) isBlackHoleAccount(addr *address.Address) bool {
@@ -427,13 +581,13 @@ func (c *PreparedBlockchainConfig) currentStoragePricesSlice(now uint32) *cell.S
 
 // computeStorageFee accrues the storage fee over [lastPaid, now) across all
 // active storage-price windows, mirroring tlb.BlockchainConfig.ComputeStorageFee.
-func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64) *big.Int {
+func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid, now uint32, bits, cells uint64, historical bool) (*big.Int, error) {
 	if now <= lastPaid || lastPaid == 0 {
-		return big.NewInt(0)
+		return big.NewInt(0), nil
 	}
 	entries := c.storagePrices
 	if len(entries) == 0 || now <= entries[0].price.ValidSince {
-		return big.NewInt(0)
+		return big.NewInt(0), nil
 	}
 
 	i := len(entries)
@@ -449,7 +603,9 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 		upto = entries[0].price.ValidSince
 	}
 
-	total := big.NewInt(0)
+	var fixed fee.U128
+	var wide *big.Int // set once a window leaves the fixed-width range, see transactionStorageFeeRawU128
+	legacy := historicalStoragePayment{size: 1}
 	for ; i < len(entries) && upto < now; i++ {
 		validUntil := now
 		if i < len(entries)-1 && entries[i+1].price.ValidSince < validUntil {
@@ -459,25 +615,93 @@ func (c *PreparedBlockchainConfig) computeStorageFee(masterchain bool, lastPaid,
 			continue
 		}
 
-		total.Add(total, transactionStorageFeeRaw(entries[i].price, masterchain, uint64(validUntil-upto), bits, cells))
+		delta := uint64(validUntil - upto)
 		upto = validUntil
+
+		if historical {
+			if err := legacy.addWindow(entries[i].price, masterchain, delta, bits, cells); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		if wide == nil {
+			part, fits := transactionStorageFeeRawU128(entries[i].price, masterchain, delta, bits, cells)
+			if fits {
+				// Non-negative operands cannot produce a negative window here,
+				// so only the wide path can trip the payment check.
+				if sum, fits := fixed.Add(part); fits {
+					fixed = sum
+					continue
+				}
+			}
+			wide = fixed.Big()
+		}
+
+		part := transactionStorageFeeRaw(entries[i].price, masterchain, delta, bits, cells)
+		if part.Sign() < 0 {
+			return nil, errTransactionNegativeStoragePayment
+		}
+		wide.Add(wide, part)
 	}
 
-	return transactionCeilShiftRight(total, 16)
+	if historical {
+		return legacy.fee(), nil
+	}
+	if wide == nil {
+		return fixed.CeilShr(16).Big(), nil
+	}
+
+	return transactionCeilShiftRight(wide, 16), nil
+}
+
+func transactionStoragePricesFor(price tlb.ConfigStoragePrices, masterchain bool) (bitPrice, cellPrice uint64) {
+	if masterchain {
+		return price.MCBitPrice, price.MCCellPrice
+	}
+	return price.BitPrice, price.CellPrice
+}
+
+// transactionStorageFeeRawU128 is transactionStorageFeeRaw in fixed width. It
+// reports false whenever the signed reading below could differ from an unsigned
+// one, or the result leaves 128 bits, and the arbitrary-precision form runs.
+func transactionStorageFeeRawU128(price tlb.ConfigStoragePrices, masterchain bool, delta, bits, cells uint64) (fee.U128, bool) {
+	bitPrice, cellPrice := transactionStoragePricesFor(price, masterchain)
+
+	// mul_short takes a signed machine word, so an operand above MaxInt64 is a
+	// negative multiplicand there rather than a large positive one. The two
+	// readings coincide only while every operand keeps bit 63 clear.
+	if (cells|cellPrice|bits|bitPrice)>>63 != 0 {
+		return fee.U128{}, false
+	}
+
+	total, fits := fee.Mul64(cells, cellPrice).Add(fee.Mul64(bits, bitPrice))
+	if !fits {
+		return fee.U128{}, false
+	}
+
+	return total.Mul64(delta)
 }
 
 func transactionStorageFeeRaw(price tlb.ConfigStoragePrices, masterchain bool, delta, bits, cells uint64) *big.Int {
-	bitPrice := price.BitPrice
-	cellPrice := price.CellPrice
-	if masterchain {
-		bitPrice = price.MCBitPrice
-		cellPrice = price.MCCellPrice
-	}
+	bitPrice, cellPrice := transactionStoragePricesFor(price, masterchain)
 
-	total := new(big.Int).Mul(new(big.Int).SetUint64(cells), new(big.Int).SetUint64(cellPrice))
-	total.Add(total, new(big.Int).Mul(new(big.Int).SetUint64(bits), new(big.Int).SetUint64(bitPrice)))
-	total.Mul(total, new(big.Int).SetUint64(delta))
-	return total
+	// BigInt256::mul_short takes a signed machine word. The transaction
+	// implementation passes the uint64 config fields directly, so values above
+	// MaxInt64 are interpreted as negative two's-complement integers.
+	total := new(big.Int).SetInt64(int64(cells))
+	var factor big.Int
+	factor.SetInt64(int64(cellPrice))
+	total.Mul(total, &factor)
+
+	var part big.Int
+	part.SetInt64(int64(bits))
+	factor.SetInt64(int64(bitPrice))
+	part.Mul(&part, &factor)
+	total.Add(total, &part)
+
+	factor.SetUint64(delta)
+	return total.Mul(total, &factor)
 }
 
 func transactionLoadGasPrices(blockchainCfg tlb.BlockchainConfig, masterchain bool) *tlb.ConfigGasLimitsPrices {
@@ -488,12 +712,64 @@ func transactionLoadGasPrices(blockchainCfg tlb.BlockchainConfig, masterchain bo
 	return prices
 }
 
+// transactionLoadGasPricesStrict requires config param 20/21 to be present,
+// well-formed, and fully consumed.
+func transactionLoadGasPricesStrict(blockchainCfg tlb.BlockchainConfig, masterchain bool) (*tlb.ConfigGasLimitsPrices, error) {
+	paramID := tlb.ConfigParamGasPricesBasechain
+	if masterchain {
+		paramID = tlb.ConfigParamGasPricesMasterchain
+	}
+	root, err := blockchainCfg.GetParam(paramID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load gas prices config param %d: %w", paramID, err)
+	}
+
+	loader, err := root.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse gas prices config param %d: %w", paramID, err)
+	}
+	var prices tlb.ConfigGasLimitsPrices
+	if err = tlb.LoadFromCell(&prices, loader); err != nil {
+		return nil, fmt.Errorf("failed to parse gas prices config param %d: %w", paramID, err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return nil, fmt.Errorf("gas prices config param %d has unparsed data", paramID)
+	}
+	return &prices, nil
+}
+
 func transactionLoadMsgForwardPrices(blockchainCfg tlb.BlockchainConfig, masterchain bool) *tlb.ConfigMsgForwardPrices {
 	prices, err := blockchainCfg.GetMsgForwardPrices(masterchain)
 	if err != nil {
 		return nil
 	}
 	return prices
+}
+
+// transactionLoadMsgForwardPricesStrict requires config param 24/25 to be
+// present, well-formed, and fully consumed.
+func transactionLoadMsgForwardPricesStrict(blockchainCfg tlb.BlockchainConfig, masterchain bool) (*tlb.ConfigMsgForwardPrices, error) {
+	paramID := tlb.ConfigParamMsgForwardPricesBasechain
+	if masterchain {
+		paramID = tlb.ConfigParamMsgForwardPricesMasterchain
+	}
+	root, err := blockchainCfg.GetParam(paramID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load msg forward prices config param %d: %w", paramID, err)
+	}
+
+	loader, err := root.BeginParse()
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse msg forward prices config param %d: %w", paramID, err)
+	}
+	var prices tlb.ConfigMsgForwardPrices
+	if err = tlb.LoadFromCell(&prices, loader); err != nil {
+		return nil, fmt.Errorf("failed to parse msg forward prices config param %d: %w", paramID, err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return nil, fmt.Errorf("msg forward prices config param %d has unparsed data", paramID)
+	}
+	return &prices, nil
 }
 
 func transactionLoadStorageDueLimits(prices *tlb.ConfigGasLimitsPrices) transactionStorageDueLimits {
@@ -513,6 +789,8 @@ func transactionDefaultSizeLimits() transactionSizeLimits {
 	return transactionSizeLimits{
 		maxMsgBits:                  1 << 21,
 		maxMsgCells:                 1 << 13,
+		maxTotalMsgBits:             (1 << 21) * 5 / 2,
+		maxTotalMsgCells:            (1 << 13) * 5 / 2,
 		maxLibraryCells:             1000,
 		maxExtMsgDepth:              512,
 		maxAccStateCells:            1 << 16,
@@ -526,12 +804,40 @@ func transactionDefaultSizeLimits() transactionSizeLimits {
 }
 
 func transactionLoadSizeLimits(blockchainCfg tlb.BlockchainConfig) transactionSizeLimits {
-	out := transactionDefaultSizeLimits()
 	config, err := blockchainCfg.GetSizeLimitsConfig()
 	if err != nil {
-		return out
+		return transactionDefaultSizeLimits()
+	}
+	return transactionApplySizeLimits(config)
+}
+
+// transactionLoadSizeLimitsStrict loads config param 43. An absent param uses
+// defaults; a present param must be well-formed and fully consumed.
+func transactionLoadSizeLimitsStrict(blockchainCfg tlb.BlockchainConfig) (transactionSizeLimits, error) {
+	root, err := blockchainCfg.GetParam(tlb.ConfigParamSizeLimits)
+	if err != nil {
+		if errors.Is(err, tlb.ErrBlockchainConfigParamAbsent) {
+			return transactionDefaultSizeLimits(), nil
+		}
+		return transactionSizeLimits{}, fmt.Errorf("failed to load size limits config param: %w", err)
 	}
 
+	loader, err := root.BeginParse()
+	if err != nil {
+		return transactionSizeLimits{}, fmt.Errorf("failed to parse size limits config param: %w", err)
+	}
+	var config tlb.SizeLimitsConfig
+	if err = tlb.LoadFromCell(&config, loader); err != nil {
+		return transactionSizeLimits{}, fmt.Errorf("failed to parse size limits config param: %w", err)
+	}
+	if loader.BitsLeft() != 0 || loader.RefsNum() != 0 {
+		return transactionSizeLimits{}, errors.New("size limits config param has unparsed data")
+	}
+	return transactionApplySizeLimits(config), nil
+}
+
+func transactionApplySizeLimits(config tlb.SizeLimitsConfig) transactionSizeLimits {
+	out := transactionDefaultSizeLimits()
 	switch v := config.Config.(type) {
 	case tlb.SizeLimitsConfigV1:
 		out.maxMsgBits = uint64(v.MaxMsgBits)
@@ -551,6 +857,24 @@ func transactionLoadSizeLimits(blockchainCfg tlb.BlockchainConfig) transactionSi
 		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
 		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
 		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
+		if v.MaxTransactionLibraryLoads != nil {
+			limit := *v.MaxTransactionLibraryLoads
+			out.maxTransactionLibraryLoads = &limit
+		}
+	case tlb.SizeLimitsConfigV3:
+		out.maxMsgBits = uint64(v.MaxMsgBits)
+		out.maxMsgCells = uint64(v.MaxMsgCells)
+		out.maxLibraryCells = uint64(v.MaxLibraryCells)
+		out.maxExtMsgDepth = v.MaxExtMsgDepth
+		out.maxVMDataDepth = v.MaxVMDataDepth
+		out.maxAccStateCells = uint64(v.MaxAccStateCells)
+		out.maxMCAccStateCells = uint64(v.MaxMCAccStateCells)
+		out.maxAccPublicLibraries = uint64(v.MaxAccPublicLibraries)
+		out.maxMsgExtraCurrencies = uint64(v.MaxMsgExtraCurrencies)
+		out.maxAccFixedPrefixLength = uint64(v.MaxAccFixedPrefixLength)
+		out.accStateCellsForStorageDict = uint64(v.AccStateCellsForStorageDict)
+		out.maxTotalMsgBits = uint64(v.MaxTotalMsgBits)
+		out.maxTotalMsgCells = uint64(v.MaxTotalMsgCells)
 		if v.MaxTransactionLibraryLoads != nil {
 			limit := *v.MaxTransactionLibraryLoads
 			out.maxTransactionLibraryLoads = &limit

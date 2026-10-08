@@ -24,6 +24,9 @@ func validateBoundaryCell(c *Cell) error {
 
 func validateCell(c *Cell, loadRefs bool) error {
 	if !c.IsSpecial() {
+		if c.getLevelMask() != ordinaryLevelMask(c.rawRefs()) {
+			return fmt.Errorf("ordinary cell level mask mismatch")
+		}
 		return nil
 	}
 
@@ -54,9 +57,16 @@ func validateCell(c *Cell, loadRefs bool) error {
 		if level > _DataCellMaxLevel || level == 0 {
 			return fmt.Errorf("pruned branch has an invalid level")
 		}
-		expectedBits := (2 + levelMask.Apply(level-1).getHashesCount()*(hashSize+depthSize)) * 8
+		storedHashes := levelMask.Apply(level - 1).getHashesCount()
+		expectedBits := (2 + storedHashes*(hashSize+depthSize)) * 8
 		if int(c.bitsSz) != expectedBits {
 			return fmt.Errorf("not enough data for a pruned branch special cell")
+		}
+		depthOffset := 2 + storedHashes*hashSize
+		for i := 0; i < storedHashes; i++ {
+			if binary.BigEndian.Uint16(c.data[depthOffset+i*depthSize:]) > maxDepth {
+				return fmt.Errorf("pruned branch depth exceeds maximum")
+			}
 		}
 	case LibraryCellType:
 		if _, err := specialCellRefs(c, typ, loadRefs); err != nil {
@@ -64,6 +74,11 @@ func validateCell(c *Cell, loadRefs bool) error {
 		}
 		if c.bitsSz != 8+256 {
 			return fmt.Errorf("not enough data for a library special cell")
+		}
+		// reference DataCell keeps a zero level mask for library cells, and
+		// BoC deserialization rejects any descriptor that disagrees
+		if c.getLevelMask().Mask != 0 {
+			return fmt.Errorf("library level mask mismatch")
 		}
 	case MerkleProofCellType:
 		if c.bitsSz != 8+(hashSize+depthSize)*8 {

@@ -3,7 +3,7 @@ package overlay
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
+	"errors"
 	"fmt"
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/tl"
@@ -29,24 +29,54 @@ type ADNL interface {
 }
 
 type ADNLWrapper struct {
-	overlays map[string]*ADNLOverlayWrapper
+	overlays map[overlayIDKey]*ADNLOverlayWrapper
 	mx       sync.RWMutex
 
-	broadcastControls      map[string]map[uint64]broadcastFECControlHandler
+	broadcastControls      map[broadcastFECIDKey]*broadcastFECControlHandlers
 	nextBroadcastControlID uint64
+	// Replaced as a whole under mx and immutable after publication.
+	broadcastReceivers []*BroadcastReceiver
 
 	rootQueryHandler      func(msg *adnl.MessageQuery) error
 	rootDisconnectHandler func(addr string, key ed25519.PublicKey)
 	rootCustomHandler     func(msg *adnl.MessageCustom) error
 	unknownOverlayHandler func(msg *adnl.MessageQuery) error
 
+	broadcastReceiverResolver BroadcastReceiverResolver
+
 	ADNL
 }
 
 type broadcastFECControlHandler func(peerID []byte, control BroadcastFECControl) bool
 
+type broadcastFECControlHandlers struct {
+	registered map[uint64]broadcastFECControlHandler
+	snapshot   []broadcastFECControlHandler
+}
+
+var ErrBroadcastReceiverNotFound = errors.New("overlay: broadcast receiver not found")
+var ErrBroadcastRejected = errors.New("overlay: broadcast rejected")
+
+type BroadcastReceiverResolver func(overlayID []byte) (*BroadcastReceiver, error)
+
 type broadcastFECControlRegistrar interface {
 	registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func()
+}
+
+type adnlBroadcastPeer struct {
+	transport *ADNLWrapper
+}
+
+func (p adnlBroadcastPeer) ID() []byte {
+	return p.transport.GetID()
+}
+
+func (p adnlBroadcastPeer) SendCustomMessage(ctx context.Context, req tl.Serializable) error {
+	return p.transport.ADNL.SendCustomMessage(ctx, req)
+}
+
+func (p adnlBroadcastPeer) SendPreparedCustomMessage(ctx context.Context, body []byte) error {
+	return p.transport.ADNL.SendCustomMessage(ctx, tl.Raw(body))
 }
 
 func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.PublicKey) {
@@ -56,8 +86,8 @@ func (a *ADNLWrapper) GetDisconnectHandler() func(addr string, key ed25519.Publi
 func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {
 	w := &ADNLWrapper{
 		ADNL:              adnl,
-		overlays:          map[string]*ADNLOverlayWrapper{},
-		broadcastControls: map[string]map[uint64]broadcastFECControlHandler{},
+		overlays:          map[overlayIDKey]*ADNLOverlayWrapper{},
+		broadcastControls: map[broadcastFECIDKey]*broadcastFECControlHandlers{},
 	}
 	w.ADNL.SetQueryHandler(w.queryHandler)
 	w.ADNL.SetCustomMessageHandler(w.customHandler)
@@ -67,46 +97,71 @@ func CreateExtendedADNL(adnl ADNL) *ADNLWrapper {
 }
 
 func (a *ADNLWrapper) registerBroadcastFECControl(hash []byte, handler broadcastFECControlHandler) func() {
-	key := string(hash)
+	key, ok := newBroadcastFECIDKey(hash)
+	if !ok {
+		return func() {}
+	}
 
 	a.mx.Lock()
 	if a.broadcastControls == nil {
-		a.broadcastControls = map[string]map[uint64]broadcastFECControlHandler{}
+		a.broadcastControls = map[broadcastFECIDKey]*broadcastFECControlHandlers{}
 	}
 	a.nextBroadcastControlID++
 	id := a.nextBroadcastControlID
 	handlers := a.broadcastControls[key]
 	if handlers == nil {
-		handlers = map[uint64]broadcastFECControlHandler{}
+		handlers = &broadcastFECControlHandlers{
+			registered: map[uint64]broadcastFECControlHandler{},
+		}
 		a.broadcastControls[key] = handlers
 	}
-	handlers[id] = handler
+	handlers.registered[id] = handler
+	handlers.rebuildSnapshot()
 	a.mx.Unlock()
 
 	return func() {
 		a.mx.Lock()
 		handlers := a.broadcastControls[key]
 		if handlers != nil {
-			delete(handlers, id)
-			if len(handlers) == 0 {
+			delete(handlers.registered, id)
+			if len(handlers.registered) == 0 {
 				delete(a.broadcastControls, key)
+			} else {
+				handlers.rebuildSnapshot()
 			}
 		}
 		a.mx.Unlock()
 	}
 }
 
-func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool {
-	a.mx.RLock()
-	handlersMap := a.broadcastControls[string(control.Hash)]
-	handlers := make([]broadcastFECControlHandler, 0, len(handlersMap))
-	for _, handler := range handlersMap {
-		handlers = append(handlers, handler)
+func (h *broadcastFECControlHandlers) rebuildSnapshot() {
+	snapshot := make([]broadcastFECControlHandler, 0, len(h.registered))
+	for _, handler := range h.registered {
+		snapshot = append(snapshot, handler)
 	}
-	overlays := make([]*ADNLOverlayWrapper, 0, len(a.overlays))
+	h.snapshot = snapshot
+}
+
+func (a *ADNLWrapper) rebuildBroadcastReceiversLocked() {
+	receivers := make([]*BroadcastReceiver, 0, len(a.overlays))
 	for _, overlay := range a.overlays {
-		overlays = append(overlays, overlay)
+		receivers = append(receivers, overlay.BroadcastReceiver)
 	}
+	a.broadcastReceivers = receivers
+}
+
+func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool {
+	key, ok := newBroadcastFECIDKey(control.Hash)
+	if !ok {
+		return false
+	}
+
+	a.mx.RLock()
+	var handlers []broadcastFECControlHandler
+	if registered := a.broadcastControls[key]; registered != nil {
+		handlers = registered.snapshot
+	}
+	receivers := a.broadcastReceivers
 	a.mx.RUnlock()
 
 	handled := false
@@ -116,8 +171,8 @@ func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool
 			handled = true
 		}
 	}
-	for _, overlay := range overlays {
-		if overlay.trackBroadcastFECRelayControl(peerID, control) {
+	for _, receiver := range receivers {
+		if receiver.trackBroadcastFECRelayControl(peerID, control) {
 			handled = true
 		}
 	}
@@ -125,48 +180,68 @@ func (a *ADNLWrapper) trackBroadcastFECControl(control BroadcastFECControl) bool
 }
 
 func (a *ADNLWrapper) SetQueryHandler(handler func(msg *adnl.MessageQuery) error) {
+	a.mx.Lock()
 	a.rootQueryHandler = handler
+	a.mx.Unlock()
 }
 
 func (a *ADNLWrapper) SetDisconnectHandler(handler func(addr string, key ed25519.PublicKey)) {
+	a.mx.Lock()
 	a.rootDisconnectHandler = handler
+	a.mx.Unlock()
 }
 
 func (a *ADNLWrapper) SetCustomMessageHandler(handler func(msg *adnl.MessageCustom) error) {
+	a.mx.Lock()
 	a.rootCustomHandler = handler
+	a.mx.Unlock()
 }
 
 func (a *ADNLWrapper) SetOnUnknownOverlayQuery(handler func(query *adnl.MessageQuery) error) {
+	a.mx.Lock()
 	a.unknownOverlayHandler = handler
+	a.mx.Unlock()
+}
+
+func (a *ADNLWrapper) SetBroadcastReceiverResolver(resolver BroadcastReceiverResolver) {
+	a.mx.Lock()
+	a.broadcastReceiverResolver = resolver
+	a.mx.Unlock()
 }
 
 func (a *ADNLWrapper) queryHandler(msg *adnl.MessageQuery) error {
 	obj, over := UnwrapQuery(msg.Data)
 	if over != nil {
-		id := hex.EncodeToString(over)
+		id, err := newOverlayIDKey(over)
+		if err != nil {
+			return err
+		}
 		a.mx.RLock()
 		o := a.overlays[id]
+		unknown := a.unknownOverlayHandler
 		a.mx.RUnlock()
 		if o == nil {
-			if h := a.unknownOverlayHandler; h != nil {
-				return h(msg)
+			if unknown != nil {
+				return unknown(msg)
 			}
-			return fmt.Errorf("got query for unregistered overlay with id: %s", id)
+			return fmt.Errorf("got query for unregistered overlay with id: %x", over)
 		}
 
 		switch obj.(type) {
-		case Ping, *Ping:
+		case Ping:
 			return a.Answer(context.Background(), msg.ID, Pong{})
 		}
 
-		h := o.queryHandler
+		h := o.overlayQueryHandler()
 		if h == nil {
 			return nil
 		}
 		return h(&adnl.MessageQuery{ID: msg.ID, Data: obj})
 	}
 
+	a.mx.RLock()
 	h := a.rootQueryHandler
+	a.mx.RUnlock()
 	if h == nil {
 		return nil
 	}
@@ -178,14 +253,14 @@ func (a *ADNLWrapper) disconnectHandler(addr string, key ed25519.PublicKey) {
 
 	a.mx.RLock()
 	for _, w := range a.overlays {
-		dis := w.disconnectHandler
+		dis := w.overlayDisconnectHandler()
 		if dis != nil {
 			list = append(list, dis)
 		}
 	}
+	dis := a.rootDisconnectHandler
 	a.mx.RUnlock()
 
-	dis := a.rootDisconnectHandler
 	if dis != nil {
 		list = append(list, dis)
 	}
@@ -196,51 +271,57 @@ func (a *ADNLWrapper) disconnectHandler(addr string, key ed25519.PublicKey) {
 }
 
 func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
+	return a.handleCustomMessage(adnlBroadcastPeer{transport: a}, msg)
+}
+
+func (a *ADNLWrapper) handleCustomMessage(peer BroadcastPeer, msg *adnl.MessageCustom) error {
 	obj, over := UnwrapMessage(msg.Data)
 	if over != nil {
-		id := hex.EncodeToString(over)
+		id, err := newOverlayIDKey(over)
+		if err != nil {
+			return err
+		}
 		a.mx.RLock()
 		o := a.overlays[id]
+		resolver := a.broadcastReceiverResolver
 		a.mx.RUnlock()
+
+		if isBroadcastMessage(obj) {
+			var receiver *BroadcastReceiver
+			if o != nil && o.BroadcastReceiver.IsActive() {
+				receiver = o.BroadcastReceiver
+			}
+			if receiver == nil && resolver != nil {
+				receiver, err = resolver(over)
+				if err != nil {
+					if errors.Is(err, ErrBroadcastReceiverNotFound) {
+						return nil
+					}
+					return fmt.Errorf("resolve broadcast receiver for overlay %x: %w", over, err)
+				}
+				if receiver == nil {
+					return fmt.Errorf("resolve broadcast receiver for overlay %x: resolver returned nil receiver", over)
+				}
+			}
+			if receiver == nil {
+				return nil
+			}
+			if receiver.overlayKey != id {
+				return fmt.Errorf("broadcast receiver overlay id mismatch")
+			}
+			if err = receiver.HandleMessage(peer, obj); err != nil {
+				if errors.Is(err, ErrBroadcastRejected) {
+					return nil
+				}
+				return err
+			}
+			return nil
+		}
+
 		if o == nil {
-			return fmt.Errorf("got custom message for unregistered overlay with id: %s", id)
+			return fmt.Errorf("got custom message for unregistered overlay with id: %x", over)
 		}
-
-		switch t := obj.(type) {
-		case Broadcast:
-			if err := o.processBroadcast(&t, a.GetID()); err != nil {
-				return fmt.Errorf("failed to process broadcast: %w", err)
-			}
-			return nil
-		case BroadcastTwoStepSimple:
-			if !o.isBroadcastTwoStepEnabled() {
-				return nil
-			}
-			if err := o.processBroadcastTwoStepSimple(&t, a.GetID()); err != nil {
-				return fmt.Errorf("failed to process two-step simple broadcast: %w", err)
-			}
-			return nil
-		case BroadcastTwoStepFEC:
-			if !o.isBroadcastTwoStepEnabled() {
-				return nil
-			}
-			if err := o.processBroadcastTwoStepFEC(&t, a.GetID()); err != nil {
-				return fmt.Errorf("failed to process two-step FEC broadcast: %w", err)
-			}
-			return nil
-		case BroadcastFECShort:
-			if err := o.processFECBroadcastShort(&t); err != nil {
-				return fmt.Errorf("failed to process short FEC broadcast: %w", err)
-			}
-			return nil
-		case BroadcastFEC:
-			if err := o.processFECBroadcast(&t); err != nil {
-				return fmt.Errorf("failed to process FEC broadcast: %w", err)
-			}
-			return nil
-		}
-
-		h := o.customHandler
+		h := o.customMessageHandler()
 		if h == nil {
 			return nil
 		}
@@ -249,18 +330,82 @@ func (a *ADNLWrapper) customHandler(msg *adnl.MessageCustom) error {
 
 	switch t := msg.Data.(type) {
 	case FECReceived:
-		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash}) {
-			return nil
-		}
+		a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash})
+		return nil
 	case FECCompleted:
-		if a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash, Completed: true}) {
-			return nil
-		}
+		a.trackBroadcastFECControl(BroadcastFECControl{Hash: t.Hash, Completed: true})
+		return nil
 	}
 
+	a.mx.RLock()
 	h := a.rootCustomHandler
+	a.mx.RUnlock()
 	if h == nil {
 		return nil
 	}
 	return h(msg)
+}
+
+func isBroadcastMessage(msg tl.Serializable) bool {
+	switch msg.(type) {
+	case Broadcast, BroadcastTwoStepSimple, BroadcastTwoStepFEC, BroadcastFECShort, BroadcastFEC, FECReceived, FECCompleted:
+		return true
+	default:
+		return false
+	}
+}
+
+// HandleMessage verifies and processes one already-decoded overlay broadcast or
+// control message received from an authenticated transport peer. The peer is
+// also used for FEC control responses; its SendCustomMessage method must apply
+// the transport's overlay framing when that transport requires it.
+func (r *BroadcastReceiver) HandleMessage(peer BroadcastPeer, msg tl.Serializable) error {
+	if !r.IsActive() {
+		return ErrBroadcastRejected
+	}
+
+	w := ADNLOverlayWrapper{
+		broadcastPeer:     peer,
+		BroadcastReceiver: r,
+	}
+	immediatePeerID := peer.ID()
+
+	switch t := msg.(type) {
+	case FECReceived:
+		r.trackBroadcastFECRelayControl(immediatePeerID, BroadcastFECControl{Hash: t.Hash})
+	case FECCompleted:
+		r.trackBroadcastFECRelayControl(immediatePeerID, BroadcastFECControl{
+			Hash:      t.Hash,
+			Completed: true,
+		})
+	case Broadcast:
+		if err := w.processBroadcast(&t, immediatePeerID); err != nil {
+			return fmt.Errorf("failed to process broadcast: %w", err)
+		}
+	case BroadcastTwoStepSimple:
+		if !r.isBroadcastTwoStepEnabled() {
+			return ErrBroadcastRejected
+		}
+		if err := w.processBroadcastTwoStepSimple(&t, immediatePeerID); err != nil {
+			return fmt.Errorf("failed to process two-step simple broadcast: %w", err)
+		}
+	case BroadcastTwoStepFEC:
+		if !r.isBroadcastTwoStepEnabled() {
+			return ErrBroadcastRejected
+		}
+		if err := w.processBroadcastTwoStepFEC(&t, immediatePeerID); err != nil {
+			return fmt.Errorf("failed to process two-step fec broadcast: %w", err)
+		}
+	case BroadcastFECShort:
+		if err := w.processFECBroadcastShort(&t); err != nil {
+			return fmt.Errorf("failed to process short FEC broadcast: %w", err)
+		}
+	case BroadcastFEC:
+		if err := w.processFECBroadcast(&t); err != nil {
+			return fmt.Errorf("failed to process FEC broadcast: %w", err)
+		}
+	default:
+		return fmt.Errorf("unsupported broadcast message %T", msg)
+	}
+	return nil
 }

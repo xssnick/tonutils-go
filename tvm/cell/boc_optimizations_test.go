@@ -117,7 +117,10 @@ func TestBOCViewReverseMetaMatchesPrunedMultiLevelCells(t *testing.T) {
 
 	for _, trusted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("trusted=%t", trusted), func(t *testing.T) {
-			roots, parsed, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{TrustedHashes: trusted})
+			roots, parsed, err := FromBOCMultiRootReader(NewBOCNoCopyReader(boc), BOCParseOptions{
+				TrustedHashes:         trusted,
+				AllowNonZeroLevelRoot: true,
+			})
 			if err != nil {
 				t.Fatalf("parse boc: %v", err)
 			}

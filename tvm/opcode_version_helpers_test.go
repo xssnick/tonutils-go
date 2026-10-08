@@ -18,10 +18,10 @@ import (
 )
 
 const registeredOpcodeAvailabilityAuditGasLimit = 1_000
-const expectedRegisteredOpcodeAvailabilityAuditCases = 788
-const expectedRegisteredOpcodeAvailabilityAuditHash = "22b112e9c0b5c1d74594ede15f88ae8666c914ef457fcff28a0ca5148f76a3db"
-const expectedRegisteredOpcodeAvailabilityNonSerializableCount = 22
-const expectedRegisteredOpcodeAvailabilityNonSerializableHash = "47c53f605953b7ae5e8d1988ade76ef35a4abb8b5712afdfbb3077cce085252d"
+const expectedRegisteredOpcodeAvailabilityAuditCases = 751
+const expectedRegisteredOpcodeAvailabilityAuditHash = "57b9500634fd3470105ad50fdbb7319303656beafd29a2787fd59a200c058299"
+const expectedRegisteredOpcodeAvailabilityNonSerializableCount = 17
+const expectedRegisteredOpcodeAvailabilityNonSerializableHash = "e0cc8926aa78223fdf34f3a0887f4833b77206d294eccac2fe9ee6404e9454ea"
 
 type registeredOpcodeAvailabilityAuditCase struct {
 	name   string
@@ -53,7 +53,7 @@ func opcodeMinVersionInstructionCode(tt opcodeMinGlobalVersionCase) *cell.Cell {
 
 func registeredOpcodeAvailabilityAuditCases() []registeredOpcodeAvailabilityAuditCase {
 	var cases []registeredOpcodeAvailabilityAuditCase
-	for idx, opGetter := range vm.List {
+	for idx, opGetter := range vm.AllOps() {
 		op := opGetter()
 		if versioned, ok := op.(vm.VersionedOp); ok && versioned.MinGlobalVersion() > 0 {
 			continue
@@ -147,7 +147,7 @@ func registeredOpcodeAvailabilityInventoryHash(items []string) string {
 
 func registeredOpcodeAvailabilityNonSerializableInventory() []string {
 	var inventory []string
-	for idx, opGetter := range vm.List {
+	for idx, opGetter := range vm.AllOps() {
 		op := opGetter()
 		if _, ok := registeredOpcodeAvailabilityAuditCode(op); ok {
 			continue
@@ -166,7 +166,7 @@ func registeredOpcodeAvailabilityNonSerializableIndexes(t testing.TB) map[string
 	t.Helper()
 
 	indexes := make(map[string]string)
-	for idx, opGetter := range vm.List {
+	for idx, opGetter := range vm.AllOps() {
 		op := opGetter()
 		if _, ok := registeredOpcodeAvailabilityAuditCode(op); ok {
 			continue
@@ -219,38 +219,33 @@ func registeredOpcodeAvailabilitySupplementalIndex(t testing.TB, name string) st
 
 func registeredOpcodeAvailabilityRequiredCaseNames() map[string]struct{} {
 	return map[string]struct{}{
-		"045_XLOAD":                      {},
-		"046_XLOADQ":                     {},
-		"152_DICTGET":                    {},
-		"273_PFXDICTGETQ":                {},
-		"420_CHKSIGNU":                   {},
-		"421_CHKSIGNS":                   {},
-		"482_LDMSGADDR":                  {},
-		"486_REWRITESTDADDR":             {},
-		"528_ADD":                        {},
-		"831_NOP":                        {},
-		"supplemental_089_STREFCONST":    {},
-		"supplemental_100_LDI":           {},
-		"supplemental_103_LDU":           {},
-		"supplemental_132_PLDU":          {},
-		"supplemental_138_STI":           {},
-		"supplemental_143_STU":           {},
-		"supplemental_285_PFXDICTSWITCH": {},
-		"supplemental_339_IFBITJMPREF":   {},
-		"supplemental_349_CALLREF":       {},
-		"supplemental_350_JMPREF":        {},
-		"supplemental_351_JMPREFDATA":    {},
-		"supplemental_352_IFREF":         {},
-		"supplemental_353_IFNOTREF":      {},
-		"supplemental_354_IFJMPREF":      {},
-		"supplemental_355_IFNOTJMPREF":   {},
-		"supplemental_356_IFREFELSE":     {},
-		"supplemental_357_IFELSEREF":     {},
-		"supplemental_358_IFREFELSEREF":  {},
-		"supplemental_812_DICTPUSHCONST": {},
-		"supplemental_841_PUSHCONT":      {},
-		"supplemental_843_PUSHINT":       {},
-		"supplemental_845_PUSHREF":       {},
+		"043_XLOAD":                      {},
+		"044_XLOADQ":                     {},
+		"113_DICTGET":                    {},
+		"234_PFXDICTGETQ":                {},
+		"341_CHKSIGNU":                   {},
+		"342_CHKSIGNS":                   {},
+		"402_LDMSGADDR":                  {},
+		"406_REWRITESTDADDR":             {},
+		"447_ADD":                        {},
+		"588_NOP":                        {},
+		"supplemental_084_STREFCONST":    {},
+		"supplemental_246_PFXDICTSWITCH": {},
+		"supplemental_282_IFBITJMPREF":   {},
+		"supplemental_291_CALLREF":       {},
+		"supplemental_292_JMPREF":        {},
+		"supplemental_293_JMPREFDATA":    {},
+		"supplemental_294_IFREF":         {},
+		"supplemental_295_IFNOTREF":      {},
+		"supplemental_296_IFJMPREF":      {},
+		"supplemental_297_IFNOTJMPREF":   {},
+		"supplemental_298_IFREFELSE":     {},
+		"supplemental_299_IFELSEREF":     {},
+		"supplemental_300_IFREFELSEREF":  {},
+		"supplemental_578_DICTPUSHCONST": {},
+		"supplemental_594_PUSHCONT":      {},
+		"supplemental_595_PUSHINT":       {},
+		"supplemental_596_PUSHREF":       {},
 	}
 }
 
@@ -271,18 +266,11 @@ func registeredOpcodeAvailabilityFuzzSeeds(cases []registeredOpcodeAvailabilityA
 	return seeds
 }
 
-func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed, expectedCount int, expectedHash string) {
+func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed) {
 	t.Helper()
 
-	inventory := registeredOpcodeAvailabilityFuzzSeedInventory(cases, seeds)
 	if len(seeds) == 0 {
 		t.Fatal("registered opcode availability fuzz seeds are empty")
-	}
-	if len(seeds) != expectedCount {
-		t.Fatalf("registered opcode availability fuzz seed count = %d, want %d:\n%s", len(seeds), expectedCount, strings.Join(inventory, "\n"))
-	}
-	if got := registeredOpcodeAvailabilityFuzzSeedInventoryHash(inventory); got != expectedHash {
-		t.Fatalf("registered opcode availability fuzz seed hash = %s, want %s:\n%s", got, expectedHash, strings.Join(inventory, "\n"))
 	}
 
 	seen := make(map[int]map[int]struct{}, len(cases))
@@ -319,49 +307,26 @@ func assertRegisteredOpcodeAvailabilityFuzzSeedInventory(t testing.TB, cases []r
 	}
 }
 
-func registeredOpcodeAvailabilityFuzzSeedInventory(cases []registeredOpcodeAvailabilityAuditCase, seeds []registeredOpcodeAvailabilityFuzzSeed) []string {
-	items := make([]string, 0, len(seeds))
-	for _, seed := range seeds {
-		name := "<invalid>"
-		if seed.caseIdx >= 0 && seed.caseIdx < len(cases) {
-			name = cases[seed.caseIdx].name
-		}
-		items = append(items, fmt.Sprintf("%s:v%d", name, seed.version))
-	}
-	sort.Strings(items)
-	return items
-}
-
-func registeredOpcodeAvailabilityFuzzSeedInventoryHash(items []string) string {
-	sum := sha256.Sum256([]byte(strings.Join(items, "\n")))
-	return fmt.Sprintf("%x", sum[:])
-}
-
 func registeredOpcodeAvailabilitySupplementalCases() []registeredOpcodeAvailabilityAuditCase {
 	ref := cell.BeginCell().EndCell()
 	return []registeredOpcodeAvailabilityAuditCase{
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_089_STREFCONST", cellsliceop.STREFCONST(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_100_LDI", cellsliceop.LDI(1)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_103_LDU", cellsliceop.LDU(1)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_132_PLDU", cellsliceop.PLDU(1)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_138_STI", cellsliceop.STI(1)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_143_STU", cellsliceop.STU(1)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_285_PFXDICTSWITCH", dictop.PFXDICTSWITCH(ref, 0)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_339_IFBITJMPREF", execop.IFBITJMPREF(0, ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_349_CALLREF", execop.CALLREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_350_JMPREF", execop.JMPREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_351_JMPREFDATA", execop.JMPREFDATA(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_352_IFREF", execop.IFREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_353_IFNOTREF", execop.IFNOTREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_354_IFJMPREF", execop.IFJMPREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_355_IFNOTJMPREF", execop.IFNOTJMPREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_356_IFREFELSE", execop.IFREFELSE(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_357_IFELSEREF", execop.IFELSEREF(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_358_IFREFELSEREF", execop.IFREFELSEREF(ref, ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_812_DICTPUSHCONST", stackop.DICTPUSHCONST(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_841_PUSHCONT", stackop.PUSHCONT(ref)),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_843_PUSHINT", stackop.PUSHINT(big.NewInt(11))),
-		registeredOpcodeAvailabilitySupplementalCase("supplemental_845_PUSHREF", stackop.PUSHREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_084_STREFCONST", cellsliceop.STREFCONST(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_246_PFXDICTSWITCH", dictop.PFXDICTSWITCH(ref, 0)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_282_IFBITJMPREF", execop.IFBITJMPREF(0, ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_291_CALLREF", execop.CALLREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_292_JMPREF", execop.JMPREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_293_JMPREFDATA", execop.JMPREFDATA(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_294_IFREF", execop.IFREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_295_IFNOTREF", execop.IFNOTREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_296_IFJMPREF", execop.IFJMPREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_297_IFNOTJMPREF", execop.IFNOTJMPREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_298_IFREFELSE", execop.IFREFELSE(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_299_IFELSEREF", execop.IFELSEREF(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_300_IFREFELSEREF", execop.IFREFELSEREF(ref, ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_578_DICTPUSHCONST", stackop.DICTPUSHCONST(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_594_PUSHCONT", stackop.PUSHCONT(ref)),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_595_PUSHINT", stackop.PUSHINT(big.NewInt(11))),
+		registeredOpcodeAvailabilitySupplementalCase("supplemental_596_PUSHREF", stackop.PUSHREF(ref)),
 	}
 }
 

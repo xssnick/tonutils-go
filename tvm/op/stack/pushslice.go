@@ -11,7 +11,8 @@ import (
 
 type OpPUSHREFSLICE struct {
 	helpers.Prefixed
-	ref *cell.Cell
+	ref      *cell.Cell
+	refTrace *cell.Trace
 }
 
 func init() {
@@ -19,9 +20,11 @@ func init() {
 }
 
 func PUSHSLICE(value *cell.Slice) *OpPUSHREFSLICE {
+	ref := value.Copy().MustToCell()
 	return &OpPUSHREFSLICE{
 		Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x89, 8)),
-		ref:      value.Copy().MustToCell(),
+		ref:      ref,
+		refTrace: ref.Trace(),
 	}
 }
 
@@ -30,7 +33,7 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 		return err
 	}
 
-	refCell, err := code.PeekRefCell()
+	refCell, refTrace, err := code.PeekRefCellAtWithTrace(0)
 	if err != nil {
 		return vmerr.Error(vmerr.CodeInvalidOpcode, "no references left for a PUSHREF instruction")
 	}
@@ -39,6 +42,7 @@ func (op *OpPUSHREFSLICE) Deserialize(code *cell.Slice) error {
 	}
 
 	op.ref = refCell
+	op.refTrace = refTrace
 	return nil
 }
 
@@ -59,7 +63,7 @@ func (op *OpPUSHREFSLICE) InstructionBits() int64 {
 }
 
 func (op *OpPUSHREFSLICE) Interpret(state *vm.State) error {
-	value, err := beginPushRefCell(state, op.ref)
+	value, err := beginPushRefCell(state, op.ref, op.refTrace)
 	if err != nil {
 		return err
 	}

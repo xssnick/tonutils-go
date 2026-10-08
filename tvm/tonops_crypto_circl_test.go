@@ -5,8 +5,8 @@ import (
 	"math/big"
 	"testing"
 
-	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	circlgroup "github.com/cloudflare/circl/group"
+	circlbls "github.com/xssnick/tonutils-go/tvm/internal/bls12381"
 	funcsop "github.com/xssnick/tonutils-go/tvm/op/funcs"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )

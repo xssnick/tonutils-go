@@ -88,7 +88,7 @@ func TestRshiftFloorBoundariesAndErrors(t *testing.T) {
 
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				op := RSHIFTCODEFLOOR(0)
+				op := RSHIFTCODEFLOOR(1)
 				code := cell.BeginCell().MustStoreUInt(0xA934, 16).MustStoreUInt(tt.encoded, 8).EndCell().MustBeginParse()
 				if err := op.Deserialize(code); err != nil {
 					t.Fatalf("deserialize RSHIFT# floor: %v", err)
@@ -125,7 +125,7 @@ func TestRshiftFloorBoundariesAndErrors(t *testing.T) {
 		if err := st.Stack.PushAny(vm.NaN{}); err != nil {
 			t.Fatalf("push NaN value: %v", err)
 		}
-		op := RSHIFTCODEFLOOR(0)
+		op := RSHIFTCODEFLOOR(1)
 		if err := op.Deserialize(cell.BeginCell().MustStoreUInt(0xA9340C, 24).EndCell().MustBeginParse()); err != nil {
 			t.Fatalf("deserialize RSHIFT# floor 13: %v", err)
 		}

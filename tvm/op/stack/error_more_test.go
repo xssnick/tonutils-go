@@ -66,7 +66,7 @@ func TestStackGuardAndDeserializeErrors(t *testing.T) {
 			if err := op.Deserialize(code); err != nil {
 				t.Fatalf("deserialize XCHG %#x failed: %v", raw, err)
 			}
-			if got := op.InstructionBits(); got != 16 {
+			if got := instructionBits(t, op); got != 16 {
 				t.Fatalf("unexpected XCHG %#x instruction bits: got %d want 16", raw, got)
 			}
 

@@ -42,7 +42,7 @@ func TestTVMCrossEmulatorRunVMVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_RUNVM_VERSION_AUDIT_SHARDS", "4")
 	t.Setenv("TVM_RUNVM_VERSION_AUDIT_SHARD", "1")
 	got := runVMVersionCrossEmulatorVersions(t)
-	want := []int{1, 5, 9, 13}
+	want := []int{1, 5, 9, 13, 17}
 	if len(got) != len(want) {
 		t.Fatalf("sharded version selection = %v, want %v", got, want)
 	}

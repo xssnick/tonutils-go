@@ -1,5 +1,7 @@
 package cell
 
+import "unsafe"
+
 const (
 	cellFlagSpecial        uint8 = 1 << 0
 	cellFlagLevelMaskShift uint8 = 1
@@ -34,6 +36,11 @@ func decodeCellTypeCache(v uint8) Type {
 	return Type(v - 1)
 }
 
+const (
+	cellLazySkipValidation uint8 = 1 << iota
+	cellLazyBOC
+)
+
 type cellMeta struct {
 	extraHashes *[3]Hash
 	viewOf      *Cell
@@ -42,11 +49,22 @@ type cellMeta struct {
 
 	extraDepths [3]uint16
 	viewLevel   uint8 // effectiveLevel + 1
+	// cellLazyBOC marks a bocLazyCellMeta allocation whose first field is this
+	// cellMeta. Virtualized wrappers keep the resolver on their raw cell.
+	lazyFlags uint8
 }
 
 func cloneCellMeta(meta *cellMeta) *cellMeta {
 	if meta == nil {
 		return nil
+	}
+
+	if meta.lazyFlags&cellLazyBOC != 0 {
+		// Tagged metadata belongs to a raw BoC placeholder: it has no extra
+		// hashes or view, but copying it must preserve its resolver extension.
+		cp := *(*bocLazyCellMeta)(unsafe.Pointer(meta))
+		cp.trace = nil
+		return &cp.cellMeta
 	}
 
 	cp := *meta
@@ -55,10 +73,42 @@ func cloneCellMeta(meta *cellMeta) *cellMeta {
 		cp.extraHashes = &extra
 	}
 	cp.trace = nil
-	if cp.extraHashes == nil && cp.viewOf == nil && cp.lazyLoader == nil && cp.viewLevel == 0 {
+	if cp.extraHashes == nil && cp.viewOf == nil && cp.lazyLoader == nil && cp.lazyFlags == 0 && cp.viewLevel == 0 {
 		return nil
 	}
 	return &cp
+}
+
+// metaViewOf, metaViewLevel, metaExtraHashes and metaExtraDepths read the
+// virtualization and extra-hash metadata of a cell that may have none. A view
+// mints copies of arbitrary cells, including virtualized ones, and has to carry
+// those fields over without asserting that a metadata block exists.
+func (c *Cell) metaViewOf() *Cell {
+	if c.meta == nil {
+		return nil
+	}
+	return c.meta.viewOf
+}
+
+func (c *Cell) metaViewLevel() uint8 {
+	if c.meta == nil {
+		return 0
+	}
+	return c.meta.viewLevel
+}
+
+func (c *Cell) metaExtraHashes() *[3]Hash {
+	if c.meta == nil {
+		return nil
+	}
+	return c.meta.extraHashes
+}
+
+func (c *Cell) metaExtraDepths() [3]uint16 {
+	if c.meta == nil {
+		return [3]uint16{}
+	}
+	return c.meta.extraDepths
 }
 
 func (c *Cell) IsSpecial() bool {
@@ -153,7 +203,8 @@ func (c *Cell) clearMetaIfEmpty() {
 	if c.meta == nil {
 		return
 	}
-	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil || c.meta.trace != nil || c.meta.viewLevel != 0 {
+	if c.meta.extraHashes != nil || c.meta.viewOf != nil || c.meta.lazyLoader != nil ||
+		c.meta.trace != nil || c.meta.viewLevel != 0 || c.meta.lazyFlags != 0 {
 		return
 	}
 	c.meta = nil

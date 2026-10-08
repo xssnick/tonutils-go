@@ -2,6 +2,7 @@ package tuple
 
 import (
 	"math/big"
+	"reflect"
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
@@ -52,6 +53,86 @@ func TestTupleBindingHelpers(t *testing.T) {
 	empty := NewTupleSized(0)
 	if empty.Len() != 0 {
 		t.Fatal("zero-sized tuple should be empty")
+	}
+	if empty.IsNull() {
+		t.Fatal("zero-sized tuple should be non-null")
+	}
+}
+
+func TestTupleAppendMaintainsSnapshotSummary(t *testing.T) {
+	original := NewTupleValue(big.NewInt(1))
+	if original.NeedsValueSnapshot() {
+		t.Fatal("scalar tuple unexpectedly needs a snapshot")
+	}
+
+	copyTuple := original.Copy()
+	copyTuple.Append(cell.BeginCell().EndCell().MustBeginParse())
+	if !copyTuple.NeedsValueSnapshot() {
+		t.Fatal("appended slice was not reflected in the snapshot summary")
+	}
+	if original.NeedsValueSnapshot() {
+		t.Fatal("append mutated the original persistent tuple")
+	}
+
+	copyTuple.Append(big.NewInt(2))
+	if !copyTuple.NeedsValueSnapshot() {
+		t.Fatal("appending a scalar cleared the snapshot summary")
+	}
+
+	nested := NewTupleValue(original)
+	if nested.NeedsValueSnapshot() {
+		t.Fatal("nested scalar tuple unexpectedly needs a snapshot")
+	}
+	nested.Append(copyTuple)
+	if !nested.NeedsValueSnapshot() {
+		t.Fatal("appended nested mutable tuple was not reflected in the snapshot summary")
+	}
+}
+
+func TestNewTupleSizedRejectsNegativeSize(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("negative tuple size did not panic")
+		}
+	}()
+	_ = NewTupleSized(-1)
+}
+
+func TestTupleTypedNilLeavesCloneWithoutPanic(t *testing.T) {
+	var intVal *big.Int
+	var sliceVal *cell.Slice
+	var builderVal *cell.Builder
+
+	tup := NewTupleValue(intVal, sliceVal, builderVal)
+	gotInt, err := tup.Index(0)
+	if err != nil {
+		t.Fatalf("index typed nil integer: %v", err)
+	}
+	if gotInt != nil {
+		t.Fatalf("typed nil integer normalized to %T, want nil", gotInt)
+	}
+
+	gotSlice, err := tup.Index(1)
+	if err != nil {
+		t.Fatalf("index typed nil slice: %v", err)
+	}
+	if reflect.TypeOf(gotSlice) != reflect.TypeOf(sliceVal) || !reflect.ValueOf(gotSlice).IsNil() {
+		t.Fatalf("typed nil slice = %#v, want typed nil slice", gotSlice)
+	}
+	gotBuilder, err := tup.Index(2)
+	if err != nil {
+		t.Fatalf("index typed nil builder: %v", err)
+	}
+	if reflect.TypeOf(gotBuilder) != reflect.TypeOf(builderVal) || !reflect.ValueOf(gotBuilder).IsNil() {
+		t.Fatalf("typed nil builder = %#v, want typed nil builder", gotBuilder)
+	}
+
+	got, err := tup.PopLast()
+	if err != nil {
+		t.Fatalf("pop typed nil builder: %v", err)
+	}
+	if reflect.TypeOf(got) != reflect.TypeOf(builderVal) || !reflect.ValueOf(got).IsNil() {
+		t.Fatalf("popped typed nil builder = %#v, want typed nil builder", got)
 	}
 }
 

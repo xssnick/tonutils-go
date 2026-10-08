@@ -92,7 +92,7 @@ func TestUnsignedAndSignedSubdictPrefixesAdditionalBranches(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(1)); err != nil {
 		t.Fatalf("push oversized signed prefix bits: %v", err)
 	}
-	_, _, err := popSubdictPrefix(state, 8, dictKeySignedInt)
+	_, err := popSubdictPrefix(state, 8, dictKeySignedInt)
 	if err == nil {
 		t.Fatal("expected signed prefix overflow")
 	}

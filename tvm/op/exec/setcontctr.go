@@ -1,60 +1,15 @@
 package exec
 
 import (
-	"fmt"
-
-	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return SETCONTCTR(0) })
+	vm.ArgList = append(vm.ArgList, setContCtrOp)
 }
 
-// OpSETCONTCTR is a struct-based opcode: one allocation per executed
-// instruction instead of an AdvancedOP carrying per-instance closures.
-type OpSETCONTCTR struct {
-	i int
-}
-
-func SETCONTCTR(i int) *OpSETCONTCTR {
-	return &OpSETCONTCTR{i: i}
-}
-
-func (op *OpSETCONTCTR) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(setContCtrPrefixes...)
-}
-
-func (op *OpSETCONTCTR) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(setContCtrBitPrefix.Bits); err != nil {
-		return err
-	}
-
-	idx, err := loadControlRegisterIndex(code)
-	if err != nil {
-		return err
-	}
-	op.i = idx
-	return nil
-}
-
-func (op *OpSETCONTCTR) Serialize() *cell.Builder {
-	return cell.BeginCell().
-		MustStoreSlice(setContCtrBitPrefix.Data, setContCtrBitPrefix.Bits).
-		MustStoreUInt(uint64(op.i), 4)
-}
-
-func (op *OpSETCONTCTR) SerializeText() string {
-	return fmt.Sprintf("c%d SETCONTCTR", op.i)
-}
-
-func (op *OpSETCONTCTR) InstructionBits() int64 {
-	return int64(setContCtrBitPrefix.Bits) + 4
-}
-
-func (op *OpSETCONTCTR) Interpret(state *vm.State) error {
+var setContCtrOp = newControlRegisterOp(setContCtrBitPrefix, setContCtrPrefixes, "SETCONTCTR", func(state *vm.State, i int) error {
 	if err := checkStackDepth(state, 2); err != nil {
 		return err
 	}
@@ -71,9 +26,13 @@ func (op *OpSETCONTCTR) Interpret(state *vm.State) error {
 
 	cont0 = vm.ForceControlData(cont0)
 	data := cont0.GetControlData()
-	if !defineControlRegister(state, &data.Save, op.i, cloneControlRegisterValue(v1)) {
+	if !defineControlRegister(state, &data.Save, i, cloneControlRegisterValue(v1)) {
 		return vmerr.Error(vmerr.CodeTypeCheck)
 	}
 
-	return state.Stack.PushContinuation(cont0)
+	return state.Stack.PushOwnedContinuation(cont0)
+})
+
+func SETCONTCTR(i int) vm.OP {
+	return vm.Bind(setContCtrOp, uint64(i))
 }

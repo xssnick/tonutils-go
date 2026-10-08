@@ -24,18 +24,29 @@ func TestTVMCrossEmulatorPushRefResolution(t *testing.T) {
 
 	sliceTarget := cell.BeginCell().MustStoreUInt(0xA5, 8).EndCell()
 	contTarget := codeFromBuilders(t, stackop.PUSHINT(big.NewInt(42)).Serialize())
+	capturedStackContinuation := prependRawMethodDrop(codeFromBuilders(t,
+		stackop.PUSHINT(big.NewInt(11)).Serialize(),
+		stackop.PUSHINT(big.NewInt(22)).Serialize(),
+		stackop.PUSHCONT(cell.BeginCell().EndCell()).Serialize(),
+		execop.CALLCCARGS(1, 2).Serialize(),
+	))
+	savedDataTupleContinuation := prependRawMethodDrop(codeFromBuilders(t,
+		stackop.PUSHCONT(contTarget).Serialize(),
+		execop.SETCONTCTRMANY((1<<4)|(1<<7)).Serialize(),
+	))
 	libraries := mustCrossLibraryCollection(t, sliceTarget, contTarget)
 	missingTarget := cell.BeginCell().MustStoreUInt(0xCC, 8).EndCell()
 	proof := stackRefCrossPrunedProof(t)
 
 	tests := []struct {
-		name      string
-		code      *cell.Cell
-		opcode    uint64
-		reference *cell.Cell
-		execute   bool
-		libraries *cell.Cell
-		wantExit  int32
+		name       string
+		code       *cell.Cell
+		opcode     uint64
+		reference  *cell.Cell
+		execute    bool
+		libraries  *cell.Cell
+		wantExit   int32
+		exactStack bool
 	}{
 		{
 			name:      "PUSHREFSLICE ordinary",
@@ -47,6 +58,22 @@ func TestTVMCrossEmulatorPushRefResolution(t *testing.T) {
 			opcode:    0x8A,
 			reference: contTarget,
 			execute:   true,
+		},
+		{
+			name:       "PUSHREFCONT returned as stack value",
+			opcode:     0x8A,
+			reference:  contTarget,
+			exactStack: true,
+		},
+		{
+			name:       "CALLCCARGS returned captured stack continuation",
+			code:       capturedStackContinuation,
+			exactStack: true,
+		},
+		{
+			name:       "SETCONTCTRMANY returned saved data and tuple continuation",
+			code:       savedDataTupleContinuation,
+			exactStack: true,
 		},
 		{
 			name:      "PUSHREFSLICE library",
@@ -93,6 +120,9 @@ func TestTVMCrossEmulatorPushRefResolution(t *testing.T) {
 			}
 			goRes, refRes := runStackRefCrossCase(t, code, tt.libraries, referenceDefaultMaxGas)
 			assertStackRefCrossResult(t, goRes, refRes, tt.wantExit)
+			if tt.exactStack && !bytes.Equal(goRes.stack.Hash(), refRes.stack.Hash()) {
+				t.Fatalf("raw stack mismatch:\ngo=%s\nreference=%s", goRes.stack.Dump(), refRes.stack.Dump())
+			}
 		})
 	}
 }

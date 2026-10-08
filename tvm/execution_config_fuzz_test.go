@@ -4,7 +4,6 @@ import (
 	"math/big"
 	"testing"
 
-	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/tvm/cell"
 	execop "github.com/xssnick/tonutils-go/tvm/op/exec"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
@@ -74,37 +73,19 @@ func FuzzExecutionConfigGlobalVersionPerRunEntrypoints(f *testing.F) {
 }
 
 func TestExecutionConfigGlobalVersionValidatesRange(t *testing.T) {
-	futureVersion := uint32(vm.MaxSupportedGlobalVersion + 1)
-	versionCell, err := tlb.ToCell(&tlb.GlobalVersion{Version: futureVersion})
-	if err != nil {
-		t.Fatalf("build global version cell: %v", err)
-	}
-	dict := cell.NewDict(32)
-	value := cell.BeginCell().MustStoreRef(versionCell).EndCell()
-	if err = dict.SetIntKey(new(big.Int).SetUint64(uint64(tlb.ConfigParamGlobalVersion)), value); err != nil {
-		t.Fatalf("store global version config param: %v", err)
-	}
-	root := dict.AsCell()
-
-	if !AllowHigherVersionExecUsingLatest {
-		t.Fatal("AllowHigherVersionExecUsingLatest default = false, want true")
-	}
-
-	cfg, err := PrepareBlockchainConfig(root)
-	if err != nil {
-		t.Fatalf("PrepareBlockchainConfig rejected future global version %d by default: %v", futureVersion, err)
-	}
-	if got := cfg.GlobalVersion(); got != uint32(vm.MaxSupportedGlobalVersion) {
-		t.Fatalf("prepared effective global version = %d, want %d", got, vm.MaxSupportedGlobalVersion)
-	}
-
-	t.Run("strict mode rejects future version", func(t *testing.T) {
-		testSetAllowHigherVersionExecUsingLatest(t, false)
-
-		if _, err = PrepareBlockchainConfig(root); err == nil {
-			t.Fatalf("PrepareBlockchainConfig accepted future global version %d in strict mode", futureVersion)
+	for _, tc := range []struct {
+		version uint32
+		want    uint32
+	}{
+		{version: 16, want: 16},
+		{version: 17, want: 17},
+		{version: 18, want: 17},
+	} {
+		cfg := testPreparedBlockchainConfigWithVersion(t, tc.version)
+		if got := cfg.GlobalVersion(); got != tc.want {
+			t.Fatalf("configured version %d: effective version = %d, want %d", tc.version, got, tc.want)
 		}
-	})
+	}
 }
 
 func FuzzExecutionConfigSignatureCheckAlwaysSucceedRawEntrypoints(f *testing.F) {
@@ -289,7 +270,7 @@ func FuzzExecutionConfigSignatureCheckAlwaysSucceedRunVMChild(f *testing.F) {
 		defaultRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
 		configuredRes := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, true)
 		leakCheck := runExecutionConfigRunVMChildSignatureCheck(t, machine, version, signature, entrypoint, dynamicMode, mode, false)
-		if version < execop.RUNVM(0).MinGlobalVersion() {
+		if version < execop.RUNVM(0).(vm.VersionedOp).MinGlobalVersion() {
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, defaultRes)
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, configuredRes)
 			assertExecutionConfigRunVMChildInvalidOpcode(t, version, entrypoint, dynamicMode, mode, leakCheck)

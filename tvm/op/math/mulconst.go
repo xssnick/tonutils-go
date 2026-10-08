@@ -10,43 +10,35 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return MULCONST(0) })
+	vm.ArgList = append(vm.ArgList, mulConstOp)
 }
 
-func MULCONST(value int8) (op *helpers.AdvancedOP) {
-	arg := big.NewInt(int64(value))
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			i0, err := state.Stack.PopInt()
-			if err != nil {
-				return err
-			}
+var mulConstOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xA7)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		i0, err := state.Stack.PopInt()
+		if err != nil {
+			return err
+		}
 
-			return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
-				return x.Mul(x, arg)
-			})
-		},
-		BitPrefix: helpers.BytesPrefix(0xA7),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreInt(int64(value), 8)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("MULINT %d", value)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadInt(8)
-			if err != nil {
-				return err
-			}
-			value = int8(val)
-			arg.SetInt64(int64(value))
-			return nil
-		},
-	}
-	return op
+		arg := big.NewInt(int64(int8(args)))
+		return pushUnaryIntResult(state, i0, func(x *big.Int) *big.Int {
+			return x.Mul(x, arg)
+		})
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		return cell.BeginCell().MustStoreUInt(0xA7, 8).MustStoreInt(int64(int8(args)), 8)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("MULINT %d", int8(args))
+	},
+})
+
+func MULCONST(value int8) vm.OP {
+	return vm.Bind(mulConstOp, uint64(uint8(value)))
 }
 
-func MULINT(value int8) *helpers.AdvancedOP {
+func MULINT(value int8) vm.OP {
 	return MULCONST(value)
 }

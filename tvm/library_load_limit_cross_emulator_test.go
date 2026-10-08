@@ -143,7 +143,7 @@ func runGoLibraryLoadLimitCrossCode(code, data *cell.Cell, libs []*cell.Cell, st
 		return nil, err
 	}
 
-	cfg, err := PrepareBlockchainConfig(configRoot)
+	cfg, err := prepareBlockchainConfigLenient(configRoot)
 	if err != nil {
 		return nil, err
 	}

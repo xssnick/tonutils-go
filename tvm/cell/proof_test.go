@@ -62,19 +62,19 @@ func TestCheckCascadeProof(t *testing.T) {
 	}
 
 	hash, _ := hex.DecodeString("6FC7808E1921AC8352CC61B1F66C6E3F08C44F17B26C9619329DC637875AF5FD")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	hash, _ = hex.DecodeString("27FCB2CCEEF7159510BB08F96E037F910A38C1723D08B1FEFBBA43D73E660E3D")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	hash, _ = hex.DecodeString("6AB76D71145811E08F772EC93C4159C29CA7512D3E4688B75B08382D47ABD5F5")
-	cl, err = UnwrapProof(cl, hash)
+	cl, err = UnwrapProofVirtualized(cl, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,32 +373,70 @@ func TestMerkleProofCreateNonZeroLevelRoot(t *testing.T) {
 		t.Fatal("expected non-zero level root")
 	}
 
-	skeletonProof, err := root.CreateProof(CreateProofSkeleton())
-	if err != nil {
-		t.Fatalf("skeleton proof should accept non-zero level root: %v", err)
-	}
-	if err = validateLoadedCell(skeletonProof); err != nil {
-		t.Fatalf("skeleton proof validation failed: %v", err)
-	}
-	if _, err = UnwrapProof(skeletonProof, root.Hash(0)); err != nil {
-		t.Fatalf("unwrap skeleton proof: %v", err)
+	if _, err = root.CreateProof(CreateProofSkeleton()); err == nil {
+		t.Fatal("wrapped proof API accepted a non-zero level root")
 	}
 
-	proof, err := root.CreateUsageProof(NewCellUsageTree())
+	// CreateUsageProof over an empty record pruned the root itself and started the
+	// walk at the root's own level, so this is that call with the record's answer
+	// inlined: nothing was read, prune everything.
+	pruneAll, err := buildMerkleProofBodyByPruneFunc(root, func(*Cell, int, Hash) (*Cell, bool, error) {
+		return nil, true, nil
+	}, root.Level())
 	if err != nil {
-		t.Fatalf("usage proof should accept non-zero level root through raw proof generation: %v", err)
+		t.Fatalf("raw proof generation should accept non-zero level root: %v", err)
+	}
+	proof, err := CreateMerkleProof(pruneAll)
+	if err != nil {
+		t.Fatalf("wrap raw proof body: %v", err)
 	}
 	if err = validateLoadedCell(proof); err != nil {
-		t.Fatalf("usage proof validation failed: %v", err)
+		t.Fatalf("raw proof validation failed: %v", err)
 	}
 	if proof.Level() != root.Level() {
 		t.Fatalf("unexpected proof level: got %d want %d", proof.Level(), root.Level())
 	}
-	body, err := UnwrapProof(proof, root.Hash(0))
+	if _, err = UnwrapProof(proof, root.Hash(0)); err == nil {
+		t.Fatal("wrapped proof API accepted a non-zero level proof")
+	}
+	body, err := proof.PeekRef(0)
 	if err != nil {
-		t.Fatalf("unwrap usage proof: %v", err)
+		t.Fatalf("load raw proof body: %v", err)
+	}
+	if body.HashKeyAt(0) != root.HashKeyAt(0) {
+		t.Fatalf("raw proof body hash = %x, want %x", body.Hash(0), root.Hash(0))
 	}
 	if body.Level() != root.Level()+1 {
 		t.Fatalf("unexpected raw proof body level: got %d want %d", body.Level(), root.Level()+1)
 	}
+}
+
+func TestPrunedProofBuilderDropsTraversalTrace(t *testing.T) {
+	leaf := BeginCell().MustStoreUInt(0xaa, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xbb, 8).MustStoreRef(leaf).EndCell()
+	traced := NewReadSet(root).Root()
+
+	built, err := buildMerkleProofBodyByPruneFunc(traced, nil, traced.Level())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.HashKey() != root.HashKey() {
+		t.Fatalf("proof body hash = %x, want %x", built.Hash(), root.Hash())
+	}
+
+	var walk func(*Cell)
+	walk = func(current *Cell) {
+		t.Helper()
+		if current.Trace() != nil {
+			t.Fatal("proof body retained a traversal trace")
+		}
+		for i := 0; i < int(current.RefsNum()); i++ {
+			ref, err := current.PeekRef(i)
+			if err != nil {
+				t.Fatal(err)
+			}
+			walk(ref)
+		}
+	}
+	walk(built)
 }

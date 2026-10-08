@@ -15,8 +15,11 @@ const bocViewReadWindowSize = 4 << 20
 
 // BOCViewOptions configures a random-access BoC view.
 type BOCViewOptions struct {
-	// TrustedHashes trusts serialized hashes/depths when a cell stores them in
-	// the BoC payload. Cells without serialized hashes are still hashed normally.
+	// TrustedHashes takes the hashes and depths a cell stores in the BoC payload
+	// instead of recomputing its metadata, and with it drops the reference's
+	// cross-check that a declared level mask equals the union of the reference
+	// masks. Cells without serialized metadata are still hashed normally. Only
+	// enable it for data from a trusted source.
 	TrustedHashes bool
 	// RequireIndex rejects BoCs without an index table.
 	RequireIndex bool
@@ -192,6 +195,9 @@ func (m BOCCellMeta) HashAtLevel(level int) Hash {
 	if m.Count == 0 {
 		return Hash{}
 	}
+	if level < 0 {
+		level = _DataCellMaxLevel
+	}
 	hashIndex := m.LevelMask.Apply(level).getHashIndex()
 	if hashIndex >= int(m.Count) {
 		hashIndex = int(m.Count) - 1
@@ -203,6 +209,9 @@ func (m BOCCellMeta) HashAtLevel(level int) Hash {
 func (m BOCCellMeta) DepthAtLevel(level int) uint16 {
 	if m.Count == 0 {
 		return 0
+	}
+	if level < 0 {
+		level = _DataCellMaxLevel
 	}
 	hashIndex := m.LevelMask.Apply(level).getHashIndex()
 	if hashIndex >= int(m.Count) {
@@ -379,7 +388,8 @@ func readBOCViewHeader(r io.ReaderAt, size int64) (bocViewHeader, error) {
 	if err != nil {
 		return header, fmt.Errorf("failed to read absent count: %w", err)
 	}
-	if absentNum < 0 || absentNum > cellsNum || rootsNum+absentNum > cellsNum {
+	// the reference bounds the absent count by the cell count alone
+	if absentNum < 0 || absentNum > cellsNum {
 		return header, errors.New("invalid boc counters")
 	}
 
@@ -387,14 +397,14 @@ func readBOCViewHeader(r io.ReaderAt, size int64) (bocViewHeader, error) {
 	if err != nil {
 		return header, fmt.Errorf("failed to read cells data size: %w", err)
 	}
-	if dataLen < cellsNum*2 {
+	if minDataLen := cellsNum*(2+cellNumSizeBytes) - cellNumSizeBytes; cellsNum > 0 && dataLen < minDataLen {
 		return header, errors.New("invalid boc cells data size")
 	}
 	maxPayloadBytes := maxBOCPayloadBytes()
 	if maxPayloadBytes > 0 && dataLen > maxPayloadBytes {
 		return header, fmt.Errorf("boc cells data size is too big: %d > %d", dataLen, maxPayloadBytes)
 	}
-	if cellsNum > 0 && dataLen > cellsNum*maxSerializedBOCCellBytes {
+	if cellsNum > 0 && uint64(dataLen) > uint64(cellsNum)*maxBOCDeclaredPayloadBytesPerCell {
 		return header, fmt.Errorf("boc cells data size is too big for cells count: data len %d, cells %d", dataLen, cellsNum)
 	}
 	if flags.hasCacheBits && !flags.hasIndex {
@@ -550,9 +560,6 @@ func (v *BOCView) loadIndex(indexOffset uint64) error {
 		}
 		prev = end
 	}
-	if prev != v.payloadSize {
-		return errors.New("invalid cell index")
-	}
 	return nil
 }
 
@@ -576,7 +583,7 @@ func (v *BOCView) buildIndex() error {
 		refsSize := info.refsCount() * int(v.refSize)
 		if refsSize > 0 {
 			refs := refsBuf[:refsSize]
-			if err = v.readPayloadAt(refs, offset+uint64(info.refsOffset)); err != nil {
+			if err = v.readPayloadAt(refs, offset+uint64(info.bodyOffset+cellBodyBytesSize(info.dsc2))); err != nil {
 				return fmt.Errorf("invalid cell #%d: %w", i, err)
 			}
 
@@ -637,8 +644,8 @@ func (v *BOCView) buildMeta() error {
 		var emptyDepths [4]uint16
 		v.meta.hashes = append(v.meta.hashes, emptyHashes[:hashesCount]...)
 		v.meta.depths = append(v.meta.depths, emptyDepths[:hashesCount]...)
-
-		if v.trustStoredMeta(cell.info) {
+		trustedMeta := v.trustStoredMeta(cell.info)
+		if trustedMeta {
 			v.setStoredMeta(i)
 			v.storeTrustedCellMeta(i, cell.info, cell.data)
 			if cell.info.isSpecial() {
@@ -766,7 +773,6 @@ func (v *BOCView) readCellInfoAt(offset, end uint64, scratch *[3]byte) (bocPaylo
 	if end-pos < refsSize {
 		return bocPayloadCellInfo{}, 0, errors.New("failed to read cell refs, corrupted data")
 	}
-	info.refsOffset = int(pos - offset)
 	pos += refsSize
 	return info, pos - offset, nil
 }
@@ -791,7 +797,7 @@ func (v *BOCView) computeCellMeta(idx uint32, info bocPayloadCellInfo, data []by
 			return err
 		}
 	}
-	if info.withHashes() && !v.trustedHashes {
+	if info.withHashes() {
 		if err := v.validateStoredCellMeta(idx, info, data); err != nil {
 			return err
 		}
@@ -816,8 +822,14 @@ func (v *BOCView) computeRegularCellMeta(idx uint32, info bocPayloadCellInfo, da
 	isMerkle := typ == MerkleProofCellType || typ == MerkleUpdateCellType
 
 	var refIndexes [4]uint32
+	var expectedMask byte
 	for ref := 0; ref < refCnt; ref++ {
-		refIndexes[ref] = uint32(info.refIndex(data, ref, int(v.refSize)))
+		refIdx := uint32(info.refIndex(data, ref, int(v.refSize)))
+		refIndexes[ref] = refIdx
+		expectedMask |= v.meta.levelMasks[refIdx]
+	}
+	if typ == OrdinaryCellType && levelMask.Mask != expectedMask {
+		return fmt.Errorf("ordinary cell level mask mismatch")
 	}
 
 	hashIndex := 0
@@ -944,6 +956,11 @@ func (v *BOCView) validateSpecialCell(info bocPayloadCellInfo, data []byte, typ 
 		}
 		if info.bitsSz != 8+256 {
 			return fmt.Errorf("not enough data for a library special cell")
+		}
+		// reference DataCell keeps a zero level mask for library cells, and
+		// BoC deserialization rejects any descriptor that disagrees
+		if info.levelMask().Mask != 0 {
+			return fmt.Errorf("library level mask mismatch")
 		}
 	case MerkleProofCellType:
 		if info.bitsSz != 8+(hashSize+depthSize)*8 {

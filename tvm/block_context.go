@@ -1,7 +1,9 @@
 package tvm
 
 import (
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/xssnick/tonutils-go/address"
@@ -14,9 +16,13 @@ import (
 type BlockOptions struct {
 	// Now is the block unix time. When zero, the current wall clock is used.
 	Now uint32
-	// BlockLT is the block logical time (c7[4]). When zero, it is derived per
-	// transaction from the transaction start LT.
+	// BlockLT is the legacy signed block logical time (c7[4]). When zero, it is
+	// derived per transaction; negative values remain signed for compatibility.
 	BlockLT int64
+	// BlockLTUint64 is the full-width block logical time. When non-zero, it
+	// overrides BlockLT; zero leaves BlockLT (including a negative value) in
+	// effect. Use it for protocol values above MaxInt64.
+	BlockLTUint64 uint64
 	// RandSeed is the block-level random seed. Per-account seeds are derived
 	// from it unless TransactionOptions.RandSeed overrides them.
 	RandSeed []byte
@@ -29,6 +35,11 @@ type BlockOptions struct {
 	// Libraries are block-level library collections available to every
 	// transaction of the block (e.g. the masterchain libraries dict).
 	Libraries []*cell.Cell
+	// ConfigAddress is the actual configuration contract from the masterchain
+	// state's ConfigParams.config_addr. Parameter 0 may be absent or name a
+	// proposed replacement that was not installed. Nil retains parameter-0
+	// inference for callers that only have the config dictionary.
+	ConfigAddress *[32]byte
 }
 
 // BlockContext is the per-block execution context: the prepared config plus
@@ -36,12 +47,15 @@ type BlockOptions struct {
 // immutable after construction and safe to share between concurrently
 // executing account lanes.
 type BlockContext struct {
-	cfg        *PreparedBlockchainConfig
-	now        uint32
-	blockLT    int64
-	randSeed   []byte
-	prevBlocks tuple.Tuple
-	libraries  []*cell.Cell
+	cfg           *PreparedBlockchainConfig
+	now           uint32
+	blockLT       int64
+	blockLTU64    uint64
+	randSeed      []byte
+	prevBlocks    tuple.Tuple
+	libraries     []*cell.Cell
+	configAddr    preparedAddr256
+	hasConfigAddr bool
 	// unpackedConfig is the prebuilt c7 unpacked config value: either a
 	// tuple.Tuple or nil when no source params exist.
 	unpackedConfig any
@@ -58,16 +72,46 @@ func (c *PreparedBlockchainConfig) NewBlockContext(opts BlockOptions) (*BlockCon
 		now = uint32(time.Now().Unix())
 	}
 
+	randSeed := append([]byte(nil), opts.RandSeed...)
+	if len(randSeed) == 0 {
+		// the reference generates a fresh 256-bit block seed when none is set;
+		// callers that need reproducible runs must pass RandSeed explicitly
+		randSeed = make([]byte, 32)
+		if _, err := rand.Read(randSeed); err != nil {
+			return nil, fmt.Errorf("failed to generate block rand seed: %w", err)
+		}
+	}
 	out := &BlockContext{
 		cfg:        c,
 		now:        now,
 		blockLT:    opts.BlockLT,
-		randSeed:   append([]byte(nil), opts.RandSeed...),
+		blockLTU64: opts.BlockLTUint64,
+		randSeed:   randSeed,
 		prevBlocks: opts.PrevBlocks,
 		libraries:  append([]*cell.Cell(nil), opts.Libraries...),
 	}
+	if opts.ConfigAddress != nil {
+		out.configAddr = preparedAddr256(*opts.ConfigAddress)
+		out.hasConfigAddr = true
+	} else if c.configAddr != nil {
+		out.configAddr = *c.configAddr
+		out.hasConfigAddr = true
+	}
 	out.unpackedConfig = buildUnpackedConfig(c, now, opts.GlobalID)
 	return out, nil
+}
+
+func (b *BlockContext) isSpecialAccount(addr *address.Address) bool {
+	if !transactionIsMasterchain(addr) {
+		return false
+	}
+	data := addr.Data()
+	if len(data) != 32 {
+		return false
+	}
+	key := preparedAddr256(data)
+	_, fundamental := b.cfg.fundamentalAccounts[key]
+	return fundamental || b.hasConfigAddr && key == b.configAddr
 }
 
 // Config returns the prepared per-epoch config this context was built from.
@@ -75,15 +119,28 @@ func (b *BlockContext) Config() *PreparedBlockchainConfig {
 	return b.cfg
 }
 
+// BindAccountStorageStat validates an account storage-stat proof against the
+// hash committed by account and binds it to subsequent transaction execution.
+// It mirrors block::Account::init_account_storage_stat in the reference node.
+func (b *BlockContext) BindAccountStorageStat(account *PreparedAccount, root *cell.Cell) error {
+	return transactionBindAccountStorageStat(&account.runtime, root, b.cfg)
+}
+
 // Now returns the resolved block unix time.
 func (b *BlockContext) Now() uint32 {
 	return b.now
 }
 
-// BlockLT returns the configured block logical time, zero when derived per
-// transaction.
+// BlockLT returns the legacy signed block logical time option. Use
+// BlockLTUint64 when the full-width option may have been supplied.
 func (b *BlockContext) BlockLT() int64 {
 	return b.blockLT
+}
+
+// BlockLTUint64 returns the configured full-width override, or zero when none
+// was supplied.
+func (b *BlockContext) BlockLTUint64() uint64 {
+	return b.blockLTU64
 }
 
 // UnpackedConfig returns the prebuilt c7 unpacked config tuple and whether it
@@ -107,12 +164,9 @@ func buildUnpackedConfig(cfg *PreparedBlockchainConfig, now uint32, globalIDOver
 		values[1] = cell.BeginCell().MustStoreUInt(uint64(uint32(globalIDOverride)), 32).ToSlice()
 	}
 
-	for _, value := range values {
-		if value != nil {
-			return tuple.NewTupleOwned(values)
-		}
-	}
-	return nil
+	// The unpacked config is always a 7-element tuple, even when every slot
+	// is empty.
+	return tuple.NewTupleOwned(values)
 }
 
 func unpackedConfigParamSlice(param *cell.Cell) any {

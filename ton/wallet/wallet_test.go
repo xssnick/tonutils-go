@@ -37,6 +37,10 @@ func (m MockAPI) SendExternalMessageWaitTransaction(ctx context.Context, ext *tl
 	return m.sendExternalMessageWait(ctx, ext)
 }
 
+func (m MockAPI) SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	return m.sendExternalMessageWait(ctx, ext)
+}
+
 func (m MockAPI) FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error) {
 	//TODO implement me
 	panic("implement me")
@@ -638,6 +642,14 @@ func (w WaiterMock) GetAccount(ctx context.Context, block *ton.BlockIDExt, addr 
 
 func (w WaiterMock) SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error {
 	return w.MSendExternalMessage(ctx, msg)
+}
+
+func (w WaiterMock) SendExternalMessageToAllNodes(ctx context.Context, msg *tlb.ExternalMessage) error {
+	panic("implement me")
+}
+
+func (w WaiterMock) SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	panic("implement me")
 }
 
 func (w WaiterMock) RunGetMethod(ctx context.Context, blockInfo *ton.BlockIDExt, addr *address.Address, method string, params ...interface{}) (*ton.ExecutionResult, error) {

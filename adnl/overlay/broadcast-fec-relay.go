@@ -3,7 +3,6 @@ package overlay
 import (
 	"bytes"
 	"container/list"
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -12,45 +11,93 @@ import (
 )
 
 const broadcastFECDateSkew = 20 * time.Second
-const broadcastFECRetainedBudgetBytes int64 = 4096
-const broadcastSimpleDeliveredCacheSize = 100
+const broadcastFECTerminalBudgetBytes int64 = 4096
+const broadcastSimpleDeliveredCacheSize = 4096
 
 // Keep delivered IDs for the same late-part window as retained relay streams.
 const broadcastFECDeliveredTTL = fecBroadcastFinishedTTL
 
 type broadcastFECRelayPart struct {
-	full  *BroadcastFEC
-	short *BroadcastFECShort
+	full            *BroadcastFEC
+	short           *BroadcastFECShort
+	fullWire        *PreparedBroadcastMessage
+	shortWire       *PreparedBroadcastMessage
+	immediatePeerID broadcastExternalPeerIDKey
 }
 
 type broadcastFECDeliveredEntry struct {
-	id        string
+	id        broadcastFECIDKey
 	expiresAt time.Time
 }
 
+type broadcastSimpleIDKey [32]byte
+type broadcastFECIDKey [32]byte
+
+func newBroadcastFECIDKey(id []byte) (broadcastFECIDKey, bool) {
+	if len(id) != len(broadcastFECIDKey{}) {
+		return broadcastFECIDKey{}, false
+	}
+
+	var key broadcastFECIDKey
+	copy(key[:], id)
+	return key, true
+}
+
 type broadcastSimpleDeliveredEntry struct {
-	id string
+	id broadcastSimpleIDKey
+}
+
+type broadcastAdmission struct {
+	done        chan struct{}
+	disposition BroadcastDisposition
+	// standby counts the copies parked on this admission. Exactly one is kept:
+	// it is what takes over if the owner returns Retry. Every further copy of
+	// the same broadcast is dropped in O(1) instead of parking an ADNL listener
+	// goroutine -- plumtree fans the same broadcast out from every neighbour,
+	// so the duplicates outnumber the originals by an order of magnitude.
+	standby int
+}
+
+type broadcastAdmissionStatus uint8
+
+const (
+	broadcastAdmissionUnknown broadcastAdmissionStatus = iota
+	broadcastAdmissionOwner
+	broadcastAdmissionWait
+	broadcastAdmissionCommitted
+	broadcastAdmissionOverloaded
+	// broadcastAdmissionDuplicate means another copy is already being admitted
+	// and a standby is already waiting behind it; drop this one.
+	broadcastAdmissionDuplicate
+)
+
+type broadcastAdmissionAttempt struct {
+	admission *broadcastAdmission
+	status    broadcastAdmissionStatus
 }
 
 type broadcastFECRelayOp struct {
 	peer  BroadcastPeer
 	msg   tl.Serializable
+	wire  *PreparedBroadcastMessage
 	seqno uint32
 }
 
 // BroadcastFECRelayState stores ordinary FEC receive and relay state shared by
 // overlay wrappers that participate in the same overlay.
 type BroadcastFECRelayState struct {
-	streams       map[string]*fecBroadcastStream
-	delivered     map[string]*list.Element
+	streams       map[broadcastFECIDKey]*fecBroadcastStream
+	delivered     map[broadcastFECIDKey]*list.Element
 	deliveredList *list.List
-	simple        map[string]*list.Element
+	simple        map[broadcastSimpleIDKey]*list.Element
 	simpleList    *list.List
+	admitting     map[broadcastSimpleIDKey]*broadcastAdmission
 
 	maxActiveStreams int
 	maxActiveBytes   int64
 	deliveredMax     int
 	simpleMax        int
+	reservedStreams  int
 	activeBytes      int64
 	nextCleanupAt    time.Time
 
@@ -68,16 +115,59 @@ type BroadcastFECRelayState struct {
 
 func NewBroadcastFECRelayState() *BroadcastFECRelayState {
 	return &BroadcastFECRelayState{
-		streams:          map[string]*fecBroadcastStream{},
-		delivered:        map[string]*list.Element{},
+		streams:          map[broadcastFECIDKey]*fecBroadcastStream{},
+		delivered:        map[broadcastFECIDKey]*list.Element{},
 		deliveredList:    list.New(),
-		simple:           map[string]*list.Element{},
+		simple:           map[broadcastSimpleIDKey]*list.Element{},
 		simpleList:       list.New(),
+		admitting:        map[broadcastSimpleIDKey]*broadcastAdmission{},
 		maxActiveStreams: DefaultFECBroadcastMaxActiveStreams,
 		maxActiveBytes:   DefaultFECBroadcastMaxActiveBytes,
 		deliveredMax:     DefaultFECDeliveredCacheSize,
 		simpleMax:        broadcastSimpleDeliveredCacheSize,
 	}
+}
+
+func (s *BroadcastFECRelayState) beginSimpleAdmission(id broadcastSimpleIDKey) broadcastAdmissionAttempt {
+	s.mx.Lock()
+	if s.isSimpleDeliveredLocked(id) {
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{status: broadcastAdmissionCommitted}
+	}
+	if admission := s.admitting[id]; admission != nil {
+		if admission.standby > 0 {
+			s.mx.Unlock()
+			return broadcastAdmissionAttempt{status: broadcastAdmissionDuplicate}
+		}
+		admission.standby++
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionWait}
+	}
+	if len(s.admitting) >= DefaultBroadcastMaxConcurrentAdmissions {
+		s.dropped++
+		s.mx.Unlock()
+		return broadcastAdmissionAttempt{status: broadcastAdmissionOverloaded}
+	}
+
+	admission := &broadcastAdmission{done: make(chan struct{})}
+	s.admitting[id] = admission
+	s.mx.Unlock()
+	return broadcastAdmissionAttempt{admission: admission, status: broadcastAdmissionOwner}
+}
+
+func (s *BroadcastFECRelayState) finishSimpleAdmission(id broadcastSimpleIDKey, admission *broadcastAdmission, disposition BroadcastDisposition) {
+	s.mx.Lock()
+	if s.admitting[id] != admission {
+		s.mx.Unlock()
+		return
+	}
+	if disposition == BroadcastDispositionAcceptAndRelay || disposition == BroadcastDispositionIgnore {
+		s.registerSimpleDeliveredLocked(id)
+	}
+	delete(s.admitting, id)
+	admission.disposition = disposition
+	close(admission.done)
+	s.mx.Unlock()
 }
 
 func (s *BroadcastFECRelayState) SetLimits(maxActiveStreams int, maxActiveBytes int64) {
@@ -108,10 +198,21 @@ func (s *BroadcastFECRelayState) SetDeliveredCacheSize(max int) {
 	s.mx.Unlock()
 }
 
+func (s *BroadcastFECRelayState) SetSimpleDeliveredCacheSize(max int) {
+	if max < 0 {
+		max = 0
+	}
+
+	s.mx.Lock()
+	s.simpleMax = max
+	s.trimSimpleDeliveredLocked()
+	s.mx.Unlock()
+}
+
 func (s *BroadcastFECRelayState) Stats() FECBroadcastStats {
 	s.mx.RLock()
 	stats := FECBroadcastStats{
-		ActiveStreams:           len(s.streams),
+		ActiveStreams:           len(s.streams) + s.reservedStreams,
 		ActiveBytes:             s.activeBytes,
 		DeliveredBroadcasts:     len(s.delivered),
 		DroppedTotal:            s.dropped,
@@ -151,12 +252,21 @@ func (s *BroadcastFECRelayState) cleanupLocked(now time.Time, force bool) {
 	s.nextCleanupAt = now.Add(fecBroadcastCleanupInterval)
 
 	for id, stream := range s.streams {
-		stream.mx.Lock()
+		// TryLock, never Lock: this runs under s.mx, and stream.mx is held
+		// across RaptorQ decode/encode. Blocking here would park the whole
+		// overlay behind one decode. A stream whose mutex is busy is being
+		// worked on right now, so it is not idle and not a cleanup candidate;
+		// the next sweep reconsiders it.
+		if !stream.mx.TryLock() {
+			continue
+		}
 		completed := stream.completedAt != nil
+		admitting := stream.admissionDone != nil && stream.admissionErr == nil &&
+			stream.disposition == BroadcastDispositionUnknown
 		stale := stream.lastMessageAt.Add(fecBroadcastStreamIdleTTL).Before(now)
 		expiredFinished := stream.finishedAt != nil && stream.finishedAt.Add(fecBroadcastFinishedTTL).Before(now)
 		stream.mx.Unlock()
-		if !stale && !expiredFinished {
+		if admitting || (!stale && !expiredFinished) {
 			continue
 		}
 
@@ -167,15 +277,30 @@ func (s *BroadcastFECRelayState) cleanupLocked(now time.Time, force bool) {
 	s.cleanupDeliveredLocked(now)
 }
 
-func (s *BroadcastFECRelayState) reserveLocked(now time.Time, budgetBytes int64) bool {
+// reserveLocked takes budget for one incoming stream. small marks a stream
+// whose payload is at most FECBroadcastSmallStreamMaxBytes: it may draw on the
+// reserve that large streams leave untouched, so a flood of block broadcasts
+// that fills the budget cannot shut out the external messages and shard
+// descriptions arriving as FEC streams beside them.
+func (s *BroadcastFECRelayState) reserveLocked(now time.Time, budgetBytes int64, small bool) bool {
 	s.cleanupLocked(now, false)
-	if !s.hasBudgetLocked(1, budgetBytes) {
+	if !s.hasBudgetLocked(1, budgetBytes, small) {
 		s.dropped++
 		return false
 	}
 
+	s.reservedStreams++
 	s.activeBytes += budgetBytes
 	return true
+}
+
+func (s *BroadcastFECRelayState) commitReservationLocked() {
+	s.reservedStreams--
+}
+
+func (s *BroadcastFECRelayState) cancelReservationLocked(budgetBytes int64) {
+	s.reservedStreams--
+	s.releaseLocked(budgetBytes)
 }
 
 func (s *BroadcastFECRelayState) releaseLocked(budgetBytes int64) {
@@ -185,19 +310,38 @@ func (s *BroadcastFECRelayState) releaseLocked(budgetBytes int64) {
 	}
 }
 
-func (s *BroadcastFECRelayState) hasBudgetLocked(incomingStreams int, incomingBytes int64) bool {
-	if incomingBytes > s.maxActiveBytes {
+func (s *BroadcastFECRelayState) hasBudgetLocked(incomingStreams int, incomingBytes int64, small bool) bool {
+	if incomingStreams < 0 || incomingBytes < 0 {
 		return false
 	}
-
-	return len(s.streams)+incomingStreams <= s.maxActiveStreams && s.activeBytes+incomingBytes <= s.maxActiveBytes
+	availableStreams := s.maxActiveStreams - len(s.streams)
+	if availableStreams < 0 || s.reservedStreams > availableStreams {
+		return false
+	}
+	if incomingStreams > availableStreams-s.reservedStreams {
+		return false
+	}
+	// Large streams stop short of the whole budget; the remainder is what
+	// small streams are still admitted from once the large ones have filled
+	// everything else.
+	limit := s.maxActiveBytes
+	if !small {
+		limit -= s.maxActiveBytes / fecBroadcastSmallStreamReserveDivisor
+	}
+	if s.activeBytes > limit || incomingBytes > limit-s.activeBytes {
+		return false
+	}
+	return true
 }
 
-func (s *BroadcastFECRelayState) removeStreamLocked(id string, stream *fecBroadcastStream, delivered bool, now time.Time) {
+func (s *BroadcastFECRelayState) removeStreamLocked(id broadcastFECIDKey, stream *fecBroadcastStream, delivered bool, now time.Time) {
 	if s.streams[id] != stream {
 		return
 	}
 
+	// Marked before the delete becomes visible, so a lookup that already holds
+	// this stream pointer and is waiting for stream.mx sees the eviction.
+	stream.removed.Store(true)
 	delete(s.streams, id)
 	s.releaseLocked(stream.budgetBytes)
 	if delivered {
@@ -205,7 +349,7 @@ func (s *BroadcastFECRelayState) removeStreamLocked(id string, stream *fecBroadc
 	}
 }
 
-func (s *BroadcastFECRelayState) reduceStreamBudgetLocked(id string, stream *fecBroadcastStream, budgetBytes int64) {
+func (s *BroadcastFECRelayState) reduceStreamBudgetLocked(id broadcastFECIDKey, stream *fecBroadcastStream, budgetBytes int64) {
 	if s.streams[id] != stream || stream.budgetBytes <= budgetBytes {
 		return
 	}
@@ -217,7 +361,7 @@ func (s *BroadcastFECRelayState) reduceStreamBudgetLocked(id string, stream *fec
 	stream.budgetBytes = budgetBytes
 }
 
-func (s *BroadcastFECRelayState) registerDeliveredLocked(id string, now time.Time) {
+func (s *BroadcastFECRelayState) registerDeliveredLocked(id broadcastFECIDKey, now time.Time) {
 	if s.deliveredMax == 0 {
 		return
 	}
@@ -237,7 +381,7 @@ func (s *BroadcastFECRelayState) registerDeliveredLocked(id string, now time.Tim
 	s.trimDeliveredLocked()
 }
 
-func (s *BroadcastFECRelayState) isDeliveredLocked(id string, now time.Time) bool {
+func (s *BroadcastFECRelayState) isDeliveredLocked(id broadcastFECIDKey, now time.Time) bool {
 	elem := s.delivered[id]
 	if elem == nil {
 		return false
@@ -286,7 +430,7 @@ func (s *BroadcastFECRelayState) trimDeliveredLocked() {
 	}
 }
 
-func (s *BroadcastFECRelayState) isSimpleDeliveredLocked(id string) bool {
+func (s *BroadcastFECRelayState) isSimpleDeliveredLocked(id broadcastSimpleIDKey) bool {
 	elem := s.simple[id]
 	if elem == nil {
 		return false
@@ -296,7 +440,7 @@ func (s *BroadcastFECRelayState) isSimpleDeliveredLocked(id string) bool {
 	return true
 }
 
-func (s *BroadcastFECRelayState) registerSimpleDeliveredLocked(id string) {
+func (s *BroadcastFECRelayState) registerSimpleDeliveredLocked(id broadcastSimpleIDKey) {
 	if s.simpleMax == 0 {
 		return
 	}
@@ -307,6 +451,10 @@ func (s *BroadcastFECRelayState) registerSimpleDeliveredLocked(id string) {
 	}
 
 	s.simple[id] = s.simpleList.PushBack(broadcastSimpleDeliveredEntry{id: id})
+	s.trimSimpleDeliveredLocked()
+}
+
+func (s *BroadcastFECRelayState) trimSimpleDeliveredLocked() {
 	for len(s.simple) > s.simpleMax {
 		elem := s.simpleList.Front()
 		if elem == nil {
@@ -320,53 +468,50 @@ func (s *BroadcastFECRelayState) registerSimpleDeliveredLocked(id string) {
 }
 
 func (s *BroadcastFECRelayState) TrackControlMessage(peerID []byte, control BroadcastFECControl) bool {
+	key, ok := newBroadcastFECIDKey(control.Hash)
+	if !ok {
+		return false
+	}
+	peerKey := newBroadcastExternalPeerIDKey(peerID)
+
 	s.mx.RLock()
-	stream := s.streams[string(control.Hash)]
+	stream := s.streams[key]
 	s.mx.RUnlock()
 	if stream == nil {
 		return false
 	}
-
-	stream.mx.Lock()
+	// Released before taking stream.mx: control messages must not queue behind
+	// a decode holding the stream, and must not hold the overlay while they do.
+	if !lockLiveFECStream(stream) {
+		return false
+	}
 	if stream.completedPeers == nil {
-		stream.completedPeers = map[string]struct{}{}
+		stream.completedPeers = map[broadcastExternalPeerIDKey]struct{}{}
 	}
 	if stream.receivedPeers == nil {
-		stream.receivedPeers = map[string]struct{}{}
+		stream.receivedPeers = map[broadcastExternalPeerIDKey]struct{}{}
 	}
-	id := string(peerID)
-	stream.receivedPeers[id] = struct{}{}
+	stream.receivedPeers[peerKey] = struct{}{}
 	if control.Completed {
-		stream.completedPeers[id] = struct{}{}
+		stream.completedPeers[peerKey] = struct{}{}
 	}
 	stream.mx.Unlock()
 	return true
 }
 
 func (s *fecBroadcastStream) receivedPart(seqno uint32) bool {
-	if s.nextSeqno >= 64 && seqno < s.nextSeqno-64 {
-		return true
-	}
-	if seqno >= s.nextSeqno {
-		return false
-	}
-	return s.receivedParts&(1<<(s.nextSeqno-seqno-1)) != 0
+	_, ok := s.partHashes[seqno]
+	return ok
 }
 
-func (s *fecBroadcastStream) addReceivedPart(seqno uint32) {
-	if seqno < s.nextSeqno {
-		s.receivedParts |= 1 << (s.nextSeqno - seqno - 1)
-		return
+func (s *fecBroadcastStream) addReceivedPart(seqno uint32, partDataHash []byte) {
+	if s.partHashes == nil {
+		s.partHashes = map[uint32][32]byte{}
 	}
 
-	old := s.nextSeqno
-	s.nextSeqno = seqno + 1
-	if s.nextSeqno-old >= 64 {
-		s.receivedParts = 1
-		return
-	}
-	s.receivedParts <<= s.nextSeqno - old
-	s.receivedParts |= 1
+	var hash [32]byte
+	copy(hash[:], partDataHash)
+	s.partHashes[seqno] = hash
 }
 
 func checkBroadcastFECDate(date uint32, now time.Time) error {
@@ -380,87 +525,91 @@ func checkBroadcastFECDate(date uint32, now time.Time) error {
 	return nil
 }
 
-func (s *fecBroadcastStream) addRelayPart(seqno uint32, full *BroadcastFEC, broadcastHash, partDataHash []byte) {
+func (s *fecBroadcastStream) addRelayPart(seqno uint32, full *BroadcastFEC, broadcastHash, partDataHash, immediatePeerID []byte) error {
 	if s.parts == nil {
 		s.parts = map[uint32]broadcastFECRelayPart{}
 	}
-	s.parts[seqno] = broadcastFECRelayPart{
-		full: full,
-		short: &BroadcastFECShort{
-			Source:        full.Source,
-			Certificate:   full.Certificate,
-			BroadcastHash: broadcastHash,
-			PartDataHash:  partDataHash,
-			Seqno:         int32(seqno),
-			Signature:     full.Signature,
-		},
+	short := &BroadcastFECShort{
+		Source:        full.Source,
+		Certificate:   full.Certificate,
+		BroadcastHash: broadcastHash,
+		PartDataHash:  partDataHash,
+		Seqno:         int32(seqno),
+		Signature:     full.Signature,
 	}
+	fullWire, err := PrepareBroadcastMessage(full)
+	if err != nil {
+		return err
+	}
+	shortWire, err := PrepareBroadcastMessage(short)
+	if err != nil {
+		return err
+	}
+
+	s.parts[seqno] = broadcastFECRelayPart{
+		full:            full,
+		short:           short,
+		fullWire:        fullWire,
+		shortWire:       shortWire,
+		immediatePeerID: newBroadcastExternalPeerIDKey(immediatePeerID),
+	}
+	return nil
 }
 
-func (s *fecBroadcastStream) relayPartOpsLocked(seqno uint32, peers []BroadcastPeer, localID, sourcePeerID []byte, erase bool) []broadcastFECRelayOp {
+func (s *fecBroadcastStream) relayPartOpsLocked(ops []broadcastFECRelayOp, seqno uint32, peers []BroadcastPeer, localID []byte, erase bool) []broadcastFECRelayOp {
 	part, ok := s.parts[seqno]
 	if !ok {
-		return nil
+		return ops
 	}
 	if erase {
 		delete(s.parts, seqno)
 	}
 
-	ops := make([]broadcastFECRelayOp, 0, len(peers))
+	if ops == nil {
+		ops = make([]broadcastFECRelayOp, 0, len(peers))
+	}
+
 	for _, peer := range peers {
 		if peer == nil {
 			continue
 		}
 		peerID := peer.ID()
-		if len(peerID) == 0 || bytes.Equal(peerID, localID) || bytes.Equal(peerID, sourcePeerID) {
+		if len(peerID) == 0 || bytes.Equal(peerID, localID) {
 			continue
 		}
 
-		id := string(peerID)
+		id := newBroadcastExternalPeerIDKey(peerID)
+		if part.immediatePeerID == id {
+			continue
+		}
 		if _, ok = s.completedPeers[id]; ok {
 			continue
 		}
 
 		msg := tl.Serializable(part.full)
+		wire := part.fullWire
 		if _, ok = s.receivedPeers[id]; ok {
 			msg = part.short
+			wire = part.shortWire
 		}
 		ops = append(ops, broadcastFECRelayOp{
 			peer:  peer,
 			msg:   msg,
+			wire:  wire,
 			seqno: seqno,
 		})
 	}
 	return ops
 }
 
-func (s *fecBroadcastStream) drainRelayPartOpsLocked(peers []BroadcastPeer, localID, sourcePeerID []byte) []broadcastFECRelayOp {
+func (s *fecBroadcastStream) drainRelayPartOpsLocked(peers []BroadcastPeer, localID []byte) []broadcastFECRelayOp {
 	if len(s.parts) == 0 {
 		return nil
 	}
 
 	ops := make([]broadcastFECRelayOp, 0, len(s.parts)*len(peers))
 	for seqno := range s.parts {
-		ops = append(ops, s.relayPartOpsLocked(seqno, peers, localID, sourcePeerID, true)...)
+		ops = s.relayPartOpsLocked(ops, seqno, peers, localID, true)
 	}
 	return ops
-}
-
-func sendBroadcastFECRelayOps(ctx context.Context, state *BroadcastFECRelayState, ops []broadcastFECRelayOp) error {
-	var sendErr error
-	var sent, failed uint64
-	for _, op := range ops {
-		if err := op.peer.SendCustomMessage(ctx, op.msg); err != nil {
-			failed++
-			if sendErr == nil {
-				sendErr = fmt.Errorf("failed to relay FEC part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
-			}
-			continue
-		}
-		sent++
-	}
-	if state != nil {
-		state.addRelayStats(true, sent, failed)
-	}
-	return sendErr
 }

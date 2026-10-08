@@ -40,6 +40,43 @@ type MockADNL struct {
 	close                   func()
 }
 
+func TestRLDPHandlerPublicationConcurrentDispatch(t *testing.T) {
+	client := &RLDP{}
+	query := &Query{}
+	queryHandler := func([]byte, *Query) error { return nil }
+	messageHandler := func([]byte, []byte) error { return nil }
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 4000; i++ {
+			if i%2 == 0 {
+				client.SetOnQuery(queryHandler)
+				client.SetOnMessage(messageHandler)
+				continue
+			}
+			client.SetOnQuery(nil)
+			client.SetOnMessage(nil)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 4000; i++ {
+			if handler := client.queryHandler(); handler != nil {
+				_ = handler(nil, query)
+			}
+			if handler := client.messageHandler(); handler != nil {
+				_ = handler(nil, nil)
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+}
+
 func (m MockADNL) GetCloserCtx() context.Context {
 	if m.closerCtx != nil {
 		return m.closerCtx
@@ -263,6 +300,52 @@ func TestRLDPSendFastSymbolsCapsInitialBurst(t *testing.T) {
 	}
 }
 
+func TestRLDP_RecoverySenderDetectsAppLimited(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cli := NewClient(MockADNL{
+		closerCtx: ctx,
+		sendCustomMessage: func(ctx context.Context, req tl.Serializable) error {
+			return nil
+		},
+	})
+
+	// nothing to send at all: the peer is the limit
+	cli.activateRecoveryLoop()
+
+	waitUntil(t, 2*time.Second, func() bool {
+		return cli.rateCtrl.appLimited.Load()
+	}, "recovery sender did not flag an idle peer as app-limited")
+
+	// an active transfer that only waits on its recovery timer is limited by the path, not by the peer
+	payload := bytes.Repeat([]byte{0x5a}, int(PartSize))
+	transfer := &activeTransfer{
+		id:        bytes.Repeat([]byte{0x03}, 32),
+		timeoutAt: time.Now().Add(time.Minute).UnixMilli(),
+		data:      payload,
+		totalSize: uint64(len(payload)),
+	}
+
+	if ok, err := transfer.prepareNextPart(); err != nil || !ok {
+		t.Fatalf("prepare part: ok=%v err=%v", ok, err)
+	}
+
+	part := transfer.getCurrentPart()
+	part.recoveryReady.Store(true)
+	part.lastRecoverAt = time.Now().UnixMilli()
+	part.nextRecoverDelay = time.Minute.Milliseconds()
+
+	cli.mx.Lock()
+	cli.activeTransfers[string(transfer.id)] = transfer
+	cli.mx.Unlock()
+	cli.activateRecoveryLoop()
+
+	waitUntil(t, 2*time.Second, func() bool {
+		return !cli.rateCtrl.appLimited.Load()
+	}, "recovery sender flagged a transfer waiting on its recovery timer as app-limited")
+}
+
 func TestRLDP_handleMessage(t *testing.T) {
 	tId := make([]byte, 32)
 	_, err := rand.Read(tId)
@@ -409,12 +492,12 @@ func TestRLDP_handleMessage(t *testing.T) {
 
 			cli := NewClient(tAdnl)
 			if test.tstSubName == "query case" {
-				cli.onQuery = func(transferId []byte, query *Query) error {
+				cli.SetOnQuery(func(transferId []byte, query *Query) error {
 					if !reflect.DeepEqual(query, tQuery) {
 						t.Fatal("got wrong query in handler")
 					}
 					return nil
-				}
+				})
 			} else if test.tstSubName == "answer case" {
 				queryId := string(tQuery.ID)
 				tChan := make(chan AsyncQueryResult, 2)
@@ -779,7 +862,7 @@ func TestRLDP_handleMessageNoLostWakeupOnDrainEdge(t *testing.T) {
 			return nil
 		},
 	})
-	cli.onQuery = func(transferId []byte, query *Query) error {
+	cli.SetOnQuery(func(transferId []byte, query *Query) error {
 		gotQuery = true
 		if !bytes.Equal(transferId, transferID) {
 			t.Fatalf("unexpected transfer id")
@@ -798,7 +881,7 @@ func TestRLDP_handleMessageNoLostWakeupOnDrainEdge(t *testing.T) {
 			t.Fatalf("unexpected query payload: %#v", query)
 		}
 		return nil
-	}
+	})
 
 	second := &adnl.MessageCustom{Data: part2}
 	streamDrainEmptyHook = func() {
@@ -906,16 +989,17 @@ func TestRDLP_sendMessageParts(t *testing.T) {
 			//	v <- true
 			//}
 		}()
-		err = cli.startTransfer(context.Background(), nil, data, int64(3*time.Second))
+		err = cli.startTransfer(context.Background(), nil, data, time.Now().Add(3*time.Second).UnixMilli())
 		if err != nil {
 			t.Fatal("sendMessageParts execution failed, err: ", err)
 		}
 	})
 
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
-		ctx, _ := context.WithTimeout(context.Background(), 1*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 
-		err = cli.startTransfer(ctx, nil, data, int64(3*time.Second))
+		err = cli.startTransfer(ctx, nil, data, time.Now().Add(3*time.Second).UnixMilli())
 		if !errors.Is(err, ctx.Err()) {
 			t.Errorf("got '%s', want contex error", err.Error())
 		}
@@ -1045,7 +1129,8 @@ func TestRLDP_DoQuery(t *testing.T) {
 	})
 
 	t.Run("negative case (deadline exceeded)", func(t *testing.T) {
-		ctx, _ := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 
 		var res Answer
 		err = cli.DoQuery(ctx, uint64(_RLDPMaxAnswerSize), tReq, &res)
@@ -1065,6 +1150,10 @@ func TestRLDP_DoQueryUnexpectedResponseType(t *testing.T) {
 			return nil
 		},
 	})
+	responseData, err := tl.Serialize(benchResponse{}, true)
+	if err != nil {
+		t.Fatal("failed to serialize test response, err: ", err)
+	}
 
 	go func() {
 		deadline := time.Now().Add(100 * time.Millisecond)
@@ -1078,11 +1167,6 @@ func TestRLDP_DoQueryUnexpectedResponseType(t *testing.T) {
 			cli.mx.RUnlock()
 
 			if req != nil {
-				responseData, err := tl.Serialize(benchResponse{}, true)
-				if err != nil {
-					t.Fatal("failed to serialize test response, err: ", err)
-				}
-
 				req.result <- AsyncQueryResult{
 					QueryID:     make([]byte, 32),
 					ResultBytes: responseData,
@@ -1094,7 +1178,7 @@ func TestRLDP_DoQueryUnexpectedResponseType(t *testing.T) {
 	}()
 
 	var res testResponse
-	err := cli.DoQuery(context.Background(), 1024, testRequest{}, &res)
+	err = cli.DoQuery(context.Background(), 1024, testRequest{}, &res)
 	if err == nil || !strings.Contains(err.Error(), "unexpected response type") {
 		t.Fatalf("expected unexpected response type error, got: %v", err)
 	}

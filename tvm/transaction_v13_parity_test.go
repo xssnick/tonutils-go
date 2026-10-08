@@ -137,7 +137,7 @@ func TestTransactionV13ActiveAccountUsesInboundStateInitLibraries(t *testing.T) 
 		data:   cell.BeginCell().EndCell(),
 	}
 
-	next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusActive, false, &msg, false, emptyPreparedTestConfig())
+	next, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusActive, false, &msg, false, emptyPreparedTestConfig(), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +172,7 @@ func TestTransactionV13RejectsDeployStateInitPublicLibrariesInMasterchain(t *tes
 		status: tlb.AccountStatusUninit,
 	}
 
-	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13))
+	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,8 @@ func TestTransactionV15RejectsDeployStateInitLibraries(t *testing.T) {
 				&msg,
 				false,
 				transactionTestConfigWithGlobalVersion(t, tt.version),
-			)
+				false,
+				false)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -262,7 +263,7 @@ func TestTransactionV13RejectsDeployStateInitFixedPrefixAboveLimit(t *testing.T)
 		status: tlb.AccountStatusUninit,
 	}
 
-	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13))
+	_, used, skip, err := transactionPrepareComputeAccount(acc, tlb.AccountStatusUninit, false, &msg, false, transactionTestConfigWithGlobalVersion(t, 13), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,33 +274,67 @@ func TestTransactionV13RejectsDeployStateInitFixedPrefixAboveLimit(t *testing.T)
 
 func TestTransactionV13PrecompiledGasLoadedFromConfig(t *testing.T) {
 	code := cell.BeginCell().MustStoreUInt(0xA3, 8).EndCell()
-	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	baseGasPrices, err := tlb.ToCell(&tlb.ConfigGasLimitsPrices{
+		HasSeparateSpecialLimit: true,
+		GasPrice:                1,
+		GasLimit:                1_000,
+		SpecialGasLimit:         2_000,
+		BlockGasLimit:           2_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	masterGasPrices, err := tlb.ToCell(&tlb.ConfigGasLimitsPrices{
+		HasSeparateSpecialLimit: true,
+		GasPrice:                1,
+		GasLimit:                3_000,
+		SpecialGasLimit:         4_000,
+		BlockGasLimit:           4_000,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamPrecompiledContracts: buildTransactionV13PrecompiledConfig(t, code, 7),
+		tlb.ConfigParamGasPricesBasechain:   baseGasPrices,
+		tlb.ConfigParamGasPricesMasterchain: masterGasPrices,
 	}))
 	gas := vmcore.Gas{Max: 100, Limit: 10, Base: 10, Remaining: 10}
 
-	env := &transactionExecEnv{}
-	nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, gas, env)
-	if skip != nil {
-		t.Fatalf("unexpected skip reason: %v", skip)
-	}
-	if env.precompiledGasUsage == nil || env.precompiledGasUsage.Uint64() != 7 {
-		t.Fatalf("precompiled usage = %v, want 7", env.precompiledGasUsage)
-	}
-	if nextGas.Limit != 100 || nextGas.Max != 100 {
-		t.Fatalf("precompiled fallback gas = %+v, want max/limit 100", nextGas)
+	for _, tc := range []struct {
+		name      string
+		addr      *address.Address
+		special   bool
+		wantLimit int64
+	}{
+		{name: "ordinary", addr: tonopsTestAddr, wantLimit: 1_000},
+		{name: "special", addr: internalEmulationSrcAddr, special: true, wantLimit: 4_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
+			nextGas, skip := transactionApplyPrecompiledGasConfig(cfg, code, tc.addr, tc.special, gas, env)
+			if skip != nil {
+				t.Fatalf("unexpected skip reason: %v", skip)
+			}
+			if env.precompiledGasUsage == nil || env.precompiledGasUsage.Uint64() != 7 {
+				t.Fatalf("precompiled usage = %v, want 7", env.precompiledGasUsage)
+			}
+			if nextGas.Limit != tc.wantLimit || nextGas.Max != tc.wantLimit {
+				t.Fatalf("precompiled fallback gas = %+v, want raw config limit %d", nextGas, tc.wantLimit)
+			}
+		})
 	}
 }
 
 func TestTransactionV13PrecompiledGasAboveLimitSkipsCompute(t *testing.T) {
 	code := cell.BeginCell().MustStoreUInt(0xA4, 8).EndCell()
-	cfg := MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	cfg := mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamPrecompiledContracts: buildTransactionV13PrecompiledConfig(t, code, 11),
 	}))
 	gas := vmcore.Gas{Max: 100, Limit: 10, Base: 10, Remaining: 10}
 
-	env := &transactionExecEnv{}
-	_, skip := transactionApplyPrecompiledGasConfig(cfg, code, gas, env)
+	env := &transactionExecEnv{msg: &tlb.Message{MsgType: tlb.MsgTypeInternal}}
+	_, skip := transactionApplyPrecompiledGasConfig(cfg, code, tonopsTestAddr, false, gas, env)
 	if env.precompiledGasUsage == nil || env.precompiledGasUsage.Uint64() != 11 {
 		t.Fatalf("precompiled usage = %v, want 11", env.precompiledGasUsage)
 	}
@@ -372,7 +407,7 @@ func TestTransactionV13NonCanonicalRelaxedCurrencyIsNotSkippedByIgnoreErrors(t *
 		balance: big.NewInt(1000),
 	}
 
-	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,7 +444,7 @@ func TestTransactionV13DeleteAccountRequiresNoReservedBalance(t *testing.T) {
 		balance: big.NewInt(1000),
 	}
 
-	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0))
+	actionRes, err := transactionApplyActions(acc, res, uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), emptyPreparedTestConfig(), big.NewInt(1000), nil, transactionZeroCurrencyBalance(), big.NewInt(0), preV9TestOriginalBalance(t, big.NewInt(1000), nil), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}

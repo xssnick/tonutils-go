@@ -67,10 +67,10 @@ func TestTransactionBounceMessageUsageExtraCurrenciesBeforeV13(t *testing.T) {
 }
 
 func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
-	if res, err := transactionPrepareBouncePhase(nil, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
+	if res, err := transactionPrepareBouncePhase(nil, tonopsTestAddr, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("nil message bounce = %+v err=%v, want nil nil", res, err)
 	}
-	if res, err := transactionPrepareBouncePhase(&tlb.Message{MsgType: tlb.MsgTypeExternalIn, Msg: &tlb.ExternalMessage{}}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
+	if res, err := transactionPrepareBouncePhase(&tlb.Message{MsgType: tlb.MsgTypeExternalIn, Msg: &tlb.ExternalMessage{}}, tonopsTestAddr, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("external message bounce = %+v err=%v, want nil nil", res, err)
 	}
 	if res, err := transactionPrepareBouncePhase(&tlb.Message{
@@ -79,7 +79,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 			SrcAddr: internalEmulationSrcAddr,
 			DstAddr: tonopsTestAddr,
 		},
-	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
+	}, tonopsTestAddr, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("non-bounce message bounce = %+v err=%v, want nil nil", res, err)
 	}
 	if res, err := transactionPrepareBouncePhase(&tlb.Message{
@@ -88,7 +88,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 			Bounce:  true,
 			DstAddr: tonopsTestAddr,
 		},
-	}, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
+	}, tonopsTestAddr, big.NewInt(0), nil, transactionZeroCurrencyBalance(), big.NewInt(0), big.NewInt(0), 0, 0, 0, emptyPreparedTestConfig(), nil, nil, nil); err != nil || res != nil {
 		t.Fatalf("invalid source bounce = %+v err=%v, want nil nil", res, err)
 	}
 
@@ -110,7 +110,7 @@ func TestTransactionPrepareBouncePhaseEarlyExitAndNoFunds(t *testing.T) {
 			Body:        cell.BeginCell().MustStoreUInt(0xB0, 8).EndCell(),
 		},
 	}
-	out, err := transactionPrepareBouncePhase(msg, big.NewInt(1), nil, &transactionCurrencyBalance{grams: big.NewInt(1), extra: map[uint32]*big.Int{}}, big.NewInt(0), big.NewInt(0), uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), 0, cfg, nil, nil, nil)
+	out, err := transactionPrepareBouncePhase(msg, tonopsTestAddr, big.NewInt(1), nil, &transactionCurrencyBalance{grams: big.NewInt(1), extra: map[uint32]*big.Int{}}, big.NewInt(0), big.NewInt(0), uint64(transactionTestLogicalTime), uint32(tonopsTestTime.Unix()), 0, cfg, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,12 +184,54 @@ func TestTransactionInboundExtraFlagsBoundaries(t *testing.T) {
 		t.Fatalf("empty inbound extra flags = %d, want 0", got)
 	}
 
-	huge := new(big.Int).Lsh(big.NewInt(1), 80)
-	if got := transactionInboundExtraFlags(&tlb.InternalMessage{IHRFee: tlb.FromNanoTON(huge)}); got != 0 {
-		t.Fatalf("overflow inbound extra flags = %d, want 0", got)
+	for want := uint64(0); want <= 3; want++ {
+		huge := new(big.Int).Lsh(big.NewInt(1), 80)
+		huge.Or(huge, new(big.Int).SetUint64(want))
+		if got := transactionInboundExtraFlags(&tlb.InternalMessage{IHRFee: tlb.FromNanoTON(huge)}); got != want {
+			t.Fatalf("wide inbound extra flags = %d, want %d", got, want)
+		}
 	}
 	if got := transactionInboundExtraFlags(&tlb.InternalMessage{IHRFee: tlb.FromNanoTONU(7)}); got != 3 {
 		t.Fatalf("masked inbound extra flags = %d, want 3", got)
+	}
+}
+
+func TestTransactionBuildNewBounceBodyTruncatesCounters(t *testing.T) {
+	in := &tlb.InternalMessage{
+		IHRFee: tlb.FromNanoTONU(1),
+		Body:   cell.BeginCell().EndCell(),
+	}
+	compute := &MessageExecutionResult{
+		ExecutionResult: ExecutionResult{
+			GasUsed:   1<<32 + 7,
+			Steps:     1<<32 + 9,
+			Committed: true,
+		},
+		Accepted: true,
+	}
+	body, err := transactionBuildBounceBody(in, transactionTestConfigWithGlobalVersion(t, 12), nil, compute, &tlb.ActionPhase{ResultCode: 37})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sl := body.MustBeginParse()
+	if tag := sl.MustLoadUInt(32); tag != 0xfffffffe {
+		t.Fatalf("bounce tag = %#x, want new format", tag)
+	}
+	if phase := sl.MustLoadUInt(8); phase != 2 {
+		t.Fatalf("bounce phase = %d, want action phase", phase)
+	}
+	if exit := sl.MustLoadInt(32); exit != 37 {
+		t.Fatalf("bounce exit code = %d, want 37", exit)
+	}
+	if hasCompute := sl.MustLoadBoolBit(); !hasCompute {
+		t.Fatal("bounce compute details are absent")
+	}
+	if gas := sl.MustLoadUInt(32); gas != 7 {
+		t.Fatalf("bounce gas counter = %d, want low uint32", gas)
+	}
+	if steps := sl.MustLoadUInt(32); steps != 9 {
+		t.Fatalf("bounce step counter = %d, want low uint32", steps)
 	}
 }
 

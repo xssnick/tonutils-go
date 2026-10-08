@@ -10,8 +10,9 @@ import (
 )
 
 func init() {
+	vm.ArgList = append(vm.ArgList, setCPOp)
+
 	vm.List = append(vm.List,
-		func() vm.OP { return SETCP(0) },
 		func() vm.OP { return SETCPX() },
 	)
 }
@@ -24,56 +25,47 @@ func setCodepage(state *vm.State, cp int) error {
 	return nil
 }
 
-// OpSETCP is a struct-based opcode: one allocation per executed instruction
-// instead of an AdvancedOP carrying per-instance closures.
-type OpSETCP struct {
-	cp int
-}
-
 var setcpPrefix = helpers.BytesPrefix(0xFF)
 
-func SETCP(cp int) *OpSETCP {
-	return &OpSETCP{cp: cp}
-}
+// setCPOp carries the codepage as a two's-complement int64 in the operand, not
+// as the byte it is stored in: the encoding is asymmetric, since the byte only
+// spans -16..239 while the constructor accepts any int and reproduces the
+// reference wraparound for the rest.
+var setCPOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(setcpPrefix),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		return setCodepage(state, int(int64(args)))
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		if err := code.SkipBits(setcpPrefix.Bits); err != nil {
+			return 0, err
+		}
+		v, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
+		}
+		return uint64(int64((v+0x10)&0xFF) - 0x10), nil
+	},
+	Serializer: func(args uint64) *cell.Builder {
+		cp := int64(args)
+		var raw uint8
+		if cp >= 0 {
+			raw = uint8(cp)
+		} else {
+			raw = uint8(cp + 256)
+		}
+		return cell.BeginCell().
+			MustStoreSlice(setcpPrefix.Data, setcpPrefix.Bits).
+			MustStoreUInt(uint64(raw), 8)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("SETCP %d", int64(args))
+	},
+})
 
-func (op *OpSETCP) GetPrefixes() []*cell.Slice {
-	return helpers.PrefixSlices(setcpPrefix)
-}
-
-func (op *OpSETCP) Deserialize(code *cell.Slice) error {
-	if err := code.SkipBits(setcpPrefix.Bits); err != nil {
-		return err
-	}
-	v, err := code.LoadUInt(8)
-	if err != nil {
-		return vmerr.Error(vmerr.CodeInvalidOpcode, err.Error())
-	}
-	op.cp = int((v+0x10)&0xFF) - 0x10
-	return nil
-}
-
-func (op *OpSETCP) Serialize() *cell.Builder {
-	var raw uint8
-	if op.cp >= 0 {
-		raw = uint8(op.cp)
-	} else {
-		raw = uint8(op.cp + 256)
-	}
-	return cell.BeginCell().
-		MustStoreSlice(setcpPrefix.Data, setcpPrefix.Bits).
-		MustStoreUInt(uint64(raw), 8)
-}
-
-func (op *OpSETCP) SerializeText() string {
-	return fmt.Sprintf("SETCP %d", op.cp)
-}
-
-func (op *OpSETCP) InstructionBits() int64 {
-	return int64(setcpPrefix.Bits) + 8
-}
-
-func (op *OpSETCP) Interpret(state *vm.State) error {
-	return setCodepage(state, op.cp)
+func SETCP(cp int) vm.OP {
+	return vm.Bind(setCPOp, uint64(int64(cp)))
 }
 
 func SETCPX() *helpers.SimpleOP {

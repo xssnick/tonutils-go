@@ -1,13 +1,17 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/bits"
+	"unsafe"
 )
 
 var ErrLazyLoaderNotSet = errors.New("lazy pruned ref loader is not set")
 var ErrLazyRefNotFound = errors.New("lazy pruned ref not found")
+var ErrLazyRefMismatch = errors.New("loaded lazy ref does not match placeholder")
 
 // LazyCellLoader resolves lazy pruned references by the hash of the represented cell.
 type LazyCellLoader func(hash Hash) (*Cell, error)
@@ -21,12 +25,17 @@ type LazyRef struct {
 }
 
 // CreateWithLazyRefsUnsafe creates a regular cell with trusted precomputed
-// hashes and lazy pruned refs. The parent cell is not marked lazy; only its
-// pruned references are lazy boundaries.
-// descriptors must be encoded as d1<<8 | d2, and data must contain the serialized
-// cell body, including the top-up bit for non-byte-aligned cells.
-// loader is captured by the lazy references; pass nil to create unresolved
-// placeholders which return ErrLazyLoaderNotSet when loaded.
+// hashes and depths, and lazy pruned placeholders for every reference. The
+// input is trusted: nothing is recomputed or verified beyond structural sizes.
+//
+// data is COPIED — the caller may reuse its buffer immediately. The cell, its
+// placeholders, their metas and the body copy come out of ONE allocation (two
+// for a cell without references, whose exact-size body beats a fixed slab
+// buffer): see the slab layout in lazy_slab.go. Measured against the previous
+// per-object construction on the storage decode path: 8 -> 1 allocations and
+// 300 -> 211 ns for the two-reference cell a state tree averages, and a
+// resident decoded cell costs one live object instead of eight, which is what
+// the decoded cell cache's GC mark cost is made of.
 func CreateWithLazyRefsUnsafe(descriptors uint16, data, hashes []byte, depths []uint16, refs []LazyRef, loader LazyCellLoader) (*Cell, error) {
 	dsc1 := byte(descriptors >> 8)
 	dsc2 := byte(descriptors)
@@ -40,31 +49,25 @@ func CreateWithLazyRefsUnsafe(descriptors uint16, data, hashes []byte, depths []
 		return nil, errors.New("not enough cell data")
 	}
 	data = data[:dataBytes]
-	levelMask := LevelMask{Mask: dsc1 >> 5}
-	bitsSz, err := cellBodyBitsSize(dsc2, data)
-	if err != nil {
-		return nil, err
-	}
 
-	c := &Cell{
-		data:   data,
-		bitsSz: bitsSz,
-	}
-	c.setSpecial(dsc1&0b1000 != 0)
-	c.setLevelMask(levelMask)
-	c.setRefsCount(refCnt)
-	c.resolveType()
-	if err = setTrustedHashesDepths(c, levelMask, hashes, depths); err != nil {
-		return nil, err
-	}
-
-	for i := range refs {
-		c.refs[i], err = createLazyPrunedRef(refs[i], loader)
-		if err != nil {
+	switch {
+	case refCnt == 0:
+		body := make([]byte, dataBytes)
+		copy(body, data)
+		c := &Cell{}
+		if err := initSlabRoot(c, body, descriptors, data, hashes, depths); err != nil {
 			return nil, err
 		}
+		return c, nil
+	case refCnt <= 2:
+		s := &lazySlab2{}
+		return buildLazySlab(&s.root, s.body[:], s.refs[:refCnt], s.metas[:refCnt], s.pruned[:refCnt],
+			descriptors, data, hashes, depths, refs, loader)
+	default:
+		s := &lazySlab4{}
+		return buildLazySlab(&s.root, s.body[:], s.refs[:refCnt], s.metas[:refCnt], s.pruned[:refCnt],
+			descriptors, data, hashes, depths, refs, loader)
 	}
-	return c, nil
 }
 
 func cellBodyBytesSize(dsc2 byte) int {
@@ -159,18 +162,79 @@ func loadLazyPrunedRef(c *Cell) (*Cell, error) {
 }
 
 func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
-	meta := c.meta
-	if meta == nil || meta.lazyLoader == nil {
-		return nil, ErrLazyLoaderNotSet
-	}
-	raw := c.rawCell()
-
-	loaded, err := meta.lazyLoader(raw.HashKey())
+	loaded, err := loadLazyPrunedRefData(c)
 	if err != nil {
 		return nil, err
 	}
+	return resolveLoadedLazyRefWithTrace(c, loaded, trace)
+}
+
+// loadLazyPrunedRefData reads the represented cell before attaching the
+// caller's virtual level or trace, so operation-local caches can share raw data.
+func loadLazyPrunedRefData(c *Cell) (*Cell, error) {
+	raw := c.rawCell()
+	meta := raw.meta
+	if meta == nil {
+		return nil, ErrLazyLoaderNotSet
+	}
+	if meta.lazyFlags&cellLazyBOC != 0 {
+		// Only bocLazyCellMeta allocations carry this tag; ordinary metadata
+		// and virtual wrappers never pass through this prefix conversion.
+		boc := (*bocLazyCellMeta)(unsafe.Pointer(meta))
+		return boc.loader.loadDataCell(int(boc.index))
+	}
+	if meta.lazyLoader == nil {
+		return nil, ErrLazyLoaderNotSet
+	}
+	return meta.lazyLoader(raw.HashKey())
+}
+
+// loadLazyPrunedRefCached shares raw cell bodies within one traversal while
+// validating each boundary and attaching its own virtual level and trace.
+func loadLazyPrunedRefCached(c *Cell, cache *cellLoadCache) (*Cell, error) {
+	if !c.hasLazyLoader() {
+		return nil, ErrLazyLoaderNotSet
+	}
+
+	hash := c.rawCell().HashKey()
+	data := cache.lookup(hash)
+	missing := data == nil
+	if data == nil {
+		var err error
+		data, err = loadLazyPrunedRefData(c)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// Equal hashes must not hide malformed depths or a different view.
+	loaded, err := resolveLoadedLazyRefWithTrace(c, data, c.Trace())
+	if err != nil {
+		return nil, err
+	}
+	if missing {
+		cache.store(hash, data.rawCell())
+	}
+	return loaded, nil
+}
+
+// resolveLoadedLazyRefWithTrace binds an already loaded cell to a lazy
+// placeholder. It is the cache-hit half of loadLazyPrunedRefWithTrace: the
+// represented hash, depth and virtual level are checked exactly as on a loader
+// result, while the caller avoids asking storage for a cell it already owns.
+func resolveLoadedLazyRefWithTrace(c, loaded *Cell, trace *Trace) (*Cell, error) {
+	meta := c.meta
+	if meta == nil {
+		return nil, ErrLazyLoaderNotSet
+	}
 	if loaded == nil {
 		return nil, ErrLazyRefNotFound
+	}
+	raw := c.rawCell()
+	loaded = loaded.rawCell()
+	if meta.lazyFlags&cellLazySkipValidation == 0 {
+		if err := validateLoadedLazyRef(raw, loaded); err != nil {
+			return nil, err
+		}
 	}
 
 	var out *Cell
@@ -185,6 +249,26 @@ func loadLazyPrunedRefWithTrace(c *Cell, trace *Trace) (*Cell, error) {
 	return out, nil
 }
 
+func validateLoadedLazyRef(placeholder, loaded *Cell) error {
+	placeholderMask := placeholder.getLevelMask()
+	if placeholderMask != loaded.getLevelMask() {
+		return fmt.Errorf("%w: level mask mismatch", ErrLazyRefMismatch)
+	}
+
+	for level := 0; level <= placeholderMask.GetLevel(); level++ {
+		if !placeholderMask.IsSignificant(level) {
+			continue
+		}
+		if !bytes.Equal(placeholder.getHash(level), loaded.getHash(level)) {
+			return fmt.Errorf("%w: hash mismatch at level %d", ErrLazyRefMismatch, level)
+		}
+		if placeholder.getDepth(level) != loaded.getDepth(level) {
+			return fmt.Errorf("%w: depth mismatch at level %d", ErrLazyRefMismatch, level)
+		}
+	}
+	return nil
+}
+
 // PrewarmRecursive returns a new cell tree with lazy references loaded up to depth.
 // depth limits how many reference edges are traversed; 0 means no limit.
 // References beyond the depth boundary are kept as boundary refs, so lazy tips
@@ -194,7 +278,8 @@ func (c *Cell) PrewarmRecursive(depth int) (*Cell, error) {
 		return nil, ErrNegative
 	}
 
-	return c.prewarmRecursive(depth, depth == 0, map[prewarmRecursiveKey]*Cell{})
+	var loaded cellLoadCache
+	return c.prewarmRecursive(depth, depth == 0, map[prewarmRecursiveKey]*Cell{}, &loaded)
 }
 
 type prewarmRecursiveKey struct {
@@ -203,14 +288,18 @@ type prewarmRecursiveKey struct {
 	unlimited bool
 }
 
-func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecursiveKey]*Cell) (*Cell, error) {
+func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecursiveKey]*Cell, loadedCells *cellLoadCache) (*Cell, error) {
 	if c == nil {
 		return nil, nil
 	}
 
-	loaded, err := c.load()
-	if err != nil {
-		return nil, err
+	loaded := c
+	var err error
+	if c.IsLazy() {
+		loaded, err = loadLazyPrunedRefCached(c, loadedCells)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	hash := loaded.HashKey()
@@ -250,7 +339,7 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 		if err != nil {
 			return nil, err
 		}
-		refs[i], err = ref.prewarmRecursive(nextDepth, unlimited, cache)
+		refs[i], err = ref.prewarmRecursive(nextDepth, unlimited, cache, loadedCells)
 		if err != nil {
 			return nil, err
 		}
@@ -264,12 +353,15 @@ func (c *Cell) prewarmRecursive(depth int, unlimited bool, cache map[prewarmRecu
 }
 
 func materializeLoadedCellWithRefs(c *Cell, refs []*Cell) (*Cell, error) {
-	out := c.copy()
+	// Loaded payloads can share an allocation with lazy refs and their loader.
+	// Materializing must sever that ownership as well as the visible refs.
+	out := c.copyWithOwnedData()
 	out.setRefs(refs)
 	out.setLazy(false)
 	out.clearVirtualization()
 	if out.meta != nil {
 		out.meta.lazyLoader = nil
+		out.meta.lazyFlags = 0
 		out.clearMetaIfEmpty()
 	}
 	if err := out.refreshLevelMaskForRefs(); err != nil {
@@ -286,4 +378,9 @@ func (c *Cell) cellLazyLoader() LazyCellLoader {
 		return nil
 	}
 	return c.meta.lazyLoader
+}
+
+func (c *Cell) hasLazyLoader() bool {
+	meta := c.rawCell().meta
+	return meta != nil && (meta.lazyLoader != nil || meta.lazyFlags&cellLazyBOC != 0)
 }

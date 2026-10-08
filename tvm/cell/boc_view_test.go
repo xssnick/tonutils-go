@@ -41,6 +41,28 @@ func TestBOCViewReadAtCrossesWindowBoundary(t *testing.T) {
 	}
 }
 
+func TestBOCCellMetaNegativeLevelUsesTopLevel(t *testing.T) {
+	var levelZero, top Hash
+	levelZero[0] = 0x11
+	top[0] = 0x22
+	meta := BOCCellMeta{
+		LevelMask: LevelMask{Mask: 1},
+		Hashes:    [4]Hash{levelZero, top},
+		Depths:    [4]uint16{3, 7},
+		Count:     2,
+	}
+
+	if got := meta.HashAtLevel(-1); got != top {
+		t.Fatalf("negative-level hash = %x, want top-level %x", got, top)
+	}
+	if got := meta.DepthAtLevel(-1); got != 7 {
+		t.Fatalf("negative-level depth = %d, want 7", got)
+	}
+	if got := meta.HashAtLevel(0); got != levelZero {
+		t.Fatalf("level-0 hash = %x, want %x", got, levelZero)
+	}
+}
+
 func TestBOCViewCrossMatchesParser(t *testing.T) {
 	root := testBOCViewCellTree()
 

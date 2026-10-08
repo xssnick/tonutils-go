@@ -237,6 +237,9 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 		if ln > sz {
 			return 0, 0, ErrLabelExceedsKeyBits
 		}
+		if loader.BitsLeft() < ln {
+			return 0, 0, ErrNotEnoughData(int(loader.BitsLeft()), int(ln))
+		}
 		matched, err := consumeCommonPrefix(loader, key, ln)
 		return ln, matched, err
 	}
@@ -254,6 +257,9 @@ func matchLabelPrefix(sz uint, loader, key *Slice) (uint, uint, error) {
 		}
 		if ln > uint64(sz) {
 			return 0, 0, ErrLabelExceedsKeyBits
+		}
+		if uint64(loader.BitsLeft()) < ln {
+			return 0, 0, ErrNotEnoughData(int(loader.BitsLeft()), int(ln))
 		}
 		matched, err := consumeCommonPrefix(loader, key, uint(ln))
 		return uint(ln), matched, err
@@ -348,17 +354,6 @@ func storeDictLabel(b *Builder, data *Slice, keyLen uint) error {
 		return err
 	}
 	return b.storeSliceFromSlice(data, ln)
-}
-
-func storeDictNode(label *Slice, payload *Builder, keyLen uint) (*Cell, error) {
-	b := BeginCell()
-	if err := storeDictLabel(b, label, keyLen); err != nil {
-		return nil, err
-	}
-	if err := b.StoreBuilder(payload); err != nil {
-		return nil, err
-	}
-	return b.EndCell(), nil
 }
 
 func storeDictNodeTraced(label *Slice, payload *Builder, keyLen uint, trace *Trace) (*Cell, error) {

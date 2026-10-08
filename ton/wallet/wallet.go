@@ -137,6 +137,7 @@ type TonAPI interface {
 	CurrentMasterchainInfo(ctx context.Context) (*ton.BlockIDExt, error)
 	SendExternalMessage(ctx context.Context, msg *tlb.ExternalMessage) error
 	SendExternalMessageWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
+	SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, ext *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error)
 	FindLastTransactionByInMsgHash(ctx context.Context, addr *address.Address, msgHash []byte, maxTxNumToScan ...int) (*tlb.Transaction, error)
 }
 
@@ -551,6 +552,24 @@ func (w *Wallet) SendManyWaitTransaction(ctx context.Context, messages []*Messag
 // SendWaitTransaction always waits for tx block confirmation and returns found tx.
 func (w *Wallet) SendWaitTransaction(ctx context.Context, message *Message) (*tlb.Transaction, *ton.BlockIDExt, error) {
 	return w.SendManyWaitTransaction(ctx, []*Message{message})
+}
+
+// SendManyWaitTransactionToAllNodes is SendManyWaitTransaction delivering the message through every
+// active liteserver.
+func (w *Wallet) SendManyWaitTransactionToAllNodes(ctx context.Context, messages []*Message) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	ext, err := w.BuildExternalMessageForMany(ctx, messages)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tx, block, _, err := w.api.SendExternalMessageToAllNodesWaitTransaction(ctx, ext)
+	return tx, block, err
+}
+
+// SendWaitTransactionToAllNodes is SendWaitTransaction delivering the message through every
+// active liteserver.
+func (w *Wallet) SendWaitTransactionToAllNodes(ctx context.Context, message *Message) (*tlb.Transaction, *ton.BlockIDExt, error) {
+	return w.SendManyWaitTransactionToAllNodes(ctx, []*Message{message})
 }
 
 // TransferWaitTransaction always waits for tx block confirmation and returns found tx.

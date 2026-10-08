@@ -29,22 +29,7 @@ func pushMaybeCell(stack *Stack, cl *cell.Cell) error {
 }
 
 func copyTopValuesToParent(parent, child *Stack, count int) error {
-	if count <= 0 {
-		return nil
-	}
-
-	start := child.Len() - count
-	if start < 0 {
-		return vmerr.Error(vmerr.CodeStackUnderflow)
-	}
-
-	for _, val := range child.elems[start:] {
-		val = unbindValueTrace(val, child.trace)
-		if err := parent.PushAny(val); err != nil {
-			return err
-		}
-	}
-	return nil
+	return copyTopValuesToParentWithTrace(parent, child, count, child.trace)
 }
 
 func unbindCellTrace(cl *cell.Cell, trace *cell.Trace) *cell.Cell {
@@ -61,14 +46,18 @@ func pushCommittedResultCell(parent *Stack, committed bool, value *cell.Cell) er
 	return pushMaybeCell(parent, value)
 }
 
-func childResultRegisterValue(child *State, committedValue, currentValue *cell.Cell) *cell.Cell {
+// pushChildResultRegister returns a child VM's result register: a committed
+// child returns its committed c4/c5; a non-committed one returns null at
+// global version >= 11 and the degenerate committed-state cell (an entry
+// holding a null cell reference) below it.
+func pushChildResultRegister(parent *Stack, child *State, committedValue *cell.Cell, trace *cell.Trace) error {
 	if child.Committed.Committed {
-		return committedValue
+		return pushMaybeCell(parent, unbindCellTrace(committedValue, trace))
 	}
-	if child.effectiveGlobalVersion() < 11 {
-		return currentValue
+	if child.effectiveGlobalVersion() >= 11 {
+		return parent.PushAny(nil)
 	}
-	return nil
+	return parent.PushCell(nil)
 }
 
 func (s *State) RunChildVM(cfg ChildVMConfig) error {
@@ -83,11 +72,13 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	}
 
 	parentTrace := s.Cells.Trace()
-	childStack := cfg.Stack.WithoutTrace(parentTrace)
-	childC7 := unbindTupleTrace(cfg.C7, parentTrace)
+	copier := continuationTraceCopier{trace: parentTrace}
+	childStack := copier.stack(cfg.Stack)
+	childC7 := copier.tuple(cfg.C7)
 	childCode := cfg.Code.Copy().SetTrace(cfg.Code.Trace().WithoutTrace(parentTrace))
 
-	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, cfg.Data, childC7, childStack)
+	childData := unbindCellTrace(cfg.Data, parentTrace)
+	child := NewExecutionState(s.effectiveGlobalVersion(), cfg.Gas, childData, childC7, childStack)
 	child.CurrentCode = childCode
 
 	if cfg.IsolateGas {
@@ -153,7 +144,10 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		if !vmErrOk && !IsHandledException(childErr) {
 			return childErr
 		}
-		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 {
+		// Only a genuine unhandled out-of-gas flips the sign; an exception
+		// with code 13 caught by c2 is a regular handled exit and stays
+		// positive.
+		if vmErrOk && vmErr.Code == vmerr.CodeOutOfGas && exitCode >= 0 && !IsHandledException(childErr) {
 			exitCode = ^exitCode
 		}
 	}
@@ -189,26 +183,22 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 	if err := s.ConsumeStackGasLen(retCnt); err != nil {
 		return err
 	}
-	if err := copyTopValuesToParent(s.Stack, child.Stack, retCnt); err != nil {
+	childTrace := child.Cells.Trace()
+	if err := copyTopValuesToParentWithTrace(s.Stack, child.Stack, retCnt, childTrace); err != nil {
 		return err
 	}
 	if err := s.Stack.PushSmallInt(exitCode); err != nil {
 		return err
 	}
 
-	childTrace := child.Cells.Trace()
 	if cfg.ReturnData {
-		data := childResultRegisterValue(child, child.Committed.Data, child.Reg.D[0])
-		data = unbindCellTrace(data, childTrace)
-		if err := pushMaybeCell(s.Stack, data); err != nil {
+		if err := pushChildResultRegister(s.Stack, child, child.Committed.Data, childTrace); err != nil {
 			return err
 		}
 	}
 
 	if cfg.ReturnActions {
-		actions := childResultRegisterValue(child, child.Committed.Actions, child.Reg.D[1])
-		actions = unbindCellTrace(actions, childTrace)
-		if err := pushMaybeCell(s.Stack, actions); err != nil {
+		if err := pushChildResultRegister(s.Stack, child, child.Committed.Actions, childTrace); err != nil {
 			return err
 		}
 	}
@@ -219,5 +209,40 @@ func (s *State) RunChildVM(cfg ChildVMConfig) error {
 		}
 	}
 
+	return nil
+}
+
+func copyTopValuesToParentWithTrace(parent, child *Stack, count int, childTrace *cell.Trace) error {
+	if count <= 0 {
+		return nil
+	}
+
+	start := child.Len() - count
+	if start < 0 {
+		return vmerr.Error(vmerr.CodeStackUnderflow)
+	}
+
+	copier := continuationTraceCopier{trace: childTrace}
+	binder := stackValueCopier{trace: parent.trace}
+	for _, val := range child.elems[start:] {
+		switch v := val.(type) {
+		case Continuation:
+			if err := parent.PushOwnedContinuation(copier.continuation(v)); err != nil {
+				return err
+			}
+			continue
+		case tuple.Tuple:
+			val = binder.tuple(copier.tuple(v))
+			if err := parent.PushOwnedValue(val); err != nil {
+				return err
+			}
+			continue
+		default:
+			val = copier.value(val)
+		}
+		if err := parent.PushAny(val); err != nil {
+			return err
+		}
+	}
 	return nil
 }

@@ -6,7 +6,7 @@ import (
 )
 
 type TraceStep struct {
-	Step         uint32
+	Step         uint64
 	Opcode       string
 	Stack        *Stack
 	GasRemaining int64

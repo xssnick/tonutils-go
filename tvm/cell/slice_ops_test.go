@@ -181,8 +181,8 @@ func TestSliceOpsComparisonsAndCounts(t *testing.T) {
 	}
 
 	trimmed := mustBitSlice(t, "1011000")
-	if removed := trimmed.RemoveTrailing(); removed != 3 {
-		t.Fatalf("unexpected removed trailing zeros: %d", removed)
+	if removed := trimmed.RemoveTrailing(); removed != 4 {
+		t.Fatalf("unexpected removed trailing bits: %d", removed)
 	}
 	if trimmed.BitsLeft() != 3 {
 		t.Fatalf("unexpected trimmed size: %d", trimmed.BitsLeft())

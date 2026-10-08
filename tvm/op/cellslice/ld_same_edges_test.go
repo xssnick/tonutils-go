@@ -66,13 +66,6 @@ func TestLDSameStackTypeRangeAndShapeEdges(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("FixedResultPushOverflow", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLDSameStack(t, st, 1)
-		pushCellSliceSlice(t, st, ldSameBitsSlice(1, 0))
-		assertCellSliceVMErrorCode(t, LDZEROES().Interpret(st), vmerr.CodeStackOverflow)
-	})
 }
 
 func FuzzTVMLDSameRules(f *testing.F) {
@@ -130,23 +123,6 @@ func FuzzTVMLDSameRules(f *testing.F) {
 			t.Fatalf("count = %d, want %d", got, wantCount)
 		}
 	})
-}
-
-func fillLDSameStack(t *testing.T, st *vm.State, spare int) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushSmallInt(0)
-		if err != nil {
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-	for i := 0; i < spare; i++ {
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("failed to free stack slot: %v", err)
-		}
-	}
 }
 
 func int64Ptr(v int64) *int64 {

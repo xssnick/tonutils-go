@@ -5,6 +5,28 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
+// unmeteredLibraryDictResolver mirrors the dummy VmStateInterface installed
+// during library lookup since global version 4: library nodes cannot resolve,
+// while a virtualized pruned branch still aborts outside VmError handling.
+type unmeteredLibraryDictResolver struct{}
+
+// libraryLoadState groups the lazily-created state used only by executions
+// that enforce a library-load limit or actually miss a library. Keeping its
+// pointer in State avoids moving every execution into the next heap size class.
+type libraryLoadState struct {
+	loadedLibraries map[cell.Hash]struct{}
+	missingLibrary  cell.Hash
+	hasMissing      bool
+	missingExposed  bool
+}
+
+func (unmeteredLibraryDictResolver) ResolveDictNodeCell(cl *cell.Cell) (*cell.Cell, error) {
+	if cl.GetType() == cell.PrunedCellType && cl.IsVirtualized() && cl.EffectiveLevel() < cl.ActualLevel() {
+		return nil, vmerr.Virtualization(1)
+	}
+	return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library dictionary node")
+}
+
 func (s *State) SetLibraries(libs ...*cell.Cell) {
 	s.Libraries = append([]*cell.Cell(nil), libs...)
 	s.libraryCache = nil
@@ -18,18 +40,59 @@ func (s *State) checkLibraryLoadLimit(hash cell.Hash) bool {
 	if !s.hasMaxLibraryLoads {
 		return true
 	}
-	if _, seen := s.loadedLibraries[hash]; seen {
-		return true
+
+	loads := s.libraryLoads
+	var loaded uint32
+	if loads != nil {
+		if _, seen := loads.loadedLibraries[hash]; seen {
+			return true
+		}
+		loaded = uint32(len(loads.loadedLibraries))
 	}
-	if uint32(len(s.loadedLibraries)) >= s.maxLibraryLoads {
+
+	// The reference compares for exact equality, so a limit lowered below the
+	// number of already-seen hashes does not retroactively refuse new ones.
+	if loaded == s.maxLibraryLoads {
 		return false
 	}
 
-	if s.loadedLibraries == nil {
-		s.loadedLibraries = make(map[cell.Hash]struct{})
+	if loads == nil {
+		loads = new(libraryLoadState)
+		s.libraryLoads = loads
 	}
-	s.loadedLibraries[hash] = struct{}{}
+	if loads.loadedLibraries == nil {
+		loads.loadedLibraries = make(map[cell.Hash]struct{})
+	}
+	loads.loadedLibraries[hash] = struct{}{}
 	return true
+}
+
+func (s *State) shareLibraryLoadsWith(child *State) {
+	if s.libraryLoads == nil {
+		s.libraryLoads = new(libraryLoadState)
+	}
+	if s.libraryLoads.loadedLibraries == nil {
+		s.libraryLoads.loadedLibraries = make(map[cell.Hash]struct{})
+	}
+	if child.libraryLoads == nil {
+		child.libraryLoads = new(libraryLoadState)
+	}
+	child.libraryLoads.loadedLibraries = s.libraryLoads.loadedLibraries
+}
+
+// SuspendLibraryLoadAccounting temporarily gives a lookup the isolated state
+// of the reference's startup DummyVmState. Besides lifting max-library-loads
+// accounting, it keeps lookup cache and missing-library changes out of the
+// execution state. The returned func restores the previous mode.
+func (s *State) SuspendLibraryLoadAccounting() func() {
+	prevHas := s.hasMaxLibraryLoads
+	prevSandboxed := s.libraryLookupSandboxed
+	s.hasMaxLibraryLoads = false
+	s.libraryLookupSandboxed = true
+	return func() {
+		s.hasMaxLibraryLoads = prevHas
+		s.libraryLookupSandboxed = prevSandboxed
+	}
 }
 
 func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
@@ -44,11 +107,18 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 		return nil, nil
 	}
 
-	if s.libraryCache != nil {
+	// Since global version 4 the reference VmState::load_library (see the C++
+	// vm.cpp) installs an empty VmStateInterface for the duration of the
+	// dictionary lookup, so nothing loaded while searching is charged; the
+	// resolved cell itself is charged (or not) by the caller. Before v4 the
+	// regular interface stays active and every dictionary node actually loaded
+	// by the lookup consumes cell load/reload gas through the usual
+	// per-unique-cell accounting, so a repeated lookup re-walks the tree at
+	// reload prices and even a failed lookup pays for the nodes it visited.
+	metered := s.GlobalVersion < 4
+
+	if !metered && !s.libraryLookupSandboxed && s.libraryCache != nil {
 		if cached := s.libraryCache[cacheKey]; cached != nil {
-			if err := s.consumeLegacyLibraryLookupGas(cached, true); err != nil {
-				return nil, err
-			}
 			return cached, nil
 		}
 	}
@@ -60,7 +130,26 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 		}
 
 		dict := root.AsDict(256)
-		value, err := dict.LoadValue(key)
+		if metered {
+			// Before v4 the active VM interface remains installed during lookup,
+			// so a library cell used as a dictionary node resolves recursively.
+			dict.SetTrace(s.Cells.Trace())
+		}
+		var value *cell.Slice
+		var err error
+		if metered {
+			value, err = dict.LoadValue(key)
+		} else {
+			value, err = dict.LoadValueWithResolver(key, unmeteredLibraryDictResolver{})
+		}
+		if metered {
+			if gasErr := s.Cells.PendingError(); gasErr != nil {
+				return nil, gasErr
+			}
+		}
+		if _, ok := vmerr.AsVirtualization(err); ok {
+			return nil, err
+		}
 		if err != nil || value == nil || value.RefsNum() == 0 {
 			continue
 		}
@@ -71,37 +160,93 @@ func (s *State) LoadLibraryByHash(hash []byte) (*cell.Cell, error) {
 		}
 
 		if ref.HashKey() == cacheKey {
-			if err := s.consumeLegacyLibraryLookupGas(ref, false); err != nil {
-				return nil, err
+			if !metered && !s.libraryLookupSandboxed {
+				if s.libraryCache == nil {
+					s.libraryCache = make(map[cell.Hash]*cell.Cell, len(s.Libraries))
+				}
+				s.libraryCache[cacheKey] = ref
 			}
-			if s.libraryCache == nil {
-				s.libraryCache = make(map[cell.Hash]*cell.Cell, len(s.Libraries))
-			}
-			s.libraryCache[cacheKey] = ref
 			return ref, nil
 		}
 	}
 
+	if !s.libraryLookupSandboxed {
+		loads := s.libraryLoads
+		if loads == nil || loads.missingExposed {
+			var loadedLibraries map[cell.Hash]struct{}
+			if loads != nil {
+				loadedLibraries = loads.loadedLibraries
+			}
+			loads = &libraryLoadState{loadedLibraries: loadedLibraries}
+			s.libraryLoads = loads
+		}
+		loads.missingLibrary = cacheKey
+		loads.hasMissing = true
+		loads.missingExposed = false
+	}
 	return nil, nil
 }
 
-func (s *State) consumeLegacyLibraryLookupGas(ref *cell.Cell, cached bool) error {
-	if s.GlobalVersion >= 5 {
-		return nil
-	}
-
-	if err := s.Cells.RegisterCellLoad(ref); err != nil {
-		return err
-	}
-
-	if s.GlobalVersion < 4 {
-		if cached {
-			return s.ConsumeGas(CellReloadGasPrice)
+// ResolveDictNodeCell resolves a library cell met inside a dictionary walk:
+// the library cell itself has already been charged by the walk's own load
+// notification; the resolved cell is charged only below global version 5,
+// where the first-resolution marker does not exist yet and library-to-library
+// chains keep resolving.
+func (s *State) ResolveDictNodeCell(cl *cell.Cell) (*cell.Cell, error) {
+	libraryLoaded := false
+	for {
+		// A dictionary node load is a regular cell load: a pruned branch above
+		// the effective level aborts the whole VM and cannot be caught, which
+		// happens before the special cell kind is inspected at all.
+		if cl.GetType() == cell.PrunedCellType && cl.IsVirtualized() && cl.EffectiveLevel() < cl.ActualLevel() {
+			return nil, vmerr.Virtualization(1)
 		}
-		return s.ConsumeGas(CellLoadGasPrice)
-	}
+		if cl.GetType() != cell.LibraryCellType {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "unexpected special cell")
+		}
+		if libraryLoaded && s.GlobalVersion >= 5 {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell: recursive library cells are not allowed")
+		}
 
-	return nil
+		sl, err := s.Cells.BeginParseAlreadyLoadedRaw(cl)
+		if err != nil {
+			return nil, err
+		}
+		if err = sl.SkipBits(8); err != nil {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
+		}
+		hash, err := sl.LoadSlice(256)
+		if err != nil {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
+		}
+
+		resolved, err := s.LoadLibraryByHash(hash)
+		if err != nil {
+			return nil, err
+		}
+		if resolved == nil {
+			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
+		}
+		if s.GlobalVersion < 5 {
+			if err = s.Cells.RegisterCellLoad(resolved); err != nil {
+				return nil, err
+			}
+		}
+		if resolved.IsLazy() {
+			// Inspect the loaded cell, not the pruned-looking placeholder.
+			// Resolution has already accounted for its load above.
+			sl, err := s.Cells.BeginParseAlreadyLoadedRaw(resolved)
+			if err != nil {
+				return nil, err
+			}
+			resolved = sl.BaseCell()
+		}
+		libraryLoaded = true
+		if !resolved.IsSpecial() {
+			return resolved, nil
+		}
+		cl = resolved
+	}
 }
 
 func (s *State) ResolveLibraryCell(cl *cell.Cell) (*cell.Cell, error) {
@@ -116,14 +261,15 @@ func (s *State) ResolveLibraryCell(cl *cell.Cell) (*cell.Cell, error) {
 	current := cl
 	var loadedSlice *cell.Slice
 	if cl.IsLazy() {
-		var special bool
-		var err error
-		loadedSlice, special, err = s.Cells.beginParseLoadedCell(cl, true, true)
-		if err != nil {
+		// the special-cell load is raw here: no virtualization check happens,
+		// so a virtualized pruned branch is just a special non-library cell
+		// and falls through to the cell underflow below
+		loadedSlice = new(cell.Slice)
+		if err := s.Cells.beginParseWithGasTraceInto(cl, cl.Trace(), loadedSlice, true); err != nil {
 			return nil, err
 		}
 		current = loadedSlice.BaseCell()
-		if !special {
+		if !current.IsSpecial() {
 			return current, nil
 		}
 	} else if !cl.IsSpecial() {
@@ -150,7 +296,10 @@ func (s *State) ResolveLibraryCell(cl *cell.Cell) (*cell.Cell, error) {
 		}
 
 		lib, err := s.LoadLibraryByHash(hash)
-		if err != nil || lib == nil {
+		if err != nil {
+			return nil, err
+		}
+		if lib == nil {
 			return nil, vmerr.Error(vmerr.CodeCellUnderflow, "failed to load library cell")
 		}
 		return lib, nil

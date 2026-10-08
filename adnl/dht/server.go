@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"reflect"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,8 +69,9 @@ type Server struct {
 
 	key ed25519.PrivateKey
 
-	store ValueStore
-	done  chan struct{}
+	storeMx sync.Mutex
+	store   ValueStore
+	done    chan struct{}
 
 	mx        sync.RWMutex
 	ourValues map[string]*Value
@@ -185,6 +187,9 @@ func (s *Server) Close() error {
 	if s.done != nil {
 		<-s.done
 	}
+	s.storeMx.Lock()
+	defer s.storeMx.Unlock()
+
 	if s.store != nil {
 		_ = s.store.Close()
 	}
@@ -228,19 +233,19 @@ func (s *Server) StoreOverlayNodes(
 		return 0, nil, fmt.Errorf("0 nodes in list")
 	}
 
+	id := keys.PublicKeyOverlay{Key: overlayKey}
+	overlayID, err = tl.Hash(id)
+	if err != nil {
+		return 0, nil, err
+	}
+
 	for i := range nodes.List {
-		if err = nodes.List[i].CheckSignature(); err != nil {
+		if err = checkOverlayNode(&nodes.List[i], overlayID, s.networkID); err != nil {
 			return 0, nil, fmt.Errorf("untrusted overlay node in list: %w", err)
 		}
 	}
 
 	data, err := tl.Serialize(nodes, true)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	id := keys.PublicKeyOverlay{Key: overlayKey}
-	overlayID, err = tl.Hash(id)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -548,7 +553,7 @@ func (s *Server) handleQuery(peer adnl.Peer, msg *adnl.MessageQuery) (err error)
 	case RequestReversePing:
 		return errReverseConnectionsDisabled
 	default:
-		return fmt.Errorf("unsupported dht query type %s", reflect.TypeOf(payload))
+		return fmt.Errorf("unsupported dht query type %s", describePayloadType(payload))
 	}
 }
 
@@ -599,8 +604,33 @@ func (s *Server) handleMessage(peer adnl.Peer, msg *adnl.MessageCustom) error {
 	case RequestReversePingCont:
 		return nil
 	default:
-		return fmt.Errorf("unsupported dht message type %s", reflect.TypeOf(payload))
+		return fmt.Errorf("unsupported dht message type %s", describePayloadType(payload))
 	}
+}
+
+func describePayloadType(payload any) string {
+	switch payload.(type) {
+	case []tl.Serializable, []any:
+	default:
+		return fmt.Sprintf("%T", payload)
+	}
+
+	// ADNL decodes concatenated boxed objects as a slice. Log its shape without
+	// dumping node signatures or unbounded payload data from an untrusted peer.
+	list := reflect.ValueOf(payload)
+	var description strings.Builder
+	fmt.Fprintf(&description, "%T (len=%d, types=[", payload, list.Len())
+	for i := 0; i < min(list.Len(), 8); i++ {
+		if i != 0 {
+			description.WriteString(", ")
+		}
+		fmt.Fprintf(&description, "%T", list.Index(i).Interface())
+	}
+	if list.Len() > 8 {
+		description.WriteString(", ...")
+	}
+	description.WriteString("])")
+	return description.String()
 }
 
 func (s *Server) queryPrefix() ([]byte, error) {
@@ -726,6 +756,9 @@ func (s *Server) getNearestNodes(key []byte, k int) []*Node {
 }
 
 func (s *Server) getStoredValue(keyID []byte) (*Value, error) {
+	s.storeMx.Lock()
+	defer s.storeMx.Unlock()
+
 	value, err := s.store.Get(keyID)
 	if err != nil || value == nil {
 		return value, err
@@ -733,6 +766,29 @@ func (s *Server) getStoredValue(keyID []byte) (*Value, error) {
 	if int64(value.TTL) <= time.Now().Unix() {
 		_ = s.store.Delete(keyID)
 		return nil, nil
+	}
+	if _, ok := value.KeyDescription.UpdateRule.(UpdateRuleOverlayNodes); ok {
+		data, err := mergeOverlayNodesData(value.Data)
+		if err != nil {
+			return nil, err
+		}
+
+		changed := !bytes.Equal(data, value.Data)
+		if changed {
+			value = cloneValue(value)
+			value.Data = data
+		}
+		if !isValueAcceptable(value) {
+			if err = s.store.Delete(keyID); err != nil {
+				return nil, err
+			}
+			return nil, nil
+		}
+		if changed {
+			if err = s.store.Put(keyID, value); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return value, nil
 }
@@ -755,11 +811,29 @@ func (s *Server) storeIn(keyID []byte, value *Value) error {
 		return nil
 	}
 
+	s.storeMx.Lock()
+	defer s.storeMx.Unlock()
+
+	now = time.Now().Unix()
+	if int64(value.TTL) <= now {
+		return nil
+	}
 	current, err := s.store.Get(keyID)
 	if err != nil {
 		return err
 	}
-	if current == nil {
+	if current == nil || int64(current.TTL) <= now {
+		if _, ok := value.KeyDescription.UpdateRule.(UpdateRuleOverlayNodes); ok {
+			data, err := mergeOverlayNodesData(value.Data)
+			if err != nil {
+				return err
+			}
+			value = cloneValue(value)
+			value.Data = data
+			if !isValueAcceptable(value) {
+				return s.store.Delete(keyID)
+			}
+		}
 		return s.store.Put(keyID, value)
 	}
 
@@ -769,6 +843,9 @@ func (s *Server) storeIn(keyID []byte, value *Value) error {
 	}
 	if !changed {
 		return nil
+	}
+	if !isValueAcceptable(merged) {
+		return s.store.Delete(keyID)
 	}
 	return s.store.Put(keyID, merged)
 }
@@ -1192,9 +1269,13 @@ func (s *Server) republishStoredValue(now int64, ownedKey []byte) {
 		if value == nil {
 			continue
 		}
+		s.storeMx.Lock()
 		dist := s.distance(keyID, s.k+10)
 		if dist >= s.k+10 {
 			_ = s.store.Delete(keyID)
+		}
+		s.storeMx.Unlock()
+		if dist >= s.k+10 {
 			continue
 		}
 		if dist != 0 || !needRepublish(value) {
@@ -1230,7 +1311,7 @@ func (s *Server) nextStoredRepublishValue(now int64) ([]byte, *Value) {
 	keyID := s.republishStoreKeys[s.republishStoreIndex]
 	s.republishStoreIndex++
 
-	value, err := s.store.Get(keyID)
+	value, err := s.getStoredValue(keyID)
 	if err != nil || value == nil || int64(value.TTL) <= now+60 {
 		return keyID, nil
 	}
@@ -1238,6 +1319,9 @@ func (s *Server) nextStoredRepublishValue(now int64) ([]byte, *Value) {
 }
 
 func (s *Server) storedValueKeys() ([][]byte, error) {
+	s.storeMx.Lock()
+	defer s.storeMx.Unlock()
+
 	if lister, ok := s.store.(valueStoreKeyLister); ok {
 		keys, err := lister.Keys()
 		if err != nil {
@@ -1279,6 +1363,9 @@ func (s *Server) cleanup() {
 }
 
 func (s *Server) cleanupStore(now int64) {
+	s.storeMx.Lock()
+	defer s.storeMx.Unlock()
+
 	if cleaner, ok := s.store.(valueStoreExpiredCleaner); ok {
 		_ = cleaner.DeleteExpired(now)
 		return
@@ -1335,25 +1422,19 @@ func needRepublish(value *Value) bool {
 	}
 }
 
-func mergeOverlayNodesData(currentData, incomingData []byte) ([]byte, error) {
-	var currentNodes overlay.NodesList
-	if _, err := tl.ParseNoCopy(&currentNodes, currentData, true); err != nil {
-		return nil, err
-	}
-
-	var incomingNodes overlay.NodesList
-	if _, err := tl.ParseNoCopy(&incomingNodes, incomingData, true); err != nil {
-		return nil, err
-	}
-
-	type nodeWithID struct {
-		id   string
-		node overlay.Node
-	}
-
+func mergeOverlayNodesData(values ...[]byte) ([]byte, error) {
+	now := time.Now().Unix()
 	merged := map[string]overlay.Node{}
-	for _, list := range [][]overlay.Node{currentNodes.List, incomingNodes.List} {
-		for _, node := range list {
+	for _, data := range values {
+		var nodes overlay.NodesList
+		if _, err := tl.ParseNoCopy(&nodes, data, true); err != nil {
+			return nil, err
+		}
+
+		for _, node := range nodes.List {
+			if !overlayNodeVersionAcceptableAt(node.Version, now) {
+				continue
+			}
 			id, err := tl.Hash(node.ID)
 			if err != nil {
 				return nil, err
@@ -1365,20 +1446,15 @@ func mergeOverlayNodesData(currentData, incomingData []byte) ([]byte, error) {
 		}
 	}
 
-	nodes := make([]nodeWithID, 0, len(merged))
-	for id, node := range merged {
-		nodes = append(nodes, nodeWithID{id: id, node: node})
+	ids := make([]string, 0, len(merged))
+	for id := range merged {
+		ids = append(ids, id)
 	}
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].node.Version != nodes[j].node.Version {
-			return nodes[i].node.Version > nodes[j].node.Version
-		}
-		return nodes[i].id < nodes[j].id
-	})
+	sort.Strings(ids)
 
-	result := overlay.NodesList{List: make([]overlay.Node, 0, len(nodes))}
-	for _, node := range nodes {
-		result.List = append(result.List, node.node)
+	result := overlay.NodesList{List: make([]overlay.Node, 0, len(ids))}
+	for _, id := range ids {
+		result.List = append(result.List, merged[id])
 	}
 
 	data, err := tl.Serialize(result, true)
@@ -1386,7 +1462,9 @@ func mergeOverlayNodesData(currentData, incomingData []byte) ([]byte, error) {
 		return nil, err
 	}
 	for len(data) > _MaxValueSize && len(result.List) > 0 {
-		result.List = result.List[:len(result.List)-1]
+		// Give every peer a chance to remain, regardless of its signed timestamp.
+		idx := rand.IntN(len(result.List))
+		result.List = append(result.List[:idx], result.List[idx+1:]...)
 		data, err = tl.Serialize(result, true)
 		if err != nil {
 			return nil, err

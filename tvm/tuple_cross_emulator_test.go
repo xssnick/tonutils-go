@@ -365,7 +365,7 @@ func FuzzTVMCrossEmulatorTupleOpsLowGasStackEffectsGlobalVersion(f *testing.F) {
 	})
 }
 
-const tupleOpsLowGasStackEffectCaseCount = 6
+const tupleOpsLowGasStackEffectCaseCount = 11
 
 type tupleOpsLowGasStackEffectCase struct {
 	name     string
@@ -378,6 +378,12 @@ func tupleOpsLowGasStackEffectCases(t *testing.T) []tupleOpsLowGasStackEffectCas
 	t.Helper()
 
 	return []tupleOpsLowGasStackEffectCase{
+		{
+			name:     "tuple_out_of_gas_after_operand_move",
+			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.TUPLE(2).Serialize())),
+			stack:    []any{int64(2), int64(3)},
+			gasLimit: 44,
+		},
 		{
 			name:     "explode_out_of_gas",
 			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.EXPLODE(2).Serialize())),
@@ -413,6 +419,30 @@ func tupleOpsLowGasStackEffectCases(t *testing.T) []tupleOpsLowGasStackEffectCas
 			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.UNPACKFIRSTVAR().Serialize())),
 			stack:    []any{tuplepkg.NewTupleValue(big.NewInt(15), big.NewInt(16), big.NewInt(17)), int64(2)},
 			gasLimit: 25,
+		},
+		{
+			name:     "setindex_out_of_gas_after_tuple_write",
+			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.SETINDEX(0).Serialize())),
+			stack:    []any{tuplepkg.NewTupleValue(big.NewInt(18), big.NewInt(19)), int64(20)},
+			gasLimit: 44,
+		},
+		{
+			name:     "setindexq_out_of_gas_after_tuple_extend",
+			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.SETINDEXQ(3).Serialize())),
+			stack:    []any{nil, int64(21)},
+			gasLimit: 44,
+		},
+		{
+			name:     "tpush_out_of_gas_after_tuple_append",
+			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.TPUSH().Serialize())),
+			stack:    []any{tuplepkg.NewTupleValue(big.NewInt(22)), int64(23)},
+			gasLimit: 44,
+		},
+		{
+			name:     "tpop_out_of_gas_after_tuple_pop",
+			code:     prependRawMethodDrop(codeFromBuilders(t, tupleop.TPOP().Serialize())),
+			stack:    []any{tuplepkg.NewTupleValue(big.NewInt(24), big.NewInt(25))},
+			gasLimit: 44,
 		},
 	}
 }

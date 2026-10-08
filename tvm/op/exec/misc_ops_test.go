@@ -640,7 +640,7 @@ func TestIfBitJmpAndRefOps(t *testing.T) {
 	if decoded.SerializeText() != "IFBITJMP 2" {
 		t.Fatalf("unexpected decoded name: %q", decoded.SerializeText())
 	}
-	if err := decoded.DeserializeMatched(cell.BeginCell().MustStoreSlice(decoded.BitPrefix.Data, decoded.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+	if err := decoded.Deserialize(decoded.GetPrefixes()[0]); err == nil {
 		t.Fatal("expected short IFBITJMP suffix decode error")
 	}
 
@@ -1141,7 +1141,7 @@ func TestArgsVarAndDictJumpOps(t *testing.T) {
 	if err := state.Stack.PushInt(big.NewInt(0x99)); err != nil {
 		t.Fatalf("push dictiigetjmpz miss key: %v", err)
 	}
-	if err := state.Stack.PushCell(nil); err != nil {
+	if err := state.Stack.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push dictiigetjmpz nil root: %v", err)
 	}
 	if err := state.Stack.PushInt(big.NewInt(8)); err != nil {

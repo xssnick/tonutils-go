@@ -54,7 +54,7 @@ func loadBOCReferenceFixture(tb testing.TB) bocReferenceFixture {
 	return fixture
 }
 
-func TestToBOCWithOptions_Mode31_ReferenceFixture(t *testing.T) {
+func TestComputeFileHash_ReferenceFixture(t *testing.T) {
 	fixture := loadBOCReferenceFixture(t)
 
 	rawBOC, err := base64.StdEncoding.DecodeString(fixture.RawBOCBase64)
@@ -75,11 +75,13 @@ func TestToBOCWithOptions_Mode31_ReferenceFixture(t *testing.T) {
 		WithCRC32C:    true,
 		WithIndex:     true,
 		WithCacheBits: true,
-		WithTopHash:   true,
 		WithIntHashes: true,
 	})
 	if len(gotBOC) == 0 {
-		t.Fatal("expected non-empty canonical mode=31 boc")
+		t.Fatal("expected non-empty block boc")
+	}
+	if !bytes.Equal(gotBOC, rawBOC) {
+		t.Fatal("serialized block boc differs from the fixture")
 	}
 
 	parsed, err := FromBOC(gotBOC)
@@ -87,7 +89,7 @@ func TestToBOCWithOptions_Mode31_ReferenceFixture(t *testing.T) {
 		t.Fatalf("failed to parse canonical mode=31 boc: %v", err)
 	}
 	if !bytes.Equal(parsed.Hash(), root.Hash()) {
-		t.Fatalf("canonical mode=31 roundtrip hash mismatch, got %x want %x", parsed.Hash(), root.Hash())
+		t.Fatalf("block boc roundtrip hash mismatch, got %x want %x", parsed.Hash(), root.Hash())
 	}
 
 	wantSHA := sha256.Sum256(gotBOC)

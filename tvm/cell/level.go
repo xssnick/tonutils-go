@@ -18,10 +18,18 @@ func (m LevelMask) getHashesCount() int {
 	return m.getHashIndex() + 1
 }
 
+// A negative level means the top level here, as it does in Cell.Hash,
+// Cell.Depth and BOCCellMeta.HashAtLevel, so it is clamped to the maximum.
 func (m LevelMask) Apply(level int) LevelMask {
-	return LevelMask{m.Mask & ((1 << level) - 1)}
+	if level < 0 {
+		level = _DataCellMaxLevel
+	}
+	return LevelMask{m.Mask & ((1 << uint(level)) - 1)}
 }
 
 func (m LevelMask) IsSignificant(level int) bool {
-	return level == 0 || ((m.Mask>>(level-1))%2 != 0)
+	if level < 0 {
+		level = _DataCellMaxLevel
+	}
+	return level == 0 || ((m.Mask>>uint(level-1))%2 != 0)
 }

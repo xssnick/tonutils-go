@@ -33,7 +33,6 @@ func init() {
 		func() vm.OP { return SCHKREFSQ() },
 		func() vm.OP { return SCHKBITREFSQ() },
 		func() vm.OP { return PLDREFVAR() },
-		func() vm.OP { return PLDREFIDX(0) },
 		func() vm.OP { return SBITS() },
 		func() vm.OP { return SREFS() },
 		func() vm.OP { return SBITREFS() },
@@ -45,6 +44,7 @@ func init() {
 		func() vm.OP { return CLEVEL() },
 		func() vm.OP { return CLEVELMASK() },
 	)
+	vm.ArgList = append(vm.ArgList, pldrefidxOp)
 }
 
 func popRange(state *vm.State, max int64) (uint64, error) {
@@ -82,12 +82,23 @@ func LDREFRTOS() *helpers.SimpleOP {
 				return err
 			}
 
-			child, err := state.Cells.LoadRef(s0)
+			ref, refTrace, err := s0.PeekRefCellAtWithTrace(0)
 			if err != nil {
+				return err
+			}
+			if err = s0.SkipBitsAndRefs(0, 1); err != nil {
 				return err
 			}
 
 			if err = state.Stack.PushOwnedSlice(s0); err != nil {
+				return err
+			}
+			if err = state.Cells.PendingError(); err != nil {
+				return err
+			}
+
+			child := new(cell.Slice)
+			if err = state.Cells.BeginParseIntoWithTrace(ref, refTrace, child); err != nil {
 				return err
 			}
 			return state.Stack.PushOwnedSlice(child)
@@ -465,6 +476,9 @@ func xloadOp(quiet bool) *helpers.SimpleOP {
 
 			resolved, err := state.ResolveLibraryCell(cl)
 			if err != nil {
+				if _, ok := vmerr.AsVirtualization(err); ok {
+					return err
+				}
 				if quiet {
 					return state.Stack.PushBool(false)
 				}
@@ -649,38 +663,26 @@ func PLDREFVAR() *helpers.SimpleOP {
 	}
 }
 
-func PLDREFIDX(idx int) *helpers.AdvancedOP {
-	op := &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("PLDREFIDX %d", idx)
-		},
-		BitPrefix:     helpers.UIntPrefix(0xD74C>>2, 14),
-		FixedSizeBits: 2,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(idx), 2)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			v, err := code.LoadUInt(2)
-			if err != nil {
-				return err
-			}
-			idx = int(v)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			cs, err := state.Stack.PopSlice()
-			if err != nil {
-				return err
-			}
-			ref, err := cs.PeekRefCellAt(idx)
-			if err != nil {
-				return vmerr.Error(vmerr.CodeCellUnderflow)
-			}
-			return state.Stack.PushCell(ref)
-		},
-	}
-	return op
-}
+var pldrefidxOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0xD74C>>2, 14)),
+	ArgBits:  2,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("PLDREFIDX %d", int(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		cs, err := state.Stack.PopSlice()
+		if err != nil {
+			return err
+		}
+		ref, err := cs.PeekRefCellAt(int(args))
+		if err != nil {
+			return vmerr.Error(vmerr.CodeCellUnderflow)
+		}
+		return state.Stack.PushCell(ref)
+	},
+})
+
+func PLDREFIDX(idx int) vm.OP { return vm.Bind(pldrefidxOp, uint64(idx)) }
 
 func SBITS() *helpers.SimpleOP {
 	return &helpers.SimpleOP{

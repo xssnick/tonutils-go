@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -128,4 +129,51 @@ func TestBucketPromoteReadyDemotesUnreadyActive(t *testing.T) {
 	if bucketHasNode(active, unreadyActive.adnlId) {
 		t.Fatal("unready active peer stayed in active bucket")
 	}
+}
+
+func TestBucketAddNodeReplacesFailedActive(t *testing.T) {
+	bucket := newBucket(1)
+	active := newBucketTestNode(1)
+	backup := newBucketTestNode(2)
+	bucket.addNode(active, true)
+	bucket.addNode(backup, true)
+	for range _MaxFailCount + 1 {
+		active.updateStatus(false)
+		backup.updateStatus(false)
+	}
+
+	incoming := newBucketTestNode(3)
+	bucket.addNode(incoming, true)
+	if nodes := bucket.getActiveNodes(); len(nodes) != 1 || nodes[0] != incoming {
+		t.Fatal("failed active nodes blocked a live replacement without background maintenance")
+	}
+	if len(bucketBackupNodes(bucket)) > bucket.k {
+		t.Fatal("backup capacity exceeded")
+	}
+}
+
+func TestBucketBackupReplacesFailedPeer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		bucket := newBucket(1)
+		active := newBucketTestNode(1)
+		backup := newBucketTestNode(2)
+		bucket.addNode(active, true)
+		bucket.addNode(backup, true)
+		for range _MaxFailCount + 1 {
+			backup.updateStatus(false)
+		}
+
+		incoming := newBucketTestNode(3)
+		bucket.addNode(incoming, true)
+		if nodes := bucketBackupNodes(bucket); len(nodes) != 1 || nodes[0] != backup {
+			t.Fatal("recently failed backup was evicted before the replacement delay")
+		}
+
+		time.Sleep(backupReplaceAfter + time.Second)
+		backup.updateStatus(false)
+		bucket.addNode(incoming, true)
+		if nodes := bucketBackupNodes(bucket); len(nodes) != 1 || nodes[0] != incoming {
+			t.Fatal("dead backup blocked a live replacement after the replacement delay")
+		}
+	})
 }

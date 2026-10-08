@@ -16,17 +16,28 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 type MockGateway struct {
+	addresses address.List
+	pub       ed25519.PublicKey
+	id        []byte
+
+	// mx guards the fields mutated after the gateway is handed to a client or
+	// server, since their background loops may query peers concurrently.
+	mx          sync.RWMutex
 	reg         func(addr string, key ed25519.PublicKey) (adnl.Peer, error)
-	addresses   address.List
 	connHandler func(client adnl.Peer) error
-	pub         ed25519.PublicKey
-	id          []byte
+}
+
+func (m *MockGateway) setReg(f func(addr string, key ed25519.PublicKey) (adnl.Peer, error)) {
+	m.mx.Lock()
+	m.reg = f
+	m.mx.Unlock()
 }
 
 func (m *MockGateway) GetID() []byte {
@@ -49,7 +60,9 @@ func (m *MockGateway) Close() error {
 }
 
 func (m *MockGateway) SetConnectionHandler(f func(client adnl.Peer) error) {
+	m.mx.Lock()
 	m.connHandler = f
+	m.mx.Unlock()
 }
 
 func (m *MockGateway) StartServer(listenAddr string) error {
@@ -57,10 +70,14 @@ func (m *MockGateway) StartServer(listenAddr string) error {
 }
 
 func (m *MockGateway) RegisterClient(addr string, key ed25519.PublicKey) (adnl.Peer, error) {
-	if m.reg == nil {
+	m.mx.RLock()
+	reg := m.reg
+	m.mx.RUnlock()
+
+	if reg == nil {
 		return nil, fmt.Errorf("mock register client is not configured")
 	}
-	return m.reg(addr, key)
+	return reg(addr, key)
 }
 
 func TestNewClientFromConfigRejectsTooLargeKA(t *testing.T) {
@@ -266,47 +283,37 @@ func newCorrectNodeWithKey(
 	return testNode, nil
 }
 
+const testValueADNLID = "1b75dc8d548279be2fdd60132c0ff3c6dc3708fd5bae44b63d4fb6e8eb230f2f"
+
 func correctValue(tAdnlAddr []byte) (*ValueFoundResult, error) {
-	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
-	if err != nil {
-		return nil, err
-	}
-	pubIdRes := keys.PublicKeyED25519{pubId}
-	sign, err := base64.StdEncoding.DecodeString("Zwj4eW/tMbgzF7kQtI8AF11E0q76h5/3+hkylzHuJzKDD2sDd7sw/FXIiVptjrrOIPze8kbbDEkq4K5O78KeDQ==")
-	if err != nil {
-		return nil, err
-	}
+	privateKey := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	data, err := base64.StdEncoding.DecodeString("WOYnIgEAAADnpg1nkp5cpAUNAAD6Zphj+maYYwAAAAAAAAAA")
 	if err != nil {
 		return nil, err
 	}
-	sign2, err := base64.StdEncoding.DecodeString("+1cttR4nsAC0UsZwZTfDwvraxK9NxOjU0pXATkftiEyDgvbyLzPt24lOHl9B756NWBlv8NzqswhNiq7V+SV6Aw==")
+
+	value := Value{
+		KeyDescription: KeyDescription{
+			Key:        Key{ID: tAdnlAddr, Name: []byte("address")},
+			ID:         keys.PublicKeyED25519{Key: privateKey.Public().(ed25519.PublicKey)},
+			UpdateRule: UpdateRuleSignature{},
+		},
+		Data: data,
+		TTL:  int32(time.Now().Add(time.Hour).Unix()),
+	}
+	value.KeyDescription.Signature, err = signTL(value.KeyDescription, privateKey)
 	if err != nil {
 		return nil, err
 	}
-
-	tValue := &ValueFoundResult{
-		Value: Value{
-			KeyDescription: KeyDescription{
-				Key: Key{
-					ID:    tAdnlAddr,
-					Name:  []byte("address"),
-					Index: 0,
-				},
-				ID:         pubIdRes,
-				UpdateRule: UpdateRuleSignature{},
-				Signature:  sign,
-			},
-			Data:      data,
-			TTL:       1671121877,
-			Signature: sign2,
-		},
+	value.Signature, err = signTL(value, privateKey)
+	if err != nil {
+		return nil, err
 	}
-	return tValue, nil
+	return &ValueFoundResult{Value: value}, nil
 }
 
 func TestClient_FindValue(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal("failed to prepare test site address, err: ", err.Error())
@@ -321,14 +328,14 @@ func TestClient_FindValue(t *testing.T) {
 		name, addr string
 		want       error
 	}{
-		{"existing address", "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174", nil},
+		{"existing address", testValueADNLID, nil},
 		{"missing address", "1537ee02d6d0a65185630084427a26eafdc11ad24566d835291a43b780701f0e", ErrDHTValueIsNotFound},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			gateway := &MockGateway{}
-			gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+			gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 				return &MockADNL{
 					query: func(ctx context.Context, req, result tl.Serializable) error {
 						switch request := req.(type) {
@@ -359,7 +366,7 @@ func TestClient_FindValue(t *testing.T) {
 						return nil
 					},
 				}, nil
-			}
+			})
 
 			dhtCli, err := NewClientFromConfig(gateway, cnf)
 			if err != nil {
@@ -392,7 +399,7 @@ func TestClient_FindValue(t *testing.T) {
 }
 
 func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +417,7 @@ func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
 
 	var findValueCalls int
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				request, ok := req.(tl.Raw)
@@ -429,7 +436,7 @@ func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	dhtCli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -453,7 +460,7 @@ func TestClient_FindValueRetriesTimedOutNode(t *testing.T) {
 }
 
 func TestClient_FindValueRetriesValueNotFound(t *testing.T) {
-	existingValue := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174"
+	existingValue := testValueADNLID
 	siteAddr, err := hex.DecodeString(existingValue)
 	if err != nil {
 		t.Fatal(err)
@@ -471,7 +478,7 @@ func TestClient_FindValueRetriesValueNotFound(t *testing.T) {
 
 	var findValueCalls int
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				request, ok := req.(tl.Raw)
@@ -491,7 +498,7 @@ func TestClient_FindValueRetriesValueNotFound(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	dhtCli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -528,7 +535,7 @@ func TestClient_StoreRetriesTimedOutFindNode(t *testing.T) {
 	var findNodeCalls int
 	var storeCalls int
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				request, ok := req.(tl.Raw)
@@ -554,7 +561,7 @@ func TestClient_StoreRetriesTimedOutFindNode(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	dhtCli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -587,7 +594,7 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 
 	findNodeCalls := map[string]int{}
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findNode FindNode
@@ -599,7 +606,7 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -629,13 +636,71 @@ func TestClient_collectNearestNodesStopsAfterKClosestRespond(t *testing.T) {
 	}
 }
 
+func TestClient_collectNearestNodesFallsBackPastFailedShortlist(t *testing.T) {
+	keyID := make([]byte, 32)
+	nodeID := func(v byte) []byte {
+		id := make([]byte, 32)
+		id[31] = v
+		return id
+	}
+
+	var findNodeCalls [6]int32
+	gateway := &MockGateway{}
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findNode FindNode
+				if _, err := tl.Parse(&findNode, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				idx := int(addr[0] - '0')
+				atomic.AddInt32(&findNodeCalls[idx], 1)
+				if addr != "5" {
+					return fmt.Errorf("node is unavailable")
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(NodesList{}))
+				return nil
+			},
+		}, nil
+	})
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       2,
+		a:       2,
+	}
+	for i := byte(1); i <= 5; i++ {
+		buckets[0].addNode(&dhtNode{
+			adnlId: nodeID(i),
+			client: dhtCli,
+			addr:   fmt.Sprintf("%d", i),
+		}, true)
+	}
+
+	nodes := dhtCli.collectNearestNodes(context.Background(), keyID)
+	if len(nodes) != 1 || nodes[0].id() != hex.EncodeToString(nodeID(5)) {
+		t.Fatalf("expected lookup to fall back to the fifth node, got %d nodes", len(nodes))
+	}
+	if atomic.LoadInt32(&findNodeCalls[5]) != 1 {
+		t.Fatalf("expected fallback node to be queried once, got calls=%v", findNodeCalls)
+	}
+}
+
 func TestClient_collectNearestNodesPromotesSuccessfulBackup(t *testing.T) {
 	keyID := make([]byte, 32)
 	nodeID := make([]byte, 32)
 	nodeID[31] = 1
 
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findNode FindNode
@@ -647,7 +712,7 @@ func TestClient_collectNearestNodesPromotesSuccessfulBackup(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -693,7 +758,7 @@ func TestClient_collectNearestNodesRetriesAfterOtherPending(t *testing.T) {
 	calls := make(chan string, 8)
 	var firstNodeCalls int32
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findNode FindNode
@@ -709,7 +774,7 @@ func TestClient_collectNearestNodesRetriesAfterOtherPending(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -759,7 +824,7 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 
 	started := make(chan string, 8)
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findNode FindNode
@@ -776,7 +841,7 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -824,6 +889,85 @@ func TestClient_collectNearestNodesHedgesSlowLookup(t *testing.T) {
 	}
 }
 
+func TestClient_FindValueHedgesSlowLookup(t *testing.T) {
+	key := &Key{ID: make([]byte, 32), Name: []byte("address"), Index: 0}
+	target, err := tl.Hash(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID := func(v byte) []byte {
+		id := append([]byte(nil), target...)
+		id[31] ^= v
+		return id
+	}
+
+	started := make(chan string, 8)
+	gateway := &MockGateway{}
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		return &MockADNL{
+			query: func(ctx context.Context, req, result tl.Serializable) error {
+				var findValue FindValue
+				if _, err := tl.Parse(&findValue, req.(tl.Raw), true); err != nil {
+					return err
+				}
+				started <- addr
+				if addr == "1" {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+
+				reflect.ValueOf(result).Elem().Set(reflect.ValueOf(ValueNotFoundResult{Nodes: NodesList{}}))
+				return nil
+			},
+		}, nil
+	})
+
+	buckets := [256]*Bucket{}
+	for i := range buckets {
+		buckets[i] = newBucket(10)
+	}
+
+	dhtCli := &Client{
+		buckets: buckets,
+		gateway: gateway,
+		selfID:  make([]byte, 32),
+		k:       3,
+		a:       1,
+	}
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(1), client: dhtCli, addr: "1"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(2), client: dhtCli, addr: "2"}, true)
+	buckets[0].addNode(&dhtNode{adnlId: nodeID(3), client: dhtCli, addr: "3"}, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_, _, _ = dhtCli.FindValue(ctx, key)
+		close(done)
+	}()
+
+	if addr := <-started; addr != "1" {
+		t.Fatalf("expected first FindValue to start with closest node, got %s", addr)
+	}
+
+	select {
+	case addr := <-started:
+		if addr != "2" {
+			t.Fatalf("expected hedge FindValue to start second closest node, got %s", addr)
+		}
+	case <-time.After(lookupHedgeDelay + time.Second):
+		t.Fatal("hedge FindValue was not launched")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("FindValue did not stop after context cancel")
+	}
+}
+
 func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 	keyID := make([]byte, 32)
 	nodeID := func(v byte) []byte {
@@ -834,7 +978,7 @@ func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 
 	thirdStarted := make(chan struct{})
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				var findNode FindNode
@@ -853,7 +997,7 @@ func TestClient_collectNearestNodesReturnsBeforeInflightTail(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	buckets := [256]*Bucket{}
 	for i := range buckets {
@@ -900,7 +1044,7 @@ func TestClient_storeValueToNodesPreparesPayloadOnce(t *testing.T) {
 	var prefixCalls int32
 	var storeCalls int32
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				request, ok := req.(tl.Raw)
@@ -921,7 +1065,7 @@ func TestClient_storeValueToNodesPreparesPayloadOnce(t *testing.T) {
 				return nil
 			},
 		}, nil
-	}
+	})
 
 	dhtCli := &Client{
 		gateway: gateway,
@@ -1100,7 +1244,7 @@ func TestClient_addNodeRejectsMalformedSerializableFields(t *testing.T) {
 }
 
 func TestClient_FindAddressesUnit(t *testing.T) {
-	testAddr := "516618cf6cbe9004f6883e742c9a2e3ca53ed02e3e36f4cef62a98ee1e449174" // ADNL address of foundation.ton
+	testAddr := testValueADNLID
 	adnlAddr, err := hex.DecodeString(testAddr)
 	if err != nil {
 		t.Fatal("failed creating test value, err:", err)
@@ -1121,15 +1265,11 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 		t.Fatal("failed to parse test address list: ", err)
 	}
 
-	pubId, err := base64.StdEncoding.DecodeString("kn0+cePOZRw/FyE005Fj9w5MeSFp4589Ugv62TiK1Mo=")
-	if err != nil {
-		t.Fatal("failed creating pId of test value, err:", err)
-	}
-	tPubIdRes := keys.PublicKeyED25519{Key: pubId}
+	tPubIdRes := value.Value.KeyDescription.ID.(keys.PublicKeyED25519)
 
 	t.Run("find addresses positive case", func(t *testing.T) {
 		gateway := &MockGateway{}
-		gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+		gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 			return MockADNL{
 				query: func(ctx context.Context, req, result tl.Serializable) error {
 					switch request := req.(type) {
@@ -1162,7 +1302,7 @@ func TestClient_FindAddressesUnit(t *testing.T) {
 					return nil
 				},
 			}, nil
-		}
+		})
 
 		cli, err := NewClientFromConfig(gateway, cnf)
 		if err != nil {
@@ -1210,7 +1350,7 @@ func TestClient_StoreAddressReturnsADNLID(t *testing.T) {
 
 	storedKeyID := make(chan []byte, 1)
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				raw, ok := req.(tl.Raw)
@@ -1237,7 +1377,7 @@ func TestClient_StoreAddressReturnsADNLID(t *testing.T) {
 				return fmt.Errorf("unsupported dht query")
 			},
 		}, nil
-	}
+	})
 
 	cli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -1288,7 +1428,7 @@ func TestClient_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
 
 	storedKeyID := make(chan []byte, 1)
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return &MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				raw, ok := req.(tl.Raw)
@@ -1315,7 +1455,7 @@ func TestClient_StoreOverlayNodesReturnsOverlayID(t *testing.T) {
 				return fmt.Errorf("unsupported dht query")
 			},
 		}, nil
-	}
+	})
 
 	cli, err := NewClient(gateway, []*Node{node})
 	if err != nil {
@@ -1414,7 +1554,7 @@ func TestClient_FindAddressesIntegration(t *testing.T) {
 
 func TestClient_Close(t *testing.T) {
 	gateway := &MockGateway{}
-	gateway.reg = func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
+	gateway.setReg(func(addr string, peerKey ed25519.PublicKey) (adnl.Peer, error) {
 		return MockADNL{
 			query: func(ctx context.Context, req, result tl.Serializable) error {
 				switch request := req.(type) {
@@ -1428,7 +1568,7 @@ func TestClient_Close(t *testing.T) {
 			close: func() {
 			},
 		}, nil
-	}
+	})
 
 	cli, err := NewClientFromConfig(gateway, cnf)
 	if err != nil {

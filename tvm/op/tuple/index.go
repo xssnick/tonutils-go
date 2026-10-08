@@ -3,46 +3,33 @@ package tuple
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return INDEX(0) })
+	vm.ArgList = append(vm.ArgList, indexOp)
 }
 
-// constant prefix, computed once instead of on every decode
-var indexPrefix = helpers.UIntPrefix(0x6f1, 12)
+var indexOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x6f1, 12)),
+	ArgBits:  4,
+	Name: func(args uint64) string {
+		return fmt.Sprintf("%d INDEX", uint8(args))
+	},
+	Action: func(state *vm.State, args uint64) error {
+		tup, err := state.Stack.PopTupleRange(255)
+		if err != nil {
+			return err
+		}
+		v, err := tup.Index(int(uint8(args)))
+		if err != nil {
+			return err
+		}
+		return state.Stack.PushAny(v)
+	},
+})
 
-func INDEX(n uint8) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		BitPrefix:     indexPrefix,
-		FixedSizeBits: 4,
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d INDEX", n)
-		},
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(n), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			n = uint8(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			tup, err := state.Stack.PopTupleRange(255)
-			if err != nil {
-				return err
-			}
-			v, err := tup.Index(int(n))
-			if err != nil {
-				return err
-			}
-			return state.Stack.PushAny(v)
-		},
-	}
+func INDEX(n uint8) vm.OP {
+	return vm.Bind(indexOp, uint64(n))
 }

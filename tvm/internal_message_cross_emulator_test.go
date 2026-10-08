@@ -283,7 +283,7 @@ func assertInternalMessageVersionParity(t *testing.T, version int, rawProgram ui
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   MustPrepareBlockchainConfig(configRoot),
+		Config:   mustPrepareLenientTestConfig(configRoot),
 		Gas: vmcore.NewGas(vmcore.GasConfig{
 			Max:   DefaultInternalMessageGasMax,
 			Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,

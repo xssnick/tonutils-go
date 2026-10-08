@@ -413,10 +413,10 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	parent := NewStack()
 	refCell := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
 
-	if err := pushMaybeCell(parent, nil); err != nil {
+	if err := parent.PushMaybeCell(nil); err != nil {
 		t.Fatalf("push maybe nil cell: %v", err)
 	}
-	if err := pushMaybeCell(parent, refCell); err != nil {
+	if err := parent.PushMaybeCell(refCell); err != nil {
 		t.Fatalf("push maybe cell: %v", err)
 	}
 	gotCell, err := parent.PopCell()
@@ -620,6 +620,41 @@ func TestChildVMHelpersAndExecution(t *testing.T) {
 	}
 }
 
+func TestRunChildVMFailedIsolatedGasFlushKeepsCounters(t *testing.T) {
+	parent := NewExecutionState(MaxSupportedGlobalVersion, GasWithLimit(SignatureCheckGasPrice-1), nil, tuple.Tuple{}, NewStack())
+	if err := parent.RegisterSignatureCheckCall(); err != nil {
+		t.Fatalf("register free signature check: %v", err)
+	}
+	parent.RegisterGetExtraBalanceCall()
+
+	childCalled := false
+	parent.SetChildRunner(func(child *State) (int64, error) {
+		childCalled = true
+		return 0, nil
+	})
+	err := parent.RunChildVM(ChildVMConfig{
+		Code:       cell.BeginCell().EndCell().MustBeginParse(),
+		Gas:        GasWithLimit(100),
+		IsolateGas: true,
+	})
+	if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeOutOfGas {
+		t.Fatalf("isolated gas flush error = %v, want out of gas", err)
+	}
+	if childCalled {
+		t.Fatal("child ran after failed gas flush")
+	}
+
+	if parent.Gas.Used() != SignatureCheckGasPrice {
+		t.Fatalf("gas used = %d, want %d", parent.Gas.Used(), SignatureCheckGasPrice)
+	}
+	if parent.Gas.FreeConsumed != SignatureCheckGasPrice {
+		t.Fatalf("deferred free gas = %d, want %d", parent.Gas.FreeConsumed, SignatureCheckGasPrice)
+	}
+	if parent.SignatureCheckCounter != 1 || parent.GetExtraBalanceCounter != 1 {
+		t.Fatalf("counters after failed flush = %d/%d, want 1/1", parent.SignatureCheckCounter, parent.GetExtraBalanceCounter)
+	}
+}
+
 func TestRunChildVMVersionedGasClamp(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -723,24 +758,39 @@ func FuzzChildResultRegisterValueVersionBoundary(f *testing.F) {
 		if hasCommittedValue {
 			committedValue = cell.BeginCell().MustStoreUInt(0xC0, 8).EndCell()
 		}
-		var currentValue *cell.Cell
-		if hasCurrentValue {
-			currentValue = cell.BeginCell().MustStoreUInt(0xD0, 8).EndCell()
-		}
 
 		child := NewExecutionState(version, NewGas(), nil, tuple.Tuple{}, NewStack())
 		child.Committed.Committed = committed
 
-		got := childResultRegisterValue(child, committedValue, currentValue)
-		var want *cell.Cell
-		if committed {
-			want = committedValue
-		} else if version < 11 {
-			want = currentValue
+		parent := NewStack()
+		if err := pushChildResultRegister(parent, child, committedValue, nil); err != nil {
+			t.Fatalf("push child result register: %v", err)
+		}
+		got, err := parent.PopAny()
+		if err != nil {
+			t.Fatalf("pop pushed result: %v", err)
 		}
 
-		if got != want {
-			t.Fatalf("v%d committed=%v hasCommitted=%v hasCurrent=%v result = %p, want %p", version, committed, hasCommittedValue, hasCurrentValue, got, want)
+		// a committed child returns its committed
+		// register; a non-committed one returns null at v11+ and the
+		// degenerate null-reference cell entry below v11.
+		switch {
+		case committed && hasCommittedValue:
+			if got != committedValue {
+				t.Fatalf("v%d committed result = %v, want committed value", version, got)
+			}
+		case committed:
+			if got != nil {
+				t.Fatalf("v%d committed nil result = %v, want null", version, got)
+			}
+		case version >= 11:
+			if got != nil {
+				t.Fatalf("v%d non-committed result = %v, want null", version, got)
+			}
+		default:
+			if value, ok := got.(*cell.Cell); !ok || value != nil {
+				t.Fatalf("v%d non-committed result = %T %v, want typed null cell", version, got, got)
+			}
 		}
 	})
 }

@@ -47,8 +47,16 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("unexpected incoming grams: %d", got)
 		}
 
-		if got := messageUnpackedConfig(MessageEmulationConfig{Config: testPreparedBlockchainConfig(t)}, 0); got != nil {
-			t.Fatalf("empty prepared config should not synthesize unpacked config, got %T", got)
+		// get_unpacked_config_tuple always yields a 7-element tuple, even
+		// when every slot is null.
+		if got := messageUnpackedConfig(MessageEmulationConfig{Config: testPreparedBlockchainConfig(t)}, 0); func() int {
+			tup, ok := got.(tuple.Tuple)
+			if !ok {
+				return -1
+			}
+			return tup.Len()
+		}() != 7 {
+			t.Fatalf("empty prepared config should synthesize a 7-null unpacked config, got %T", got)
 		}
 
 		cfgTuple := tuple.NewTupleValue("cfg")
@@ -75,7 +83,7 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		}
 
 		fromRoot := messageUnpackedConfig(MessageEmulationConfig{
-			Config: MustPrepareBlockchainConfig(messageUnpackedConfigRoot(t)),
+			Config: mustPrepareLenientTestConfig(messageUnpackedConfigRoot(t)),
 		}, 150).(tuple.Tuple)
 		if fromRoot.Len() != 7 {
 			t.Fatalf("unexpected root unpacked config len: %d", fromRoot.Len())
@@ -119,9 +127,9 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 			t.Fatalf("unexpected seed value: got %s want %s", seed.String(), want.String())
 		}
 
-		// build-time c7 binding replaced the old normalization pass: it
-		// snapshots mutable cursor values and collapses typed nil pointers,
-		// except the observable legacy null-slice tag
+		// Build-time c7 binding snapshots mutable cursor values. Typed nil TVM
+		// references keep their observable stack tags; only nil integers use
+		// the host-boundary absence convention.
 		st := vmcore.NewExecutionState(vmcore.MaxSupportedGlobalVersion, vmcore.GasWithLimit(1_000_000), nil, tuple.Tuple{}, vmcore.NewStack())
 		trace := st.Cells.Trace()
 
@@ -140,8 +148,10 @@ func TestMessageEmulationHelpersDefaultsAndCopies(t *testing.T) {
 		if !ok || boundNullSlice != nil {
 			t.Fatalf("nil slice pointer should retain its slice tag, got %T %v", gotNullSlice, gotNullSlice)
 		}
-		if got := vmcore.BindValueTrace(nilBuilder, trace); got != nil {
-			t.Fatalf("nil builder pointer should bind to nil, got %T", got)
+		gotNullBuilder := vmcore.BindValueTrace(nilBuilder, trace)
+		boundNullBuilder, ok := gotNullBuilder.(*cell.Builder)
+		if !ok || boundNullBuilder != nil {
+			t.Fatalf("nil builder pointer should retain its builder tag, got %T %v", gotNullBuilder, gotNullBuilder)
 		}
 
 		orig := big.NewInt(55)
@@ -366,6 +376,70 @@ func TestBuildMessageEmulationC7CopiesGlobals(t *testing.T) {
 	}
 	if got := globalRaw.(*big.Int).Int64(); got != 55 {
 		t.Fatalf("unexpected global value: %d", got)
+	}
+}
+
+func TestBuildMessageEmulationC7FullWidthLogicalTimes(t *testing.T) {
+	const highBlockLT = uint64(1<<63 + 123)
+	const highLogicalTime = uint64(1<<63 + 456)
+
+	tests := []struct {
+		name            string
+		cfg             MessageEmulationConfig
+		wantBlockLT     *big.Int
+		wantLogicalTime *big.Int
+	}{
+		{
+			name: "legacy_signed",
+			cfg: MessageEmulationConfig{
+				BlockLT:     -7,
+				LogicalTime: -9,
+			},
+			wantBlockLT:     big.NewInt(-7),
+			wantLogicalTime: big.NewInt(-9),
+		},
+		{
+			name: "full_width_override",
+			cfg: MessageEmulationConfig{
+				BlockLT:           -7,
+				BlockLTUint64:     highBlockLT,
+				LogicalTime:       -9,
+				LogicalTimeUint64: highLogicalTime,
+			},
+			wantBlockLT:     new(big.Int).SetUint64(highBlockLT),
+			wantLogicalTime: new(big.Int).SetUint64(highLogicalTime),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.cfg.Config = testPreparedBlockchainConfig(t)
+			c7, err := buildMessageEmulationC7(tonopsTestAddr, cell.BeginCell().EndCell(), tt.cfg, big.NewInt(0), vmcore.MaxSupportedGlobalVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			paramsRaw, err := c7.RawIndex(0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			params := paramsRaw.(tuple.Tuple)
+			blockLTRaw, err := params.RawIndex(4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			logicalTimeRaw, err := params.RawIndex(5)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if got := blockLTRaw.(*big.Int); got.Cmp(tt.wantBlockLT) != 0 {
+				t.Fatalf("block LT = %v, want %v", got, tt.wantBlockLT)
+			}
+			if got := logicalTimeRaw.(*big.Int); got.Cmp(tt.wantLogicalTime) != 0 {
+				t.Fatalf("logical time = %v, want %v", got, tt.wantLogicalTime)
+			}
+		})
 	}
 }
 
@@ -711,7 +785,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if _, err := messageExecutionGlobalVersion(MessageEmulationConfig{}); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config error = %v, want %v", err, errConfigRootRequired)
 	}
-	if _, err := PrepareBlockchainConfig(nil); !errors.Is(err, errConfigRootRequired) {
+	if _, err := prepareBlockchainConfigLenient(nil); !errors.Is(err, errConfigRootRequired) {
 		t.Fatalf("missing config root error = %v, want %v", err, errConfigRootRequired)
 	}
 
@@ -720,7 +794,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("build global version cell: %v", err)
 	}
 	got, err := messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+		Config: mustPrepareLenientTestConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 			tlb.ConfigParamGlobalVersion: versionCell,
 		})),
 	})
@@ -732,7 +806,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	}
 
 	got, err = messageExecutionGlobalVersion(MessageEmulationConfig{
-		Config: MustPrepareBlockchainConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
+		Config: mustPrepareLenientTestConfig(messageExecutionGlobalVersionConfigRoot(t, 4)),
 	})
 	if err != nil {
 		t.Fatalf("config global version failed: %v", err)
@@ -745,7 +819,7 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 	if err != nil {
 		t.Fatalf("build unsupported global version cell: %v", err)
 	}
-	futureConfig, err := PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
+	futureConfig, err := prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: unsupportedVersionCell,
 	}))
 	if err != nil {
@@ -759,14 +833,14 @@ func TestMessageExecutionGlobalVersionRequiresConfigRootAndValidates(t *testing.
 		t.Fatalf("future config global version = %d, want %d", got, vmcore.MaxSupportedGlobalVersion)
 	}
 
-	if _, err = PrepareBlockchainConfig(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
+	if _, err = prepareBlockchainConfigLenient(buildTransactionConfigRoot(t, map[uint32]*cell.Cell{})); err == nil {
 		t.Fatal("absent config global version should fail")
 	}
 
 	malformedRoot := buildTransactionConfigRoot(t, map[uint32]*cell.Cell{
 		tlb.ConfigParamGlobalVersion: cell.BeginCell().MustStoreUInt(0, 8).EndCell(),
 	})
-	if _, err = PrepareBlockchainConfig(malformedRoot); err == nil {
+	if _, err = prepareBlockchainConfigLenient(malformedRoot); err == nil {
 		t.Fatal("malformed config global version should fail")
 	}
 }
@@ -807,7 +881,7 @@ func FuzzMessageExecutionGlobalVersionSelection(f *testing.F) {
 			wantErr = true
 		}
 
-		prepared, err := PrepareBlockchainConfig(root)
+		prepared, err := prepareBlockchainConfigLenient(root)
 		if wantErr {
 			if err == nil {
 				t.Fatalf("case=%d config=%d prepared config version %d, want error", caseIdx, rawConfig, prepared.GlobalVersion())

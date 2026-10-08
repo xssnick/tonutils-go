@@ -11,10 +11,8 @@ import (
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return RUNVM(0) },
-		func() vm.OP { return RUNVMX() },
-	)
+	vm.List = append(vm.List, func() vm.OP { return RUNVMX() })
+	vm.ArgList = append(vm.ArgList, runVMOp)
 }
 
 func clampRunvmGasLimit(limit, remaining int64) int64 {
@@ -134,29 +132,20 @@ func runChildVMWithMode(state *vm.State, mode int) error {
 	})
 }
 
-func RUNVM(mode int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		NameSerializer: func() string {
-			return fmt.Sprintf("RUNVM %d", mode)
-		},
-		BitPrefix:     helpers.SlicePrefix(12, []byte{0xDB, 0x40}),
-		FixedSizeBits: 12,
-		MinVersion:    4,
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(mode), 12)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(12)
-			if err != nil {
-				return err
-			}
-			mode = int(val)
-			return nil
-		},
-		Action: func(state *vm.State) error {
-			return runChildVMWithMode(state, mode)
-		},
-	}
+var runVMOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed:   helpers.SinglePrefixed(helpers.SlicePrefix(12, []byte{0xDB, 0x40})),
+	ArgBits:    12,
+	MinVersion: 4,
+	Action: func(state *vm.State, args uint64) error {
+		return runChildVMWithMode(state, int(int32(args)))
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("RUNVM %d", int32(args))
+	},
+})
+
+func RUNVM(mode int) vm.OP {
+	return vm.Bind(runVMOp, uint64(uint32(mode)))
 }
 
 func RUNVMX() *helpers.SimpleOP {

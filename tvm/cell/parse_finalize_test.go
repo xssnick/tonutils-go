@@ -2,8 +2,11 @@ package cell
 
 import (
 	"bytes"
+	"fmt"
+	"sort"
 	"sync"
 	"testing"
+	"unsafe"
 )
 
 func buildFinalizeParityTree(tb testing.TB, depth int, counter *uint64) *Cell {
@@ -196,6 +199,154 @@ func TestToBOCWithCellsCountHint(t *testing.T) {
 		got := root.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true, CellsCountHint: hint})
 		if !bytes.Equal(want, got) {
 			t.Fatalf("hint %d produced different boc", hint)
+		}
+	}
+}
+
+// buildPackedExtraHashFixture is a graph whose cells cover every shape of
+// extra-hash window the packed layout has to size: level masks 001, 010 and
+// 100 (one slot each, at three different levels), 011 (two slots) and 111
+// (three), next to level-0 cells (no window) and pruned branches (no window,
+// their higher hashes live in the payload). The pruned branches are cut from
+// the same leaf at different levels, which is what produces the sparse masks.
+func buildPackedExtraHashFixture(tb testing.TB) *Cell {
+	tb.Helper()
+
+	leaf := BeginCell().MustStoreUInt(0x1ea5, 16).EndCell()
+	wrap := func(tag uint64, refs ...*Cell) *Cell {
+		b := BeginCell().MustStoreUInt(tag, 32)
+		for _, ref := range refs {
+			b.MustStoreRef(ref)
+		}
+		return b.EndCell()
+	}
+	plain := wrap(0x00, leaf)
+	// The boundary is cut from a cell with a reference: a bare leaf is returned
+	// as-is by CreatePrunedBranch rather than pruned.
+	prunedAt := func(level int) *Cell {
+		pruned, err := CreatePrunedBranch(plain, level, 0)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		if pruned.GetType() != PrunedCellType || pruned.getLevelMask().Mask != oneLevelMask(level) {
+			tb.Fatalf("pruned branch at level %d has mask %03b", level, pruned.getLevelMask().Mask)
+		}
+		return pruned
+	}
+	a1 := wrap(0x01, prunedAt(1), plain)
+	a2 := wrap(0x02, prunedAt(2), leaf)
+	a3 := wrap(0x03, prunedAt(3))
+	b12 := wrap(0x12, a1, a2, plain)
+	c123 := wrap(0x123, b12, a3, a1)
+	root := wrap(0xf00, c123, a2, prunedAt(2), leaf)
+
+	seen := map[byte]bool{}
+	for _, c := range []*Cell{plain, a1, a2, a3, b12, c123, root} {
+		seen[c.getLevelMask().Mask] = true
+	}
+	for _, mask := range []byte{0b000, 0b001, 0b010, 0b100, 0b011, 0b111} {
+		if !seen[mask] {
+			tb.Fatalf("fixture has no cell with level mask %03b", mask)
+		}
+	}
+	return root
+}
+
+// TestParsedExtraHashesArePackedAndExact is the gate on the packed window
+// layout of prewireParsedExtraHashes. Two things are held over a graph with
+// every window shape, through both finalize modes and both payload modes:
+// every hash and depth of every cell at every level equals the builder's,
+// which is what proves no cell's finalization wrote past its own window into
+// a neighbour's; and the windows really are laid end to end by popcount, so
+// the slab is as small as the layout claims.
+func TestParsedExtraHashesArePackedAndExact(t *testing.T) {
+	root := buildPackedExtraHashFixture(t)
+	boc := root.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true, WithIntHashes: true})
+
+	for _, tc := range []struct {
+		name    string
+		options BOCParseOptions
+	}{
+		{"Copy", BOCParseOptions{AllowNonZeroLevelRoot: true}},
+		{"NoCopy", BOCParseOptions{AllowNonZeroLevelRoot: true, NoCopyPayload: true}},
+		{"Trusted", BOCParseOptions{AllowNonZeroLevelRoot: true, TrustedHashes: true}},
+	} {
+		for _, threshold := range []int{0, 1} {
+			t.Run(fmt.Sprintf("%s/parallel=%v", tc.name, threshold == 1), func(t *testing.T) {
+				parsed := parseWithFinalizeThreshold(t, boc, tc.options, threshold)
+				assertParsedGraphHashParity(t, root, parsed)
+				if got := parsed.ToBOCWithOptions(BOCSerializeOptions{WithCRC32C: true, WithIntHashes: true}); !bytes.Equal(got, boc) {
+					t.Fatal("parsed graph does not serialize back to the same bytes")
+				}
+				assertExtraHashWindowsPacked(t, parsed)
+			})
+		}
+	}
+}
+
+// assertParsedGraphHashParity walks two graphs of the same shape in step and
+// compares level mask, every level's hash and depth, and the payload.
+func assertParsedGraphHashParity(t *testing.T, want, got *Cell) {
+	t.Helper()
+
+	type pair struct{ want, got *Cell }
+	queue := []pair{{want, got}}
+	seen := map[*Cell]bool{}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if seen[cur.got] {
+			continue
+		}
+		seen[cur.got] = true
+		if cur.want.getLevelMask() != cur.got.getLevelMask() || cur.want.IsSpecial() != cur.got.IsSpecial() ||
+			cur.want.bitsSz != cur.got.bitsSz || !bytes.Equal(cur.want.data, cur.got.data) {
+			t.Fatalf("parsed cell shape differs: mask %03b/%03b", cur.want.getLevelMask().Mask, cur.got.getLevelMask().Mask)
+		}
+		for level := 0; level <= _DataCellMaxLevel; level++ {
+			if !bytes.Equal(cur.want.getHash(level), cur.got.getHash(level)) {
+				t.Fatalf("hash at level %d differs on a cell with mask %03b", level, cur.want.getLevelMask().Mask)
+			}
+			if cur.want.getDepth(level) != cur.got.getDepth(level) {
+				t.Fatalf("depth at level %d differs on a cell with mask %03b", level, cur.want.getLevelMask().Mask)
+			}
+		}
+		if cur.want.refsCount() != cur.got.refsCount() {
+			t.Fatal("parsed cell reference count differs")
+		}
+		for i := 0; i < cur.want.refsCount(); i++ {
+			queue = append(queue, pair{cur.want.refs[i], cur.got.refs[i]})
+		}
+	}
+}
+
+// assertExtraHashWindowsPacked checks that the extra-hash windows of a parsed
+// graph are consecutive slices of one slab, each exactly as long as the number
+// of slots its cell's level mask uses.
+func assertExtraHashWindowsPacked(t *testing.T, root *Cell) {
+	t.Helper()
+
+	var windows []*Cell
+	for c := range collectDetachedTestGraph(root) {
+		if c.meta != nil && c.meta.extraHashes != nil {
+			if c.GetType() == PrunedCellType || c.getLevelMask().Mask == 0 {
+				t.Fatal("a cell without extra hashes was given a window")
+			}
+			windows = append(windows, c)
+		}
+	}
+	if len(windows) < 5 {
+		t.Fatalf("fixture yielded %d windows, want at least the five window-bearing masks", len(windows))
+	}
+	sort.Slice(windows, func(i, j int) bool {
+		return uintptr(unsafe.Pointer(windows[i].meta.extraHashes)) < uintptr(unsafe.Pointer(windows[j].meta.extraHashes))
+	})
+	for i := 1; i < len(windows); i++ {
+		prev, next := windows[i-1], windows[i]
+		gap := uintptr(unsafe.Pointer(next.meta.extraHashes)) - uintptr(unsafe.Pointer(prev.meta.extraHashes))
+		if want := uintptr(prev.extraHashSlots()) * hashSize; gap != want {
+			t.Fatalf("window after a mask-%03b cell starts %d bytes later, want %d: the slab is not packed",
+				prev.getLevelMask().Mask, gap, want)
 		}
 	}
 }

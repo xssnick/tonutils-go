@@ -78,8 +78,14 @@ func TestCreateWithLazyRefsUnsafeCreatesRegularCellWithLazyRef(t *testing.T) {
 	if cell.BitsSize() != src.BitsSize() {
 		t.Fatalf("unexpected bits size: got=%d want=%d", cell.BitsSize(), src.BitsSize())
 	}
-	if len(data) > 0 && &cell.data[0] != &data[0] {
-		t.Fatal("cell data was copied")
+	// The slab constructor COPIES data — the old zero-copy ownership contract
+	// is gone, and callers may reuse their buffers immediately. Aliasing here
+	// would mean the body escaped the slab.
+	if len(data) > 0 && &cell.data[0] == &data[0] {
+		t.Fatal("cell data aliases the caller's buffer; the slab contract copies")
+	}
+	if len(data) > 0 && !bytes.Equal(cell.data, data[:len(cell.data)]) {
+		t.Fatal("cell data differs from the input")
 	}
 
 	boundary, err := cell.PeekRef(0)
@@ -576,6 +582,49 @@ func TestDictionaryMutatesLazyPrunedRootAfterMaterialization(t *testing.T) {
 	}
 	if value.MustLoadUInt(8) != 0xBB {
 		t.Fatal("unexpected surviving value after lazy root delete")
+	}
+}
+
+func TestDictionaryDeleteMaterializesLazyMergeSibling(t *testing.T) {
+	base := NewDict(8)
+	for key, value := range map[uint64]uint64{
+		0x00: 0xAA,
+		0x80: 0xBB,
+		0x81: 0xCC,
+	} {
+		if err := base.SetIntKey(new(big.Int).SetUint64(key), BeginCell().MustStoreUInt(value, 8).EndCell()); err != nil {
+			t.Fatalf("set %02x: %v", key, err)
+		}
+	}
+
+	root := base.AsCell()
+	loader := &testLazyLoader{cells: make(map[Hash]*Cell, root.RefsNum())}
+	for i := 0; i < int(root.RefsNum()); i++ {
+		ref, err := root.PeekRef(i)
+		if err != nil {
+			t.Fatalf("load root ref %d: %v", i, err)
+		}
+		loader.cells[ref.HashKey()] = ref
+	}
+	lazy := cellWithLazyRefsFromCell(root, loader.LoadCell).AsDict(8)
+
+	removed, err := lazy.LoadValueAndDeleteByIntKey(big.NewInt(0))
+	if err != nil {
+		t.Fatalf("delete through lazy path: %v", err)
+	}
+	if got := removed.MustLoadUInt(8); got != 0xAA {
+		t.Fatalf("removed value = %02x, want aa", got)
+	}
+
+	want := base.Copy()
+	if _, err = want.LoadValueAndDeleteByIntKey(big.NewInt(0)); err != nil {
+		t.Fatalf("delete from materialized control: %v", err)
+	}
+	if got := lazy.AsCell().HashKey(); got != want.AsCell().HashKey() {
+		t.Fatalf("post-delete root = %x, want %x", got, want.AsCell().Hash())
+	}
+	if loader.calls != 2 {
+		t.Fatalf("lazy loads = %d, want deleted leaf and surviving sibling", loader.calls)
 	}
 }
 

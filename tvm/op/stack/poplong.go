@@ -8,53 +8,31 @@ import (
 	"github.com/xssnick/tonutils-go/tvm/vm"
 )
 
-type OpPOPL struct {
-	helpers.Prefixed
-	stackIndex uint8
-}
-
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return POPL(0) })
+	vm.ArgList = append(vm.ArgList, popLongOp)
 }
 
-var popLongPrefixed = helpers.SinglePrefixed(helpers.UIntPrefix(0x57, 8))
+var popLongOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.UIntPrefix(0x57, 8)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		return state.Stack.PopSwapAt(int(args))
+	},
+	Decode: func(_ *vm.State, code *cell.Slice) (uint64, error) {
+		prefix, err := code.LoadUInt(8)
+		if err != nil {
+			return 0, err
+		}
+		if prefix != 0x57 {
+			return 0, vm.ErrCorruptedOpcode
+		}
+		return code.LoadUInt(8)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("s%d POP", args)
+	},
+})
 
-func POPL(index uint8) *OpPOPL {
-	return &OpPOPL{
-		Prefixed:   popLongPrefixed,
-		stackIndex: index,
-	}
-}
-
-func (op *OpPOPL) Deserialize(code *cell.Slice) error {
-	prefix, err := code.LoadUInt(8)
-	if err != nil {
-		return err
-	}
-	if prefix != 0x57 {
-		return vm.ErrCorruptedOpcode
-	}
-
-	val, err := code.LoadUInt(8)
-	if err != nil {
-		return err
-	}
-	op.stackIndex = uint8(val)
-	return nil
-}
-
-func (op *OpPOPL) Serialize() *cell.Builder {
-	return cell.BeginCell().MustStoreUInt(0x57, 8).MustStoreUInt(uint64(op.stackIndex), 8)
-}
-
-func (op *OpPOPL) SerializeText() string {
-	return fmt.Sprintf("s%d POP", op.stackIndex)
-}
-
-func (op *OpPOPL) InstructionBits() int64 {
-	return 16
-}
-
-func (op *OpPOPL) Interpret(state *vm.State) error {
-	return state.Stack.PopSwapAt(int(op.stackIndex))
+func POPL(index uint8) vm.OP {
+	return vm.Bind(popLongOp, uint64(index))
 }

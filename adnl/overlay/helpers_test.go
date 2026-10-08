@@ -3,13 +3,79 @@ package overlay
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
+	"runtime"
+	"testing"
+	"time"
 
 	"github.com/xssnick/tonutils-go/adnl"
 	"github.com/xssnick/tonutils-go/adnl/rldp"
 	"github.com/xssnick/tonutils-go/tl"
 )
+
+func testBroadcastFECIDKey(id []byte) broadcastFECIDKey {
+	if len(id) == sha256.Size {
+		key, _ := newBroadcastFECIDKey(id)
+		return key
+	}
+
+	return broadcastFECIDKey(sha256.Sum256(id))
+}
+
+// Legacy constructor-shaped helpers keep older behavioral tests concise while
+// production callers use one explicitly owned BroadcastReceiver per overlay.
+func (a *ADNLWrapper) CreateOverlayWithSettings(id []byte, maxUnauthBroadcastSize uint32,
+	allowBroadcastFEC bool, trustUnauthorizedBroadcast bool) *ADNLOverlayWrapper {
+	key, err := newOverlayIDKey(id)
+	if err != nil {
+		panic(err)
+	}
+
+	a.mx.RLock()
+	existing := a.overlays[key]
+	a.mx.RUnlock()
+	if existing != nil {
+		return existing
+	}
+
+	receiver, err := NewBroadcastReceiver(id, maxUnauthBroadcastSize, allowBroadcastFEC, trustUnauthorizedBroadcast)
+	if err != nil {
+		panic(err)
+	}
+	wrapper, err := a.AttachOverlay(receiver)
+	if err != nil {
+		receiver.Close()
+		panic(err)
+	}
+	return wrapper
+}
+
+func (a *ADNLWrapper) WithOverlay(id []byte) *ADNLOverlayWrapper {
+	return a.CreateOverlayWithSettings(id, 0, true, false)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastFECRelay(localID []byte, peerSet BroadcastPeerSet, state *BroadcastFECRelayState) {
+	if state != nil {
+		a.fecState = state
+	}
+	a.BroadcastReceiver.EnableBroadcastFECRelay(localID, peerSet)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastSimpleRelayForTest(localID []byte, peerSet BroadcastPeerSet, state *BroadcastFECRelayState) {
+	if state != nil {
+		a.fecState = state
+	}
+	a.BroadcastReceiver.EnableBroadcastSimpleRelay(localID, peerSet)
+}
+
+func (a *ADNLOverlayWrapper) EnableBroadcastTwoStep(localID []byte, peerSet BroadcastPeerSet, state *BroadcastTwoStepState) {
+	if state != nil {
+		a.twoStepState.Store(state)
+	}
+	a.BroadcastReceiver.EnableBroadcastTwoStep(localID, peerSet)
+}
 
 type mockADNL struct {
 	queryHandler      func(msg *adnl.MessageQuery) error
@@ -90,14 +156,17 @@ func (m *mockADNL) Stats() adnl.PeerStats {
 func (m *mockADNL) Close() {}
 
 type mockRLDP struct {
-	adnl          rldp.ADNL
-	onQuery       func(transferId []byte, query *rldp.Query) error
-	onMessage     func(id []byte, data []byte) error
-	onDisconnect  func()
-	doQueryFn     func(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
-	doQueryAsync  func(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
-	doQueryCalls  []tl.Serializable
-	sendAnswerErr error
+	adnl             rldp.ADNL
+	onQuery          func(transferId []byte, query *rldp.Query) error
+	onMessage        func(id []byte, data []byte) error
+	onDisconnect     func()
+	doQueryFn        func(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error
+	doQueryAsync     func(ctx context.Context, maxAnswerSize uint64, id []byte, query tl.Serializable, result chan<- rldp.AsyncQueryResult) error
+	doQueryCalls     []tl.Serializable
+	sendMessageCtx   context.Context
+	sendMessageCalls [][]byte
+	sendMessageErr   error
+	sendAnswerErr    error
 }
 
 func newMockRLDP(adnl rldp.ADNL) *mockRLDP {
@@ -117,6 +186,12 @@ func (m *mockRLDP) Stats() rldp.Stats {
 }
 
 func (m *mockRLDP) Close() {}
+
+func (m *mockRLDP) SendMessage(ctx context.Context, payload []byte) error {
+	m.sendMessageCtx = ctx
+	m.sendMessageCalls = append(m.sendMessageCalls, append([]byte(nil), payload...))
+	return m.sendMessageErr
+}
 
 func (m *mockRLDP) DoQuery(ctx context.Context, maxAnswerSize uint64, query, result tl.Serializable) error {
 	m.doQueryCalls = append(m.doQueryCalls, query)
@@ -160,4 +235,43 @@ func setSerializableResult(dst tl.Serializable, src tl.Serializable) error {
 	}
 	dv.Elem().Set(val)
 	return nil
+}
+
+func sendBroadcastFECRelayOps(ctx context.Context, state *BroadcastFECRelayState, ops []broadcastFECRelayOp) error {
+	var sendErr error
+	var sent, failed uint64
+	for _, op := range ops {
+		if err := SendPreparedBroadcast(ctx, op.peer, op.msg, op.wire); err != nil {
+			failed++
+			if sendErr == nil {
+				sendErr = fmt.Errorf("failed to relay FEC part %d to peer %x: %w", op.seqno, op.peer.ID(), err)
+			}
+			continue
+		}
+		sent++
+	}
+	if state != nil {
+		state.addRelayStats(true, sent, failed)
+	}
+	return sendErr
+}
+
+func waitOrdinaryBroadcastRelay(t testing.TB, receiver *BroadcastReceiver) {
+	t.Helper()
+	relay := receiver.ordinaryRelay.Load()
+	if relay == nil {
+		return
+	}
+	t.Cleanup(relay.Close)
+	deadline := time.Now().Add(5 * time.Second)
+	for relay.activeBytes.Load() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("broadcast relay did not become idle")
+		}
+		runtime.Gosched()
+	}
+}
+
+func newBroadcastTwoStepRelayDispatcher(queueSize, concurrency int, maxActiveBytes int64, peerTimeout time.Duration) *broadcastTwoStepRelayDispatcher {
+	return newBroadcastRelayDispatcher(queueSize, concurrency, maxActiveBytes, peerTimeout, false)
 }

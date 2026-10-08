@@ -100,7 +100,15 @@ func (m *nftAPIMock) SendExternalMessage(ctx context.Context, msg *tlb.ExternalM
 	return nil
 }
 
+func (m *nftAPIMock) SendExternalMessageToAllNodes(ctx context.Context, msg *tlb.ExternalMessage) error {
+	return nil
+}
+
 func (m *nftAPIMock) SendExternalMessageWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
+	return nil, nil, nil, nil
+}
+
+func (m *nftAPIMock) SendExternalMessageToAllNodesWaitTransaction(ctx context.Context, msg *tlb.ExternalMessage) (*tlb.Transaction, *ton.BlockIDExt, []byte, error) {
 	return nil, nil, nil, nil
 }
 

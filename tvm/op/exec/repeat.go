@@ -26,17 +26,13 @@ func REPEAT() *helpers.SimpleOP {
 				return err
 			}
 
-			if count < 0 {
+			if count <= 0 {
 				return nil
 			}
 
 			after, err := state.ExtractCurrentContinuation(1, -1, -1)
 			if err != nil {
 				return err
-			}
-
-			if count == 0 {
-				return state.Jump(after)
 			}
 
 			return state.Jump(&vm.RepeatContinuation{

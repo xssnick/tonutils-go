@@ -3,18 +3,17 @@ package exec
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List,
-		func() vm.OP { return callDictShort(0) },
-		func() vm.OP { return callDictLong(0) },
-		func() vm.OP { return jmpDict(0) },
-		func() vm.OP { return prepareDict(0) },
+	vm.ArgList = append(vm.ArgList,
+		callDictShortOp,
+		callDictLongOp,
+		jmpDictOp,
+		prepareDictOp,
 	)
 }
 
@@ -34,132 +33,91 @@ func PREPAREDICT(id int) vm.OP {
 }
 
 func currentCodeDict(state *vm.State) (vm.Continuation, error) {
-	if state.Reg.C[3] == nil {
+	if vm.IsNullContinuation(state.Reg.C[3]) {
 		return nil, vmerr.Error(vmerr.CodeTypeCheck)
 	}
 	return state.Reg.C[3], nil
 }
 
-func callDictShort(id int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
-				return err
-			}
-			cont, err := currentCodeDict(state)
-			if err != nil {
-				return err
-			}
-			return state.Call(cont)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("CALLDICT %d", id)
-		},
-		BitPrefix: helpers.BytesPrefix(0xF0),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(id), 8)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(8)
-			if err != nil {
-				return err
-			}
-			id = int(val)
-			return nil
-		},
+func pushDictIndex(state *vm.State, args uint64) (vm.Continuation, error) {
+	if err := state.Stack.PushSmallInt(int64(int32(args))); err != nil {
+		return nil, err
 	}
+	return currentCodeDict(state)
 }
 
-func callDictLong(id int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 14,
-		Action: func(state *vm.State) error {
-			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
-				return err
-			}
-			cont, err := currentCodeDict(state)
-			if err != nil {
-				return err
-			}
-			return state.Call(cont)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("CALLDICT %d", id)
-		},
-		BitPrefix: helpers.SlicePrefix(10, []byte{0xF1, 0x00}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(id), 14)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(14)
-			if err != nil {
-				return err
-			}
-			id = int(val)
-			return nil
-		},
-	}
+var callDictShortOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0xF0)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		cont, err := pushDictIndex(state, args)
+		if err != nil {
+			return err
+		}
+		return state.Call(cont)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("CALLDICT %d", int32(args))
+	},
+})
+
+var callDictLongOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(10, []byte{0xF1, 0x00})),
+	ArgBits:  14,
+	Action: func(state *vm.State, args uint64) error {
+		cont, err := pushDictIndex(state, args)
+		if err != nil {
+			return err
+		}
+		return state.Call(cont)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("CALLDICT %d", int32(args))
+	},
+})
+
+var jmpDictOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(10, []byte{0xF1, 0x40})),
+	ArgBits:  14,
+	Action: func(state *vm.State, args uint64) error {
+		cont, err := pushDictIndex(state, args)
+		if err != nil {
+			return err
+		}
+		return state.Jump(cont)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("JMPDICT %d", int32(args))
+	},
+})
+
+var prepareDictOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.SlicePrefix(10, []byte{0xF1, 0x80})),
+	ArgBits:  14,
+	Action: func(state *vm.State, args uint64) error {
+		cont, err := pushDictIndex(state, args)
+		if err != nil {
+			return err
+		}
+		return state.Stack.PushContinuation(cont)
+	},
+	Name: func(args uint64) string {
+		return fmt.Sprintf("PREPAREDICT %d", int32(args))
+	},
+})
+
+func callDictShort(id int) vm.OP {
+	return vm.Bind(callDictShortOp, uint64(uint32(id)))
 }
 
-func jmpDict(id int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 14,
-		Action: func(state *vm.State) error {
-			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
-				return err
-			}
-			cont, err := currentCodeDict(state)
-			if err != nil {
-				return err
-			}
-			return state.Jump(cont)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("JMPDICT %d", id)
-		},
-		BitPrefix: helpers.SlicePrefix(10, []byte{0xF1, 0x40}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(id), 14)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(14)
-			if err != nil {
-				return err
-			}
-			id = int(val)
-			return nil
-		},
-	}
+func callDictLong(id int) vm.OP {
+	return vm.Bind(callDictLongOp, uint64(uint32(id)))
 }
 
-func prepareDict(id int) *helpers.AdvancedOP {
-	return &helpers.AdvancedOP{
-		FixedSizeBits: 14,
-		Action: func(state *vm.State) error {
-			if err := state.Stack.PushSmallInt(int64(id)); err != nil {
-				return err
-			}
-			cont, err := currentCodeDict(state)
-			if err != nil {
-				return err
-			}
-			return state.Stack.PushContinuation(cont)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("PREPAREDICT %d", id)
-		},
-		BitPrefix: helpers.SlicePrefix(10, []byte{0xF1, 0x80}),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(id), 14)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			val, err := code.LoadUInt(14)
-			if err != nil {
-				return err
-			}
-			id = int(val)
-			return nil
-		},
-	}
+func jmpDict(id int) vm.OP {
+	return vm.Bind(jmpDictOp, uint64(uint32(id)))
+}
+
+func prepareDict(id int) vm.OP {
+	return vm.Bind(prepareDictOp, uint64(uint32(id)))
 }

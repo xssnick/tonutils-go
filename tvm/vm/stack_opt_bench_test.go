@@ -1,8 +1,16 @@
 package vm
 
-import "testing"
+import (
+	"fmt"
+	"testing"
 
-var benchmarkStackSink *Stack
+	"github.com/xssnick/tonutils-go/tvm/cell"
+)
+
+var (
+	benchmarkStackSink      *Stack
+	benchmarkStackValueSink any
+)
 
 func BenchmarkStackSplitTopEmpty(b *testing.B) {
 	st := &Stack{}
@@ -30,5 +38,88 @@ func BenchmarkStackSplitTopSmall(b *testing.B) {
 			b.Fatal(err)
 		}
 		benchmarkStackSink = next
+	}
+}
+
+func BenchmarkContinuationBuildCallStackPassAll(b *testing.B) {
+	for _, depth := range []int{1, 64, 1024} {
+		b.Run(fmt.Sprintf("depth-%d", depth), func(b *testing.B) {
+			base := make([]any, depth)
+			for i := range base {
+				base[i] = stackIntZero
+			}
+			st := &Stack{}
+			state := &State{}
+			plan := continuationStackPlan{passArgs: -1, cp: -1}
+
+			b.ReportAllocs()
+			for b.Loop() {
+				st.elems = base
+				state.Stack = st
+				next, err := plan.buildCallStack(state)
+				if err != nil {
+					b.Fatal(err)
+				}
+				benchmarkStackSink = next
+			}
+		})
+	}
+}
+
+func BenchmarkStackPopAnySmall(b *testing.B) {
+	base := []any{stackIntOne}
+	st := &Stack{trace: cell.NewTrace(cell.TraceHooks{})}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		base[0] = stackIntOne
+		st.elems = base
+		value, err := st.PopAny()
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkStackValueSink = value
+	}
+}
+
+func BenchmarkStackGetSmall(b *testing.B) {
+	st := &Stack{
+		elems: []any{stackIntOne},
+		trace: cell.NewTrace(cell.TraceHooks{}),
+	}
+
+	b.ReportAllocs()
+	for b.Loop() {
+		value, err := st.Get(0)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkStackValueSink = value
+	}
+}
+
+func BenchmarkStackDropOne(b *testing.B) {
+	base := []any{stackIntOne}
+	st := &Stack{}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		base[0] = stackIntOne
+		st.elems = base
+		if err := st.Drop(1); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkStackClearSmall(b *testing.B) {
+	base := []any{stackIntOne, stackIntZero, stackIntMinusOne}
+	st := &Stack{}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		base[0], base[1], base[2] = stackIntOne, stackIntZero, stackIntMinusOne
+		st.elems = base
+		st.Clear()
 	}
 }

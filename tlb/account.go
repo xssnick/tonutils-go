@@ -359,7 +359,8 @@ func (s *AccountStorage) LoadFromCell(loader *cell.Slice) error {
 	}
 
 	s.LastTransactionLT = lastTransaction
-	s.Balance = FromNanoTON(coins)
+	// coins was just parsed out of the cell and is referenced nowhere else.
+	s.Balance = FromOwnedNanoTON(coins)
 
 	return nil
 }

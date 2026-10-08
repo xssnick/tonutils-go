@@ -40,7 +40,7 @@ func TestTVMCrossEmulatorMessageVersionAuditShardSelection(t *testing.T) {
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARDS", "4")
 	t.Setenv("TVM_MESSAGE_VERSION_AUDIT_SHARD", "1")
 	got := messageVersionCrossEmulatorVersions(t)
-	want := []int{1, 5, 9, 13}
+	want := []int{1, 5, 9, 13, 17}
 	if len(got) != len(want) {
 		t.Fatalf("sharded version selection = %v, want %v", got, want)
 	}
@@ -297,7 +297,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareBlockchainConfig(configRoot),
+			Config:   mustPrepareLenientTestConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:   DefaultInternalMessageGasMax,
 				Limit: int64(internalMessageTestAmount) * InternalMessageGasAmountFactor,
@@ -312,7 +312,7 @@ func assertDirectMessageVersionParity(t *testing.T, version int, internal bool, 
 			Now:      now,
 			Balance:  balance,
 			RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-			Config:   MustPrepareBlockchainConfig(configRoot),
+			Config:   mustPrepareLenientTestConfig(configRoot),
 			Gas: vmcore.NewGas(vmcore.GasConfig{
 				Max:    DefaultExternalMessageGasMax,
 				Credit: DefaultExternalMessageGasCredit,
@@ -433,7 +433,7 @@ func assertDirectMessageGlobalVersionOverrideParity(t *testing.T, version, machi
 		Now:      now,
 		Balance:  balance,
 		RandSeed: append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:   MustPrepareBlockchainConfig(refConfigRoot),
+		Config:   mustPrepareLenientTestConfig(refConfigRoot),
 	}
 
 	var goRes *MessageExecutionResult
@@ -506,7 +506,7 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(configRoot),
+		Config:      mustPrepareLenientTestConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -546,7 +546,6 @@ func assertDirectMessageBuildProofLibrariesVersionParity(t *testing.T, version i
 		if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), newData.Hash()) {
 			t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, newData.Dump())
 		}
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	amount := uint64(0)
@@ -600,7 +599,7 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(refConfigRoot),
+		Config:      mustPrepareLenientTestConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 		Libraries:   []*cell.Cell{libs},
@@ -640,7 +639,6 @@ func assertDirectMessageBuildProofLibrariesGlobalVersionOverrideParity(t *testin
 		if goRes.Data == nil || !bytes.Equal(goRes.Data.Hash(), newData.Hash()) {
 			t.Fatalf("go data mismatch after library execution:\ngo=%v\nwant=%s", goRes.Data, newData.Dump())
 		}
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	amount := uint64(0)
@@ -801,7 +799,7 @@ func assertDirectMessageBuildProofVersionParity(t *testing.T, version int, inter
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(configRoot),
+		Config:      mustPrepareLenientTestConfig(configRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}
@@ -883,7 +881,7 @@ func assertDirectMessageBuildProofGlobalVersionOverrideParity(t *testing.T, vers
 		Now:         now,
 		Balance:     balance,
 		RandSeed:    append([]byte(nil), referenceDefaultWalletSendSeed...),
-		Config:      MustPrepareBlockchainConfig(refConfigRoot),
+		Config:      mustPrepareLenientTestConfig(refConfigRoot),
 		BuildProof:  true,
 		AccountRoot: accountRoot,
 	}

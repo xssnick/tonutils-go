@@ -1,10 +1,12 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"runtime"
 	"strconv"
+	"sync/atomic"
 	"testing"
 )
 
@@ -29,6 +31,11 @@ func BenchmarkBOCReferenceFixture(b *testing.B) {
 	mode2Opts := BOCSerializeOptions{WithCRC32C: true}
 	mode2BOC := root.ToBOCWithOptions(mode2Opts)
 	mode31Opts := mode31Options()
+	mode31Header, err := readBOCViewHeader(bytes.NewReader(rawMode31BOC), int64(len(rawMode31BOC)))
+	if err != nil {
+		b.Fatalf("failed to inspect mode31 boc: %v", err)
+	}
+	mode31IndexBytes := uint64(mode31Header.cells) * uint64(mode31Header.offsetSize)
 
 	baselineCompressed, err := CompressBOC([]*Cell{root}, CompressionBaselineLZ4, nil)
 	if err != nil {
@@ -119,6 +126,9 @@ func BenchmarkBOCReferenceFixture(b *testing.B) {
 		b.ReportAllocs()
 		b.SetBytes(int64(len(rawMode31BOC)))
 		b.ResetTimer()
+		// Copy mode detaches the payload, so dropping the loader's raw index
+		// reference also drops its last reference to the direct input backing.
+		b.ReportMetric(float64(len(rawMode31BOC)), "loader-released-input-B/op")
 
 		for i := 0; i < b.N; i++ {
 			roots, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(rawMode31BOC), BOCParseOptions{
@@ -127,6 +137,47 @@ func BenchmarkBOCReferenceFixture(b *testing.B) {
 			})
 			if err != nil {
 				b.Fatalf("failed to parse mode31 boc lazily: %v", err)
+			}
+			benchmarkRootsSink = roots
+		}
+	})
+
+	b.Run("ParseMode31LazyNoCopy", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rawMode31BOC)))
+		b.ResetTimer()
+		// No-copy mode intentionally keeps the direct input alive through the
+		// payload even though the loader no longer keeps its index reference.
+		b.ReportMetric(float64(len(rawMode31BOC)), "loader-retained-input-B/op")
+
+		for i := 0; i < b.N; i++ {
+			roots, _, err := FromBOCMultiRootReader(NewBOCNoCopyReader(rawMode31BOC), BOCParseOptions{
+				Lazy:          true,
+				TrustedHashes: true,
+				NoCopyPayload: true,
+			})
+			if err != nil {
+				b.Fatalf("failed to parse mode31 boc lazily without copying: %v", err)
+			}
+			benchmarkRootsSink = roots
+		}
+	})
+
+	b.Run("ParseMode31LazyStream", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(rawMode31BOC)))
+		b.ResetTimer()
+		// Stream parsing allocates its index independently from the payload;
+		// the loader releases that allocation immediately after initialization.
+		b.ReportMetric(float64(mode31IndexBytes), "loader-released-index-B/op")
+
+		for i := 0; i < b.N; i++ {
+			roots, _, err := FromBOCMultiRootReader(bytes.NewReader(rawMode31BOC), BOCParseOptions{
+				Lazy:          true,
+				TrustedHashes: true,
+			})
+			if err != nil {
+				b.Fatalf("failed to parse streamed mode31 boc lazily: %v", err)
 			}
 			benchmarkRootsSink = roots
 		}
@@ -247,6 +298,83 @@ func BenchmarkBOCReferenceFixture(b *testing.B) {
 			benchmarkRootsSink = roots
 		}
 	})
+}
+
+func BenchmarkBOCLazyComputedMetaRelease(b *testing.B) {
+	const cellsCount = 500
+
+	payload, indexData := buildLazyBOCChainBenchmarkPayload(b, cellsCount)
+	computedMetaBytes := cellsCount * (4 + hashSize + depthSize)
+	b.ReportAllocs()
+	b.SetBytes(int64(len(payload) + len(indexData)))
+	b.Cleanup(func() {
+		benchmarkCellSink = nil
+		runtime.GC()
+	})
+
+	for b.Loop() {
+		loader := &lazyBOCLoader{
+			payload:    payload,
+			cells:      make([]bocPayloadCellInfo, cellsCount),
+			refSzBytes: 2,
+			cache:      make([]atomic.Pointer[Cell], cellsCount),
+		}
+		if err := loader.init([]uint32{0}, bocCellIndex{
+			data:        indexData,
+			offsetBytes: 2,
+		}); err != nil {
+			b.Fatalf("failed to initialize lazy boc: %v", err)
+		}
+
+		root, err := loader.loadDataCell(0)
+		if err != nil {
+			b.Fatalf("failed to load lazy root: %v", err)
+		}
+		cell := root
+		for i := 1; i < cellsCount; i++ {
+			cell, err = cell.rawRefs()[0].load()
+			if err != nil {
+				b.Fatalf("failed to materialize lazy cell %d: %v", i, err)
+			}
+		}
+		if loader.computedMeta.Load() != nil {
+			b.Fatal("computed metadata was retained after full materialization")
+		}
+		benchmarkCellSink = root
+	}
+
+	b.ReportMetric(float64(len(indexData)), "loader-released-index-B/op")
+	b.ReportMetric(float64(computedMetaBytes), "loader-released-meta-B/op")
+	b.ReportMetric(0, "loader-retained-meta-B/op")
+}
+
+func buildLazyBOCChainBenchmarkPayload(tb testing.TB, cellsCount int) ([]byte, []byte) {
+	tb.Helper()
+
+	const (
+		refSize       = 2
+		cellWithRefSz = 2 + 1 + refSize
+		leafCellSz    = 2 + 1
+	)
+	payload := make([]byte, (cellsCount-1)*cellWithRefSz+leafCellSz)
+	index := make([]byte, cellsCount*refSize)
+	offset := 0
+	for i := 0; i < cellsCount; i++ {
+		refs := byte(0)
+		if i+1 < cellsCount {
+			refs = 1
+		}
+		payload[offset] = refs
+		payload[offset+1] = 2
+		payload[offset+2] = byte(i)
+		offset += 3
+		if refs != 0 {
+			binary.BigEndian.PutUint16(payload[offset:offset+refSize], uint16(i+1))
+			offset += refSize
+		}
+		binary.BigEndian.PutUint16(index[i*refSize:(i+1)*refSize], uint16(offset))
+	}
+	return payload, index
 }
 
 func BenchmarkBOCStateAwareCompressionFixture(b *testing.B) {

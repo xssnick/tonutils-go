@@ -61,6 +61,7 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 			return nil
 		},
 	})
+	defer cli.Close()
 
 	part := MessagePart{
 		TransferID: transferID,
@@ -75,24 +76,76 @@ func TestRLDP_handleMessageRejectsBadFECBeforeDecoder(t *testing.T) {
 		Data:      make([]byte, MaxSymbolSize+1),
 	}
 
-	if err := cli.handleMessage(&adnl.MessageCustom{Data: part}); err != nil {
-		t.Fatal(err)
+	if err := cli.handleMessage(&adnl.MessageCustom{Data: part}); err == nil {
+		t.Fatal("invalid FEC was accepted")
 	}
 
 	cli.mx.RLock()
 	stream := cli.recvStreams[[32]byte(transferID)]
 	cli.mx.RUnlock()
-	if stream == nil {
-		t.Fatal("expected stream to be created")
+	if stream != nil {
+		t.Fatal("invalid FEC allocated a stream")
 	}
 	if stats := cli.Stats(); stats.Inbound.ProcessingErrors != 1 {
 		t.Fatalf("processing errors=%d want=1", stats.Inbound.ProcessingErrors)
 	}
 
-	stream.mx.Lock()
-	defer stream.mx.Unlock()
-	if stream.nextPartIndex != 0 || len(stream.activeParts) != 0 {
-		t.Fatal("expected no decoder part created for invalid fec")
+	if got := cli.Stats().Inbound.TransfersStarted; got != 0 {
+		t.Fatalf("invalid FEC started %d transfers", got)
+	}
+}
+
+func TestRLDP_handleMessageRejectsTrailingTransferData(t *testing.T) {
+	messageID := make([]byte, 32)
+	transferID := make([]byte, 32)
+	if _, err := rand.Read(messageID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(transferID); err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := tl.Serialize(Message{ID: messageID, Data: []byte("payload")}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, 0)
+
+	encoder, err := roundrobin.NewEncoder(data, uint32(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	delivered := false
+	client := NewClient(MockADNL{
+		sendCustomMessage: func(context.Context, tl.Serializable) error {
+			return nil
+		},
+	})
+	defer client.closeState()
+	client.SetOnMessage(func([]byte, []byte) error {
+		delivered = true
+		return nil
+	})
+
+	err = client.handleMessage(&adnl.MessageCustom{Data: MessagePart{
+		TransferID: transferID,
+		FecType: FECRoundRobin{
+			DataSize:     uint32(len(data)),
+			SymbolSize:   uint32(len(data)),
+			SymbolsCount: 1,
+		},
+		TotalSize: uint64(len(data)),
+		Data:      encoder.GenSymbol(0),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delivered {
+		t.Fatal("message with trailing transfer data was delivered")
+	}
+	if got := client.Stats().Inbound.ProcessingErrors; got != 1 {
+		t.Fatalf("processing errors = %d, want 1", got)
 	}
 }
 

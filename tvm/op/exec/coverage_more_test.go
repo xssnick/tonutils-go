@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/tuple"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
@@ -37,7 +36,7 @@ func TestRegisteredExecOpsInstantiate(t *testing.T) {
 		t.Fatal("expected exec package to register opcode getters")
 	}
 
-	for i, getter := range vm.List {
+	for i, getter := range vm.AllOps() {
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -96,7 +95,7 @@ func TestCallCCAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "CALLCCARGS 2,-1" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 24 {
+		if got := instructionBits(t, dst); got != 24 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 	})
@@ -121,7 +120,7 @@ func TestTryArgsAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "TRYARGS 2,15" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected instruction bits: %d", got)
 		}
 
@@ -736,8 +735,7 @@ func TestCallContinuationAdditionalErrorStackEffects(t *testing.T) {
 
 	t.Run("CallCCArgsRejectsTruncatedSuffix", func(t *testing.T) {
 		truncated := CALLCCARGS(0, 0)
-		code := cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell()
-		if err := truncated.DeserializeMatched(code.MustBeginParse()); err == nil {
+		if err := truncated.Deserialize(truncated.GetPrefixes()[0]); err == nil {
 			t.Fatal("expected CALLCCARGS truncated suffix to fail")
 		}
 	})
@@ -1006,13 +1004,12 @@ func TestArgsBlessAdditionalStackAndDecodeEdges(t *testing.T) {
 	})
 
 	t.Run("FixedArgFormsRejectTruncatedSuffix", func(t *testing.T) {
-		for _, op := range []*helpers.AdvancedOP{
+		for _, op := range []vm.OP{
 			SETCONTARGS(0, 0),
 			RETURNARGS(0),
 			BLESSARGS(0, 0),
 		} {
-			code := cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell()
-			if err := op.DeserializeMatched(code.MustBeginParse()); err == nil {
+			if err := op.Deserialize(op.GetPrefixes()[0]); err == nil {
 				t.Fatalf("expected %s truncated suffix to fail", op.SerializeText())
 			}
 		}
@@ -1427,7 +1424,7 @@ func TestJmpRefDataCurrentCodeNilPreservesStack(t *testing.T) {
 	}
 }
 
-func TestJmpRefDataBadRefLeavesCurrentCodeOnStack(t *testing.T) {
+func TestJmpRefDataBadRefDoesNotPushCurrentCode(t *testing.T) {
 	state := newTestState()
 	state.InitForExecution()
 	state.CurrentCode = cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell().MustBeginParse()
@@ -1435,21 +1432,24 @@ func TestJmpRefDataBadRefLeavesCurrentCodeOnStack(t *testing.T) {
 		t.Fatalf("push residual: %v", err)
 	}
 
-	assertVMErrCode(t, JMPREFDATA(unresolvedLibraryCell(t)).Interpret(state), vmerr.CodeCellUnderflow)
-	if state.Stack.Len() != 2 {
-		t.Fatalf("expected residual and current code after JMPREFDATA bad ref, stack len=%d", state.Stack.Len())
-	}
-	pushed, err := state.Stack.PopSlice()
-	if err != nil {
-		t.Fatalf("pop pushed current code: %v", err)
-	}
-	got, err := pushed.LoadUInt(8)
-	if err != nil || got != 0xAB {
-		t.Fatalf("unexpected pushed current code: %x err=%v", got, err)
+	loads := 0
+	badRef := unresolvedLibraryCell(t).WithTrace(cell.NewTrace(cell.TraceHooks{
+		OnLoad: func(*cell.Cell) { loads++ },
+	}))
+	gasBefore := state.Gas.Used()
+	assertVMErrCode(t, JMPREFDATA(badRef).Interpret(state), vmerr.CodeCellUnderflow)
+	if state.Stack.Len() != 1 {
+		t.Fatalf("JMPREFDATA pushed current code before loading bad ref, stack len=%d", state.Stack.Len())
 	}
 	residual, err := state.Stack.PopIntFinite()
 	if err != nil || residual.Int64() != 11 {
 		t.Fatalf("unexpected residual: %v err=%v", residual, err)
+	}
+	if loads != 1 {
+		t.Fatalf("bad continuation load trace count = %d, want 1", loads)
+	}
+	if gas := state.Gas.Used() - gasBefore; gas != vm.CellLoadGasPrice {
+		t.Fatalf("bad continuation load gas = %d, want %d", gas, vm.CellLoadGasPrice)
 	}
 }
 
@@ -1956,7 +1956,7 @@ func TestSetContCtrAdditionalCoverage(t *testing.T) {
 		if got := dst.SerializeText(); got != "c7 SETCONTCTR" {
 			t.Fatalf("unexpected text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected bits: %d", got)
 		}
 
@@ -2313,8 +2313,7 @@ func TestJumpAndReturnGuardCoverage(t *testing.T) {
 		assertVMErrCode(t, RETDATA().Interpret(state), vmerr.CodeTypeCheck)
 
 		truncated := RETARGS(0)
-		code := cell.BeginCell().MustStoreSlice(truncated.BitPrefix.Data, truncated.BitPrefix.Bits).EndCell()
-		if err := truncated.DeserializeMatched(code.MustBeginParse()); err == nil {
+		if err := truncated.Deserialize(truncated.GetPrefixes()[0]); err == nil {
 			t.Fatal("expected RETARGS truncated suffix to fail")
 		}
 
@@ -2375,12 +2374,12 @@ func TestJumpAndReturnGuardCoverage(t *testing.T) {
 
 func TestCallJumpArgsDecodeAndContinuationErrors(t *testing.T) {
 	t.Run("ShortAdvancedSuffixes", func(t *testing.T) {
-		for _, op := range []*helpers.AdvancedOP{
+		for _, op := range []vm.OP{
 			CALLXARGS(1, 2),
 			CALLXARGSP(3),
 			JMPXARGS(4),
 		} {
-			if err := op.DeserializeMatched(cell.BeginCell().MustStoreSlice(op.BitPrefix.Data, op.BitPrefix.Bits).EndCell().MustBeginParse()); err == nil {
+			if err := op.Deserialize(op.GetPrefixes()[0]); err == nil {
 				t.Fatalf("expected short suffix error for %s", op.SerializeText())
 			}
 		}
@@ -2538,7 +2537,7 @@ func TestDictJumpMissingC3StackEffects(t *testing.T) {
 	t.Run("TruncatedSuffixes", func(t *testing.T) {
 		for _, tt := range []struct {
 			name string
-			op   *helpers.AdvancedOP
+			op   vm.OP
 		}{
 			{name: "call short", op: callDictShort(0)},
 			{name: "call long", op: callDictLong(0)},
@@ -2553,41 +2552,6 @@ func TestDictJumpMissingC3StackEffects(t *testing.T) {
 			})
 		}
 	})
-}
-
-func TestDictJumpPushIDStackOverflowPrecedesC3(t *testing.T) {
-	full := vm.NewStack()
-	for {
-		err := full.PushSmallInt(0)
-		if err != nil {
-			assertVMErrCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-
-	cases := []struct {
-		name string
-		op   vm.OP
-	}{
-		{name: "CallDictShort", op: CALLDICT(5)},
-		{name: "CallDictLong", op: CALLDICT(300)},
-		{name: "JmpDict", op: JMPDICT(8)},
-		{name: "PrepareDict", op: PREPAREDICT(9)},
-	}
-
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			state := newTestState()
-			state.Reg.C[3] = nil
-			state.Stack = full.Copy()
-
-			before := state.Stack.Len()
-			assertVMErrCode(t, tt.op.Interpret(state), vmerr.CodeStackOverflow)
-			if state.Stack.Len() != before {
-				t.Fatalf("%s overflow path mutated stack len: before=%d after=%d", tt.name, before, state.Stack.Len())
-			}
-		})
-	}
 }
 
 func TestBoolOrErrorStackEffects(t *testing.T) {

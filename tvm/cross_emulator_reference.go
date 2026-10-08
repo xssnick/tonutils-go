@@ -101,7 +101,7 @@ func runReferenceCrossMethodWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple
 	resSize := *(*C.uint32_t)(resPtr)
 	resData := C.GoBytes(unsafe.Pointer(uintptr(resPtr)+4), C.int(resSize))
 
-	resCell, err := cell.FromBOC(resData)
+	resCell, err := cell.FromBOCWithOptions(resData, cell.BOCParseOptions{AllowNonZeroLevelRoot: true})
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func runReferenceCrossCodeWithLibsAndGas(code, data *cell.Cell, c7 tuple.Tuple, 
 	resSize := *(*C.uint32_t)(resPtr)
 	resData := C.GoBytes(unsafe.Pointer(uintptr(resPtr)+4), C.int(resSize))
 
-	resCell, err := cell.FromBOC(resData)
+	resCell, err := cell.FromBOCWithOptions(resData, cell.BOCParseOptions{AllowNonZeroLevelRoot: true})
 	if err != nil {
 		return nil, err
 	}

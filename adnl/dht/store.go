@@ -170,7 +170,7 @@ func cloneValue(value *Value) *Value {
 				Name:  append([]byte{}, value.KeyDescription.Key.Name...),
 				Index: value.KeyDescription.Key.Index,
 			},
-			ID:         value.KeyDescription.ID,
+			ID:         clonePublicKey(value.KeyDescription.ID),
 			UpdateRule: value.KeyDescription.UpdateRule,
 			Signature:  append([]byte{}, value.KeyDescription.Signature...),
 		},

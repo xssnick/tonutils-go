@@ -276,6 +276,15 @@ func TestSliceRefParsingCarriesTraceWithoutCellClone(t *testing.T) {
 		t.Fatal("source leaf trace was mutated")
 	}
 
+	intoSource := root.MustBeginParse()
+	var into Slice
+	if err = intoSource.LoadRefInto(&into); err != nil {
+		t.Fatal(err)
+	}
+	if into.RawCell() != leaf || into.Trace() != childTrace || intoSource.RefsNum() != 0 {
+		t.Fatal("LoadRefInto cloned the cell, lost its trace, or did not advance")
+	}
+
 	preloadSource := root.MustBeginParse()
 	preloaded, err := preloadSource.PreloadRef()
 	if err != nil {
@@ -283,6 +292,20 @@ func TestSliceRefParsingCarriesTraceWithoutCellClone(t *testing.T) {
 	}
 	if preloadSource.RefsNum() != 1 || preloaded.cell != leaf {
 		t.Fatal("PreloadRef advanced or cloned the referenced cell")
+	}
+	var preloadedInto Slice
+	if err = preloadSource.PreloadRefInto(&preloadedInto); err != nil {
+		t.Fatal(err)
+	}
+	if preloadSource.RefsNum() != 1 || preloadedInto.RawCell() != leaf || preloadedInto.Trace() != childTrace {
+		t.Fatal("PreloadRefInto advanced, cloned, or lost the child trace")
+	}
+	peekedRaw, peekedTrace, err := preloadSource.PeekRefCellAtWithTrace(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if peekedRaw != leaf || peekedTrace != childTrace {
+		t.Fatal("PeekRefCellAtWithTrace cloned the cell or lost its trace")
 	}
 	cellView, err := preloadSource.LoadRefCell()
 	if err != nil {
@@ -300,9 +323,197 @@ func TestSliceRefParsingCarriesTraceWithoutCellClone(t *testing.T) {
 	if maybeLoaded.cell != leaf || maybeLoaded.Trace() != childTrace {
 		t.Fatal("LoadMaybeRef cloned the cell or lost its child trace")
 	}
+
+	maybeInto := BeginCell().MustStoreMaybeRef(leaf).EndCell().WithTrace(parentTrace).MustBeginParse()
+	var maybeDst Slice
+	has, err := maybeInto.LoadMaybeRefInto(&maybeDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has || maybeDst.RawCell() != leaf || maybeDst.Trace() != childTrace {
+		t.Fatal("LoadMaybeRefInto cloned the cell or lost its child trace")
+	}
+
+	emptyMaybe := BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse()
+	maybeDst = into
+	has, err = emptyMaybe.LoadMaybeRefInto(&maybeDst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has || maybeDst.RawCell() != nil || maybeDst.Trace() != nil {
+		t.Fatal("absent LoadMaybeRefInto did not reset the destination")
+	}
+
+	emptyMaybeBase := *BeginCell().MustStoreBoolBit(false).EndCell().MustBeginParse()
+	var maybeErr error
+	if allocs := testing.AllocsPerRun(1000, func() {
+		s := emptyMaybeBase
+		_, maybeErr = s.LoadMaybeRef()
+	}); allocs != 0 {
+		t.Fatalf("absent LoadMaybeRef allocated: %v", allocs)
+	}
+	if maybeErr != nil {
+		t.Fatal(maybeErr)
+	}
 }
 
-func TestSliceRefParsingCombinedAndUsageTraces(t *testing.T) {
+func TestSliceSubsliceIntoMatchesOwnedAPI(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	root := BeginCell().MustStoreUInt(0xAB, 8).MustStoreRef(ref).EndCell()
+	source := root.MustBeginParse()
+
+	want, err := source.PreloadSubslice(5, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Slice
+	if err = source.PreloadSubsliceInto(&got, 5, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got.BitsLeft() != want.BitsLeft() || got.RefsNum() != want.RefsNum() || got.MustPreloadUInt(5) != want.MustPreloadUInt(5) {
+		t.Fatal("PreloadSubsliceInto differs from PreloadSubslice")
+	}
+	if source.BitsLeft() != 8 || source.RefsNum() != 1 {
+		t.Fatal("PreloadSubsliceInto advanced the source")
+	}
+
+	if err = source.FetchSubsliceInto(&got, 5, 1); err != nil {
+		t.Fatal(err)
+	}
+	if source.BitsLeft() != 3 || source.RefsNum() != 0 {
+		t.Fatal("FetchSubsliceInto did not advance the source")
+	}
+
+	unchanged := got
+	if err = source.SubsliceInto(&got, 1, 0, 3, 0); err == nil {
+		t.Fatal("SubsliceInto accepted a range past the source end")
+	}
+	if got != unchanged {
+		t.Fatal("SubsliceInto changed the destination after an error")
+	}
+
+	alias := root.MustBeginParse()
+	if err = alias.SubsliceInto(alias, 2, 0, 4, 1); err != nil {
+		t.Fatal(err)
+	}
+	if alias.BitsLeft() != 4 || alias.RefsNum() != 1 || alias.MustPreloadUInt(4) != 0xA {
+		t.Fatal("SubsliceInto did not support an aliased destination")
+	}
+}
+
+func TestBuilderIntoAPIsMatchOwnedAPI(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xEE, 8).EndCell()
+	cell := BeginCell().MustStoreUInt(0xABCDE, 20).MustStoreRef(ref).EndCell()
+
+	var fromCell Builder
+	cell.ToBuilderInto(&fromCell)
+	if fromCell.EndCell().HashKey() != cell.ToBuilder().EndCell().HashKey() {
+		t.Fatal("Cell.ToBuilderInto differs from Cell.ToBuilder")
+	}
+
+	slice := cell.MustBeginParse()
+	if err := slice.SkipBits(3); err != nil {
+		t.Fatal(err)
+	}
+	var fromSlice Builder
+	slice.ToBuilderInto(&fromSlice)
+	if fromSlice.EndCell().HashKey() != slice.ToBuilder().EndCell().HashKey() {
+		t.Fatal("Slice.ToBuilderInto differs from Slice.ToBuilder")
+	}
+
+	var copied Builder
+	fromSlice.CopyInto(&copied)
+	if copied.EndCell().HashKey() != fromSlice.EndCell().HashKey() {
+		t.Fatal("Builder.CopyInto differs from Builder.Copy")
+	}
+
+	wantSelfCopy := fromSlice.EndCell().HashKey()
+	fromSlice.CopyInto(&fromSlice)
+	if fromSlice.EndCell().HashKey() != wantSelfCopy {
+		t.Fatal("Builder.CopyInto corrupted an aliased destination")
+	}
+}
+
+func TestBuilderStoreSliceFromPreservesSourceCursor(t *testing.T) {
+	ref := BeginCell().MustStoreUInt(0xCC, 8).EndCell()
+	source := BeginCell().
+		MustStoreUInt(0xAB, 8).
+		MustStoreRef(ref).
+		EndCell().MustBeginParse()
+	bitsBefore, refsBefore := source.BitsLeft(), source.RefsNum()
+
+	var dst Builder
+	if err := dst.StoreSliceFrom(source); err != nil {
+		t.Fatal(err)
+	}
+	if source.BitsLeft() != bitsBefore || source.RefsNum() != refsBefore {
+		t.Fatalf("source cursor changed: bits=%d/%d refs=%d/%d",
+			source.BitsLeft(), bitsBefore, source.RefsNum(), refsBefore)
+	}
+
+	stored := dst.EndCell().MustBeginParse()
+	if got := stored.MustLoadUInt(8); got != 0xAB {
+		t.Fatalf("stored bits = %x, want ab", got)
+	}
+	gotRef, err := stored.PeekRefCell()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRef.HashKey() != ref.HashKey() {
+		t.Fatal("stored reference changed")
+	}
+}
+
+func TestBuilderStoreSliceFromBitOffsets(t *testing.T) {
+	lengths := []uint{0, 1, 2, 7, 8, 9, 31, 32, 63, 64, 65, 127, 128, 255, 256, 511, 768, 1015}
+
+	for sourceOffset := uint(0); sourceOffset < 8; sourceOffset++ {
+		for destinationOffset := uint(0); destinationOffset < 8; destinationOffset++ {
+			for _, bits := range lengths {
+				if sourceOffset+bits >= 1024 || destinationOffset+bits >= 1024 {
+					continue
+				}
+
+				payload := make([]byte, (bits+7)/8)
+				for i := range payload {
+					payload[i] = byte(i*73 + int(sourceOffset)*29 + int(destinationOffset)*11 + int(bits))
+				}
+
+				sourceCell := BeginCell().MustStoreUInt(0, sourceOffset).MustStoreSlice(payload, bits).EndCell()
+				source := sourceCell.MustBeginParse()
+				if err := source.SkipBits(sourceOffset); err != nil {
+					t.Fatal(err)
+				}
+
+				var got Builder
+				got.MustStoreUInt(0, destinationOffset)
+				gotSource := *source
+				if err := got.storeSliceFromSlice(&gotSource, bits); err != nil {
+					t.Fatalf("direct copy failed at offsets=%d/%d bits=%d: %v", sourceOffset, destinationOffset, bits, err)
+				}
+				if gotSource.BitsLeft() != source.BitsLeft()-bits {
+					t.Fatalf("source cursor mismatch at offsets=%d/%d bits=%d", sourceOffset, destinationOffset, bits)
+				}
+
+				var want Builder
+				want.MustStoreUInt(0, destinationOffset)
+				var copied [maxCellDataBytes]byte
+				if err := source.PreloadSliceInto(copied[:], bits); err != nil {
+					t.Fatal(err)
+				}
+				if err := want.StoreSlice(copied[:], bits); err != nil {
+					t.Fatal(err)
+				}
+
+				if got.bitsSz != want.bitsSz || !bytes.Equal(got.dataSlice(), want.dataSlice()) {
+					t.Fatalf("copy mismatch at offsets=%d/%d bits=%d: got=%x want=%x", sourceOffset, destinationOffset, bits, got.dataSlice(), want.dataSlice())
+				}
+			}
+		}
+	}
+}
+
+func TestSliceRefParsingCombinedAndReadSetTraces(t *testing.T) {
 	loadsA, loadsB := 0, 0
 	childA := NewTrace(TraceHooks{OnLoad: func(*Cell) { loadsA++ }})
 	childB := NewTrace(TraceHooks{OnLoad: func(*Cell) { loadsB++ }})
@@ -320,24 +531,34 @@ func TestSliceRefParsingCombinedAndUsageTraces(t *testing.T) {
 		t.Fatalf("combined child trace was not notified: a=%d b=%d", loadsA, loadsB)
 	}
 
-	tree := NewCellUsageTree()
-	lazyRoot := cellWithLazyRefsFromCell(
+	lazySource := cellWithLazyRefsFromCell(
 		BeginCell().MustStoreRef(leaf).EndCell(),
 		func(Hash) (*Cell, error) { return leaf, nil },
-	).WithTrace(tree.RootTrace())
-	lazyLoaded, err := lazyRoot.MustBeginParse().LoadRef()
+	)
+	read := NewReadSet(lazySource)
+	lazyLoaded, err := read.Root().MustBeginParse().LoadRef()
 	if err != nil {
 		t.Fatal(err)
 	}
-	childNode := tree.GetChild(tree.RootNode(), 0)
-	if childNode == 0 || !tree.IsLoaded(childNode) {
-		t.Fatal("lazy child was not recorded in the usage tree")
+	recordedChild, ok := read.Contains(leaf.HashKey())
+	if !ok {
+		t.Fatal("lazy child was not recorded")
 	}
 	if lazyLoaded.cell != leaf || lazyLoaded.cell.Trace() != nil {
 		t.Fatal("lazy parse path cloned the loaded cell")
 	}
-	if node, ok := tree.NodeForCell(lazyLoaded.BaseCell()); !ok || node != childNode {
-		t.Fatalf("BaseCell lost usage node identity: got=%d want=%d ok=%v", node, childNode, ok)
+	// BaseCell hands back the parsed cell re-wrapped with the slice's trace, so the
+	// identity the node lookup checked is now two facts: the cell under the wrapper
+	// is the very one that was recorded, and the wrapper still records.
+	base := lazyLoaded.BaseCell()
+	if base.HashKey() != leaf.HashKey() {
+		t.Fatalf("BaseCell hash %x, want %x", base.Hash(), leaf.Hash())
+	}
+	if recordedChild != lazyLoaded.cell {
+		t.Fatal("the recorded child is not the cell the slice carries")
+	}
+	if base.Trace() == nil {
+		t.Fatal("BaseCell dropped the recording trace")
 	}
 }
 

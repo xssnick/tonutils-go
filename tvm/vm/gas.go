@@ -5,7 +5,7 @@ import "github.com/xssnick/tonutils-go/tvm/vmerr"
 // Gas prices constants.
 const (
 	GasInfinite               int64 = 1<<63 - 1
-	MaxSupportedGlobalVersion       = 15
+	MaxSupportedGlobalVersion       = 17
 
 	CellLoadGasPrice           = 100
 	CellReloadGasPrice         = 25
@@ -110,11 +110,19 @@ func NewGas(cfg ...GasConfig) Gas {
 }
 
 func GasWithLimit(limit int64, max ...int64) Gas {
-	cfg := GasConfig{Limit: limit}
-	if len(max) > 0 {
-		cfg.Max = max[0]
+	maxLimit := int64(GasInfinite)
+	if len(max) > 0 && max[0] != 0 {
+		maxLimit = max[0]
 	}
-	return NewGas(cfg)
+	if limit > maxLimit {
+		limit = maxLimit
+	}
+	return Gas{
+		Max:       maxLimit,
+		Limit:     limit,
+		Base:      limit,
+		Remaining: limit,
+	}
 }
 
 func (g *Gas) SetLimits(max, limit int64, credit ...int64) {
@@ -148,6 +156,9 @@ func (g *Gas) ChangeLimit(limit int64) {
 }
 
 func (g *Gas) Consume(amount int64) error {
+	if amount < 0 {
+		return vmerr.Error(vmerr.CodeRangeCheck, "negative gas amount")
+	}
 	g.Remaining -= amount
 	if g.Remaining < 0 {
 		return vmerr.Error(vmerr.CodeOutOfGas)
@@ -171,9 +182,13 @@ func (g *Gas) FlushFree() error {
 		return nil
 	}
 
-	amt := g.FreeConsumed
+	// A failed isolated RUNVM flush leaves deferred gas for the outer VM.
+	if err := g.Consume(g.FreeConsumed); err != nil {
+		return err
+	}
+
 	g.FreeConsumed = 0
-	return g.Consume(amt)
+	return nil
 }
 
 func (g *Gas) Used() int64 {

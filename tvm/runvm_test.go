@@ -41,8 +41,8 @@ type runVMFailedDataActionsResult struct {
 	parentExit  int64
 	childExit   int64
 	exception   int64
-	data        *cell.Cell
-	actions     *cell.Cell
+	data        any
+	actions     any
 	restStackSz int
 }
 
@@ -76,12 +76,22 @@ func runRunVMFailedDataActions(t *testing.T, version int, dynamicMode bool, init
 	}
 
 	stack := res.Stack
-	out.actions = popMaybeCell(t, stack)
-	out.data = popMaybeCell(t, stack)
+	out.actions = popAnyValue(t, stack)
+	out.data = popAnyValue(t, stack)
 	out.childExit = popInt64(t, stack)
 	out.exception = popInt64(t, stack)
 	out.restStackSz = stack.Len()
 	return out
+}
+
+func popAnyValue(t *testing.T, stack *vmcore.Stack) any {
+	t.Helper()
+
+	val, err := stack.PopAny()
+	if err != nil {
+		t.Fatalf("failed to pop value: %v", err)
+	}
+	return val
 }
 
 func assertRunVMFailedDataActionsGlobalVersion(t *testing.T, version int, dynamicMode bool, initialData *cell.Cell) {
@@ -109,15 +119,15 @@ func assertRunVMFailedDataActionsGlobalVersion(t *testing.T, version int, dynami
 		t.Fatalf("%s v%d left %d extra stack items", name, version, res.restStackSz)
 	}
 
+	// a child that never committed returns null at v11+ and the degenerate
+	// committed-state cell (a cell entry holding a null reference) below v11 —
+	// never its live c4/c5 registers
 	if version < 11 {
-		if res.data == nil {
-			t.Fatalf("%s v%d data = nil, want current child c4", name, version)
+		if data, ok := res.data.(*cell.Cell); !ok || data != nil {
+			t.Fatalf("%s v%d data = %T %v, want typed null cell", name, version, res.data, res.data)
 		}
-		if !bytes.Equal(res.data.Hash(), initialData.Hash()) {
-			t.Fatalf("%s v%d data hash mismatch", name, version)
-		}
-		if res.actions == nil {
-			t.Fatalf("%s v%d actions = nil, want current child c5", name, version)
+		if actions, ok := res.actions.(*cell.Cell); !ok || actions != nil {
+			t.Fatalf("%s v%d actions = %T %v, want typed null cell", name, version, res.actions, res.actions)
 		}
 		return
 	}

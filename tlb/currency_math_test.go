@@ -67,8 +67,7 @@ func TestCurrencyCollectionAddNilExtraReusesOtherSide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// C++ add_extra_currency returns the other dict as is when one side is null
-	// (block.cpp:1775-1785): same root object, no re-serialization
+	// An empty operand does not require rebuilding the other dictionary.
 	if sum.ExtraCurrencies != extra {
 		t.Fatal("expected the non-empty side dictionary to be reused as is")
 	}
@@ -122,6 +121,28 @@ func TestCurrencyCollectionAddBigValues(t *testing.T) {
 	}
 }
 
+func TestCurrencyCollectionAddInvalidCollisionDoesNotMutateInput(t *testing.T) {
+	leftExtra := mustExtraDict(t, map[uint32]int64{1: 10, 2: 20})
+	rightExtra := mustExtraDict(t, map[uint32]int64{3: 30})
+	if err := rightExtra.SetIntKey(big.NewInt(1), cell.BeginCell().MustStoreUInt(0, 5).EndCell()); err != nil {
+		t.Fatal(err)
+	}
+	left := ccFromNano(100, leftExtra)
+	right := ccFromNano(200, rightExtra)
+	beforeRoot := leftExtra.AsCell()
+	beforeHash := beforeRoot.HashKey()
+
+	if _, err := left.Add(right); err == nil {
+		t.Fatal("addition with an invalid colliding value succeeded")
+	}
+	if leftExtra.AsCell() != beforeRoot || leftExtra.AsCell().HashKey() != beforeHash {
+		t.Fatal("failed addition mutated the left extra-currency dictionary")
+	}
+	if got := extraAmount(t, leftExtra, 1); got.Int64() != 10 {
+		t.Fatalf("left input value changed after failed addition: %s", got)
+	}
+}
+
 func TestCurrencyCollectionSubUnderflow(t *testing.T) {
 	// grams underflow
 	_, err := ccFromNano(5, nil).Sub(ccFromNano(6, nil))
@@ -143,8 +164,7 @@ func TestCurrencyCollectionSubUnderflow(t *testing.T) {
 		t.Fatalf("expected missing-key underflow, got %v", err)
 	}
 
-	// nil minuend extra with non-empty subtrahend extra
-	// (C++ sub_extra_currency fails, block.cpp:1790-1792)
+	// An empty minuend cannot cover a non-empty subtrahend.
 	e := ccFromNano(100, nil)
 	f := ccFromNano(1, mustExtraDict(t, map[uint32]int64{2: 1}))
 	if _, err = e.Sub(f); !errors.Is(err, ErrCurrencyCollectionUnderflow) {
@@ -233,7 +253,7 @@ func TestCurrencyCollectionEquals(t *testing.T) {
 		t.Fatal("identical collections must be equal")
 	}
 
-	// empty dict object equals nil dict (both are the C++ null root)
+	// Empty and absent dictionaries encode the same collection.
 	c := ccFromNano(5, cell.NewDict(32))
 	d := ccFromNano(5, nil)
 	if !c.Equals(d) || !d.Equals(c) {
@@ -276,8 +296,7 @@ func TestCurrencyCollectionMainnetRoundTrip(t *testing.T) {
 	}
 	mustCellHashEqual(t, "mainnet CurrencyCollection round-trip", serialized, rootExtraCell)
 
-	// summing every per-account fee extra with Add must reproduce the mainnet
-	// root value exactly (same fold the C++ fork evaluation performs)
+	// Summing every per-account fee extra must reproduce the root value.
 	items, err := accounts.RangeExtra(false, false)
 	if err != nil {
 		t.Fatal(err)

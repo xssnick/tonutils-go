@@ -1,12 +1,15 @@
 package cell
 
-import "fmt"
+import (
+	"fmt"
+	"math/big"
+)
 
 func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 	if d == nil {
 		return []DictItem{}, nil
 	}
-	items, err := fixedDictRange(d.root, d.keySz, rev, sgnd)
+	items, err := fixedDictRange(d.tracedRoot(), d.keySz, rev, sgnd, dictWalk{})
 	if err != nil {
 		return nil, err
 	}
@@ -17,9 +20,9 @@ func (d *Dictionary) Range(rev bool, sgnd bool) ([]DictItem, error) {
 // fails after construction, Next returns false and Err reports that failure.
 func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIterator(d.root, d.keySz, rev, sgnd, d.trace)
+	return newDictIterator(d.root, d.keySz, rev, sgnd, dictWalk{trace: d.trace})
 }
 
 // IteratorAt creates a lazy iterator positioned at the nearest key to `key`
@@ -28,9 +31,45 @@ func (d *Dictionary) Iterator(rev bool, sgnd bool) (*DictIterator, error) {
 // Reset rewinds to the full range, not to the seek position.
 func (d *Dictionary) IteratorAt(key *Cell, rev bool, sgnd bool, allowEq bool) (*DictIterator, error) {
 	if d == nil {
-		return newDictIterator(nil, 0, rev, sgnd, nil)
+		return newDictIterator(nil, 0, rev, sgnd, dictWalk{})
 	}
-	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, d.trace)
+	return newDictIteratorAt(d.root, d.keySz, key, rev, sgnd, allowEq, dictWalk{trace: d.trace})
+}
+
+// ForEachBorrowed visits every item in iterator order without materializing a
+// key Cell or an owned value Slice per leaf. Each item is valid only for the
+// duration of its callback; it must not be retained, nor read through RawCell:
+// that hands out the iterator's scratch key cell.
+func (d *Dictionary) ForEachBorrowed(rev bool, sgnd bool, fn DictBorrowedForeachFunc) error {
+	if fn == nil {
+		return nil
+	}
+	it, err := d.Iterator(rev, sgnd)
+	if err != nil {
+		return err
+	}
+	for it.Next() {
+		if err = fn(it.View()); err != nil {
+			return err
+		}
+	}
+	return it.Err()
+}
+
+// ForEachRefValue visits every leaf of a dictionary whose values are exactly
+// one reference. It validates the complete dictionary shape and returns the
+// number of visited leaves without materializing keys or value slices.
+func (d *Dictionary) ForEachRefValue(fn func(value *Cell) error) (int, error) {
+	if d == nil {
+		return 0, nil
+	}
+	if err := validateDictKeySize(d.keySz); err != nil {
+		return 0, err
+	}
+	if d.root == nil {
+		return 0, nil
+	}
+	return forEachPlainDictRefValue(d.root.withTraceCombined(d.trace), d.keySz, fn, nil)
 }
 
 func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
@@ -41,14 +80,40 @@ func (d *Dictionary) LookupNearestKey(key *Cell, fetchNext bool, allowEq bool, i
 		return nil, nil, fmt.Errorf("incorrect key size")
 	}
 
-	return fixedDictLookupNearestTraced(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, d.trace)
+	return fixedDictLookupNearest(d.root, d.keySz, key, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
+}
+
+// LookupNearestKeyBySlice is LookupNearestKey using the first key-size
+// remaining bits of key directly.
+func (d *Dictionary) LookupNearestKeyBySlice(key *Slice, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
+	if d == nil || d.root == nil {
+		return nil, nil, ErrNoSuchKeyInDict
+	}
+	target, err := fixedDictKeySlice(key, d.keySz)
+	if err != nil {
+		return nil, nil, err
+	}
+	return fixedDictLookupNearestSlice(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
+}
+
+// LookupNearestKeyByInt is LookupNearestKey using stack-local integer key
+// storage.
+func (d *Dictionary) LookupNearestKeyByInt(key *big.Int, fetchNext bool, allowEq bool, invertFirst bool) (*Cell, *Slice, error) {
+	if d == nil || d.root == nil {
+		return nil, nil, ErrNoSuchKeyInDict
+	}
+	var builder Builder
+	initIntKeyBuilder(key, d.keySz, &builder)
+	keyCell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	target := Slice{cell: &keyCell, bitEnd: keyCell.bitsSz}
+	return fixedDictLookupNearestSlice(d.root, d.keySz, &target, fetchNext, allowEq, invertFirst, dictWalk{trace: d.trace})
 }
 
 func (d *Dictionary) HasCommonPrefix(prefix *Cell) (bool, error) {
 	if d == nil {
 		return true, nil
 	}
-	return fixedDictHasCommonPrefix(d.root, d.keySz, prefix)
+	return fixedDictHasCommonPrefix(d.tracedRoot(), d.keySz, prefix, dictWalk{})
 }
 
 func (d *Dictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
@@ -59,19 +124,16 @@ func (d *Dictionary) GetCommonPrefix(limit ...uint) (*Cell, error) {
 	if len(limit) > 0 && limit[0] < maxLen {
 		maxLen = limit[0]
 	}
-	return fixedDictCommonPrefix(d.root, d.keySz, maxLen)
+	return fixedDictCommonPrefix(d.tracedRoot(), d.keySz, maxLen, dictWalk{})
 }
 
 func (d *Dictionary) ExtractPrefixSubdictRoot(prefix *Cell, removePrefix bool) (*Cell, error) {
 	if d == nil {
 		return nil, nil
 	}
-	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, _, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace})
 	if err != nil {
 		return nil, err
-	}
-	if !changed {
-		return d.root, nil
 	}
 	return root, nil
 }
@@ -84,12 +146,61 @@ func (d *Dictionary) CutPrefixSubdict(prefix *Cell, removePrefix bool) (bool, er
 		return false, nil
 	}
 
-	root, changed, err := extractPrefixSubdictRootTraced(d.root, d.keySz, prefix, removePrefix, d.trace)
+	root, changed, err := extractPrefixSubdictRoot(d.root, d.keySz, prefix, removePrefix, dictWalk{trace: d.trace})
 	if err != nil {
 		return false, err
 	}
 	if removePrefix && prefix != nil && prefix.BitsSize() <= d.keySz {
 		d.keySz -= prefix.BitsSize()
+	}
+	if changed {
+		d.setRoot(root)
+	}
+	return true, nil
+}
+
+// CutPrefixSubdictBySlice is CutPrefixSubdict using all remaining prefix bits
+// directly, without materializing a prefix cell.
+func (d *Dictionary) CutPrefixSubdictBySlice(prefix *Slice, removePrefix bool) (bool, error) {
+	if d == nil {
+		return true, nil
+	}
+
+	var prefixView Slice
+	if prefix != nil {
+		prefixView = *prefix
+		prefixView.refEnd = prefixView.refStart
+		prefixView.trace = nil
+	}
+	return d.cutPrefixSubdictBySlice(prefixView, removePrefix)
+}
+
+// CutPrefixSubdictByInt is CutPrefixSubdict using a prefixBits-wide integer
+// representation without finalizing and hashing an intermediate prefix cell.
+func (d *Dictionary) CutPrefixSubdictByInt(prefix *big.Int, prefixBits uint, removePrefix bool) (bool, error) {
+	if d == nil {
+		return true, nil
+	}
+
+	var builder Builder
+	initIntKeyBuilder(prefix, prefixBits, &builder)
+	prefixCell := Cell{data: builder.data[:builder.usedBytes()], bitsSz: uint16(builder.bitsSz)}
+	prefixView := Slice{cell: &prefixCell, bitEnd: prefixCell.bitsSz}
+	return d.cutPrefixSubdictBySlice(prefixView, removePrefix)
+}
+
+func (d *Dictionary) cutPrefixSubdictBySlice(prefix Slice, removePrefix bool) (bool, error) {
+	prefixLen := prefix.BitsLeft()
+	if prefixLen > d.keySz && removePrefix {
+		return false, nil
+	}
+
+	root, changed, err := extractPrefixSubdictRootSlice(d.root, d.keySz, prefix, removePrefix, nil, dictWalk{trace: d.trace})
+	if err != nil {
+		return false, err
+	}
+	if removePrefix && prefixLen <= d.keySz {
+		d.keySz -= prefixLen
 	}
 	if changed {
 		d.setRoot(root)
@@ -121,7 +232,7 @@ func (d *Dictionary) CheckForEach(fn DictForeachFunc, invertFirst bool, shuffle 
 		}
 		return true, nil
 	}
-	items, err := fixedDictRange(d.root, d.keySz, false, invertFirst)
+	items, err := fixedDictRange(d.tracedRoot(), d.keySz, false, invertFirst, dictWalk{})
 	if err != nil {
 		return false, err
 	}
@@ -149,7 +260,7 @@ func (d *Dictionary) Filter(fn DictFilterFunc) (int, error) {
 	if d == nil || d.root == nil {
 		return 0, nil
 	}
-	root, changes, err := fixedDictFilter(d.root, d.keySz, fn, d.trace)
+	root, changes, err := fixedDictFilter(d.root, d.keySz, fn, dictWalk{trace: d.trace})
 	if err != nil {
 		return 0, err
 	}

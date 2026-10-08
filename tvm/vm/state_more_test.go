@@ -25,6 +25,33 @@ func makeStateWithParams(t *testing.T, params ...any) *State {
 	return NewExecutionState(MaxSupportedGlobalVersion, NewGas(GasConfig{Max: 1_000, Limit: 1_000}), cell.BeginCell().EndCell(), makeStateC7WithParams(inner), NewStack())
 }
 
+func TestStateParamTupleRejectsTypedNullReferences(t *testing.T) {
+	assertTypeCheck := func(t *testing.T, err error) {
+		t.Helper()
+		if code, ok := vmerr.ErrorCode(err); !ok || code != vmerr.CodeTypeCheck {
+			t.Fatalf("error = %v (code %d, %t), want type check", err, code, ok)
+		}
+	}
+
+	t.Run("params", func(t *testing.T) {
+		state := NewExecutionState(MaxSupportedGlobalVersion, NewGas(), nil,
+			tuple.NewTupleValue(tuple.Tuple{}), NewStack())
+		_, err := state.GetParam(0)
+		assertTypeCheck(t, err)
+	})
+
+	t.Run("unpacked config", func(t *testing.T) {
+		params := tuple.NewTupleSized(15)
+		if err := params.Set(14, tuple.Tuple{}); err != nil {
+			t.Fatal(err)
+		}
+		state := NewExecutionState(MaxSupportedGlobalVersion, NewGas(), nil,
+			makeStateC7WithParams(params), NewStack())
+		_, err := state.GetUnpackedConfigTuple()
+		assertTypeCheck(t, err)
+	})
+}
+
 func TestNewExecutionStateKeepsExplicitZero(t *testing.T) {
 	explicitZero := NewExecutionState(0, NewGas(), nil, tuple.Tuple{}, NewStack())
 	explicitZero.InitForExecution()
@@ -384,7 +411,7 @@ func consumeVersionedGasFuzzEntry(state *State, entrypoint uint8, amount int64) 
 func TestChildVMHelpersAndForceControlData(t *testing.T) {
 	t.Run("PrimitiveHelpers", func(t *testing.T) {
 		parent := NewStack()
-		if err := pushMaybeCell(parent, nil); err != nil {
+		if err := parent.PushMaybeCell(nil); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := parent.PopAny(); err != nil || got != nil {
@@ -392,7 +419,7 @@ func TestChildVMHelpersAndForceControlData(t *testing.T) {
 		}
 
 		cl := cell.BeginCell().MustStoreUInt(0xAA, 8).EndCell()
-		if err := pushMaybeCell(parent, cl); err != nil {
+		if err := parent.PushMaybeCell(cl); err != nil {
 			t.Fatal(err)
 		}
 		popped, err := parent.PopCell()

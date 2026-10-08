@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
@@ -131,7 +130,7 @@ func TestMulRShiftDynamicWideAndRoundingEdges(t *testing.T) {
 func TestMulRShiftCodeErrorEdges(t *testing.T) {
 	for _, op := range []struct {
 		name   string
-		op     *helpers.AdvancedOP
+		op     vm.OP
 		prefix uint64
 		text   string
 	}{

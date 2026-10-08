@@ -225,7 +225,6 @@ func assertExecutionProofLibrariesGlobalVersion(t *testing.T, version int, stack
 			t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.exitCode)
 		}
 		assertCrossSkippedGoStack(t, goRes.stack, []any{stackValue})
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))
@@ -282,7 +281,6 @@ func assertExecutionProofLibrariesGlobalVersionOverride(t *testing.T, version, m
 			t.Fatalf("unexpected go exit code: got=%d expected=0", goRes.exitCode)
 		}
 		assertCrossSkippedGoStack(t, goRes.stack, []any{stackValue})
-		t.Skip("bundled reference emulator predates upstream v9 direct startup library code loading")
 	}
 
 	refCfg := tonopsCrossRefConfig(tonopsCrossConfigWithGlobalVersion(t, uint32(version)))

@@ -533,7 +533,10 @@ func runRawCodeWithGas(code *cell.Cell, gasLimit int64, values ...any) (*vmcore.
 		}
 	}
 
-	res, err := NewTVM().Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(gasLimit), stack, mustTestExecutionConfig())
+	// The upstream crypto/test/vm.cpp regression harness constructs
+	// GasLimits(limit, limit), so ACCEPT must not raise this test budget to the
+	// default infinite max.
+	res, err := NewTVM().Execute(code, cell.BeginCell().EndCell(), tuple.Tuple{}, vmcore.GasWithLimit(gasLimit, gasLimit), stack, mustTestExecutionConfig())
 	return stack, res, err
 }
 

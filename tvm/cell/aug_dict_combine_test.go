@@ -14,16 +14,16 @@ func (readOnlyTestAugmentation) SkipExtra(loader *Slice) error {
 	return err
 }
 
-func (readOnlyTestAugmentation) EmptyExtra() (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (readOnlyTestAugmentation) EmptyExtra(*Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
-func (readOnlyTestAugmentation) LeafExtra(value *Slice) (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (readOnlyTestAugmentation) LeafExtra(*Slice, *Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
-func (readOnlyTestAugmentation) CombineExtra(leftExtra, rightExtra *Slice) (*Cell, error) {
-	return nil, ErrAugmentationSemanticsUnavailable
+func (readOnlyTestAugmentation) CombineExtra(*Slice, *Slice, *Builder) error {
+	return ErrAugmentationSemanticsUnavailable
 }
 
 func TestAugmentedDictionaryCombineEmpty(t *testing.T) {

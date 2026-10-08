@@ -1,6 +1,7 @@
 package cell
 
 import (
+	"bytes"
 	"encoding/binary"
 	"github.com/xssnick/tonutils-go/address"
 	"math/big"
@@ -31,6 +32,105 @@ func (b *Builder) dataSlice() []byte {
 
 func (b *Builder) rawRefs() []*Cell {
 	return b.refs[:b.refsNum:b.refsNum]
+}
+
+// EqualsCell reports whether the builder currently holds exactly c: the same
+// bits and the same references. References are compared by pointer first and by
+// hash only when the pointers differ, so a subtree that was carried over
+// unchanged costs nothing to compare.
+//
+// It exists so a caller can check "does this builder reproduce that cell"
+// without EndCell()+Hash(), which would hash every inlined byte just to throw
+// the result away.
+func (b *Builder) EqualsCell(c *Cell) bool {
+	if c == nil {
+		return false
+	}
+	loaded, err := c.load()
+	if err != nil || loaded == nil {
+		return false
+	}
+	if b.bitsSz != uint(loaded.bitsSz) || int(b.refsNum) != loaded.refsCount() {
+		return false
+	}
+
+	used := b.usedBytes()
+	if len(loaded.data) < used {
+		return false
+	}
+	if used > 0 {
+		last := used - 1
+		if !bytes.Equal(b.data[:last], loaded.data[:last]) {
+			return false
+		}
+		// The trailing byte may carry unused low bits; compare only the
+		// significant ones, exactly as ToBuilder masks them.
+		mask := byte(0xFF)
+		if rem := b.bitsSz % 8; rem != 0 {
+			mask = byte(0xFF << (8 - rem))
+		}
+		if b.data[last]&mask != loaded.data[last]&mask {
+			return false
+		}
+	}
+
+	for i, ref := range b.rawRefs() {
+		other := loaded.refs[i]
+		if ref == other {
+			continue
+		}
+		if ref == nil || other == nil || ref.HashKey() != other.HashKey() {
+			return false
+		}
+	}
+	return true
+}
+
+// equalsSlice is EqualsCell against a window into an existing cell. A caller
+// that already holds the stored bits as a view uses it instead of cutting a
+// cell out of them just to have something to compare against. buf carries the
+// realigned stored bits; it belongs to the caller so the comparison itself
+// allocates nothing.
+func (b *Builder) equalsSlice(s *Slice, buf *[maxCellDataBytes]byte) bool {
+	if s == nil {
+		return false
+	}
+	if b.bitsSz != s.BitsLeft() || int(b.refsNum) != s.RefsNum() {
+		return false
+	}
+
+	if used := b.usedBytes(); used > 0 {
+		if err := s.PreloadSliceInto(buf[:], b.bitsSz); err != nil {
+			return false
+		}
+		last := used - 1
+		if !bytes.Equal(b.data[:last], buf[:last]) {
+			return false
+		}
+		// The trailing byte may carry unused low bits; compare only the
+		// significant ones, exactly as EqualsCell does.
+		mask := byte(0xFF)
+		if rem := b.bitsSz % 8; rem != 0 {
+			mask = byte(0xFF << (8 - rem))
+		}
+		if b.data[last]&mask != buf[last]&mask {
+			return false
+		}
+	}
+
+	for i, ref := range b.rawRefs() {
+		other, err := s.peekRefCellAt(i)
+		if err != nil || ref == nil || other == nil {
+			return false
+		}
+		if ref == other {
+			continue
+		}
+		if ref.HashKey() != other.HashKey() {
+			return false
+		}
+	}
+	return true
 }
 
 func validateCellRefDepthLimit(refs []*Cell) error {
@@ -394,6 +494,39 @@ func (b *Builder) StoreBigInt(value *big.Int, sz uint) error {
 		return ErrNilBigInt
 	}
 
+	if sz > 257 {
+		return ErrTooBigSize
+	}
+	if sz == 0 {
+		if value.Sign() != 0 {
+			return ErrTooBigValue
+		}
+		return nil
+	}
+	if value.Sign() >= 0 {
+		// signed sz-bit range tops out at 2^(sz-1)-1
+		if value.BitLen() > int(sz-1) {
+			return ErrTooBigValue
+		}
+		return b.storeBig(value, sz)
+	}
+	if !fitsNegativeBigInt(value, sz) {
+		return ErrTooBigValue
+	}
+
+	encoded := new(big.Int).Lsh(bigIntOne, sz)
+	encoded.Add(encoded, value)
+	return b.storeBig(encoded, sz)
+}
+
+// storeBigIntWrap stores the low sz bits of value in two's complement while
+// accepting the full unsigned magnitude range (BitLen up to sz). Dictionary
+// integer keys keep this wider historical contract; StoreBigInt itself
+// enforces the signed range.
+func (b *Builder) storeBigIntWrap(value *big.Int, sz uint) error {
+	if value == nil {
+		return ErrNilBigInt
+	}
 	if sz > 257 {
 		return ErrTooBigSize
 	}
@@ -781,10 +914,6 @@ func (b *Builder) storeMaybeRef(ref *Cell, checkDepth bool) error {
 		return b.StoreUInt(0, 1)
 	}
 
-	// Keep these checks before storing the presence bit, so the method is atomic.
-	if b.refsNum >= 4 {
-		return ErrTooMuchRefs
-	}
 	if b.bitsSz+1 >= 1024 {
 		return ErrNotFit1023
 	}
@@ -794,6 +923,11 @@ func (b *Builder) storeMaybeRef(ref *Cell, checkDepth bool) error {
 
 	if err := b.StoreUInt(1, 1); err != nil {
 		return err
+	}
+	// C++ store_maybe_ref commits the presence bit before attempting to store
+	// the reference. Preserve that failure-state behavior on ref overflow.
+	if b.refsNum >= 4 {
+		return ErrTooMuchRefs
 	}
 	b.refs[b.refsNum] = ref
 	b.refsNum++
@@ -890,12 +1024,140 @@ func (b *Builder) StoreSlice(bytes []byte, sz uint) error {
 	return nil
 }
 
+// appendBitRange appends a bit window without first realigning it into a
+// temporary buffer. Both offsets stay constant modulo eight while complete
+// bytes are consumed, which lets the common long path move 64 bits at a time.
+func appendBitRange(dst []byte, dstBitOffset uint, data []byte, bitOffset, sz uint) {
+	srcByte := int(bitOffset / 8)
+	srcShift := bitOffset % 8
+	dstByte := int(dstBitOffset / 8)
+	dstShift := dstBitOffset % 8
+	left := sz
+
+	if srcShift == 0 && dstShift == 0 {
+		bytesNeeded := int((sz + 7) / 8)
+		copy(dst[dstByte:dstByte+bytesNeeded], data[srcByte:srcByte+bytesNeeded])
+		left = 0
+	}
+
+	for left >= 64 {
+		var value uint64
+		if srcShift == 0 {
+			value = binary.BigEndian.Uint64(data[srcByte:])
+		} else {
+			value = binary.BigEndian.Uint64(data[srcByte:])<<srcShift |
+				uint64(data[srcByte+8])>>(8-srcShift)
+		}
+
+		if dstShift == 0 {
+			binary.BigEndian.PutUint64(dst[dstByte:], value)
+		} else {
+			dst[dstByte] |= byte(value >> (56 + dstShift))
+			binary.BigEndian.PutUint64(dst[dstByte+1:], value<<(8-dstShift))
+		}
+
+		srcByte += 8
+		dstByte += 8
+		left -= 64
+	}
+
+	for left > 0 {
+		value := data[srcByte] << srcShift
+		if srcShift != 0 && srcByte+1 < len(data) {
+			value |= data[srcByte+1] >> (8 - srcShift)
+		}
+
+		if dstShift == 0 {
+			dst[dstByte] = value
+		} else {
+			dst[dstByte] |= value >> dstShift
+			if left > 8-dstShift {
+				dst[dstByte+1] = value << (8 - dstShift)
+			}
+		}
+
+		if left <= 8 {
+			break
+		}
+		srcByte++
+		dstByte++
+		left -= 8
+	}
+
+	if end := dstBitOffset + sz; end%8 != 0 {
+		dst[end/8] &= byte(0xFF << (8 - end%8))
+	}
+}
+
+func (b *Builder) storeBitRange(data []byte, bitOffset, sz uint) error {
+	if sz == 0 {
+		return nil
+	}
+	if b.bitsSz+sz >= 1024 {
+		return ErrNotFit1023
+	}
+	if bitOffset+sz > uint(len(data))*8 {
+		return ErrSmallSlice
+	}
+
+	appendBitRange(b.data[:], b.bitsSz, data, bitOffset, sz)
+	b.bitsSz += sz
+	return nil
+}
+
 func (b *Builder) storeSliceFromSlice(slice *Slice, sz uint) error {
-	var data [maxCellDataBytes]byte
-	if err := slice.loadSliceInto(data[:], sz, false); err != nil {
+	if left := slice.BitsLeft(); left < sz {
+		return ErrNotEnoughData(int(left), int(sz))
+	}
+
+	start := uint(slice.bitStart)
+	slice.bitStart += uint16(sz)
+	return b.storeBitRange(slice.cell.data, start, sz)
+}
+
+// StoreSliceFrom stores all remaining bits and references of slice directly,
+// without materializing an intermediate Builder.
+func (b *Builder) StoreSliceFrom(slice *Slice) error {
+	return b.storeSliceView(slice, true)
+}
+
+// StoreSliceFromUncheckedDepth is StoreSliceFrom without checking the depth of
+// referenced cells. It is intended for TVM paths which enforce depth elsewhere.
+func (b *Builder) StoreSliceFromUncheckedDepth(slice *Slice) error {
+	return b.storeSliceView(slice, false)
+}
+
+func (b *Builder) storeSliceView(slice *Slice, checkDepth bool) error {
+	refsNum := slice.RefsNum()
+	if int(b.refsNum)+refsNum > 4 {
+		return ErrTooMuchRefs
+	}
+	bits := slice.BitsLeft()
+	if b.bitsSz+bits >= 1024 {
+		return ErrNotFit1023
+	}
+
+	var refs [4]*Cell
+	for i := 0; i < refsNum; i++ {
+		refIdx := int(slice.refStart) + i
+		refs[i] = slice.withChildTrace(slice.boundaryRefCellAt(i), refIdx)
+	}
+	if checkDepth {
+		if err := validateCellRefDepthLimit(refs[:refsNum]); err != nil {
+			return err
+		}
+	}
+
+	// storeSliceFromSlice is the consuming helper used by dictionary walkers.
+	// This public store operation must preserve the caller's slice cursor, like
+	// the old ToBuilder + StoreBuilder path did.
+	view := *slice
+	if err := b.storeSliceFromSlice(&view, bits); err != nil {
 		return err
 	}
-	return b.StoreSlice(data[:], sz)
+	copy(b.refs[b.refsNum:], refs[:refsNum])
+	b.refsNum += uint8(refsNum)
+	return nil
 }
 
 func (b *Builder) MustStoreBuilder(builder *Builder) *Builder {
@@ -973,14 +1235,24 @@ func (b *Builder) truncateBits(sz uint) {
 }
 
 func (b *Builder) Copy() *Builder {
-	cp := &Builder{
+	cp := new(Builder)
+	return b.CopyInto(cp)
+}
+
+// CopyInto copies the builder into dst without allocating.
+func (b *Builder) CopyInto(dst *Builder) *Builder {
+	if b == dst {
+		return dst
+	}
+
+	*dst = Builder{
 		trace:   b.trace,
 		bitsSz:  b.bitsSz,
 		refsNum: b.refsNum,
 	}
-	copy(cp.data[:], b.dataSlice())
-	copy(cp.refs[:], b.rawRefs())
-	return cp
+	copy(dst.data[:], b.dataSlice())
+	copy(dst.refs[:], b.rawRefs())
+	return dst
 }
 
 func BeginCell() *Builder {

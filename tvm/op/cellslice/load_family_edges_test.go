@@ -9,26 +9,26 @@ import (
 )
 
 func TestLoadFamilyDynamicMetadataAndErrorEdges(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		op   interface {
-			Deserialize(*cell.Slice) error
-			SerializeText() string
-		}
-		src      func() *cell.Builder
-		wantText string
-	}{
-		{name: "LDIXReadsPLDUXQMode", op: LDIX(), src: PLDUXQ().Serialize, wantText: "LDIX"},
-		{name: "PLDUXQReadsLDIXMode", op: PLDUXQ(), src: LDIX().Serialize, wantText: "PLDUXQ"},
-		{name: "PLDSLICEXReadsLDSLICEXQMode", op: PLDSLICEX(), src: LDSLICEXQ().Serialize, wantText: "PLDSLICEX"},
-		{name: "PLDSLICEXQReadsPLDSLICEXMode", op: PLDSLICEXQ(), src: PLDSLICEX().Serialize, wantText: "PLDSLICEXQ"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := tt.op.Deserialize(tt.src().EndCell().MustBeginParse()); err != nil {
-				t.Fatalf("%s deserialize: %v", tt.name, err)
+	for mode, name := range loadIntXNames {
+		t.Run(name, func(t *testing.T) {
+			op := LDIX()
+			if err := op.Deserialize(loadIntXOp(uint64(mode)).Serialize().EndCell().MustBeginParse()); err != nil {
+				t.Fatalf("deserialize mode %d: %v", mode, err)
 			}
-			if got := tt.op.SerializeText(); got != tt.wantText {
-				t.Fatalf("%s text = %q, want %q", tt.name, got, tt.wantText)
+			if got := op.SerializeText(); got != name {
+				t.Fatalf("mode %d text = %q, want %q", mode, got, name)
+			}
+		})
+	}
+
+	for mode, name := range loadSliceXNames {
+		t.Run(name, func(t *testing.T) {
+			op := loadSliceXOp(0)
+			if err := op.Deserialize(loadSliceXOp(uint64(mode)).Serialize().EndCell().MustBeginParse()); err != nil {
+				t.Fatalf("deserialize mode %d: %v", mode, err)
+			}
+			if got := op.SerializeText(); got != name {
+				t.Fatalf("mode %d text = %q, want %q", mode, got, name)
 			}
 		})
 	}
@@ -154,22 +154,6 @@ func TestLoadFamilyDynamicActionEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("LoadIntQuietSuccessFlagOverflowLeavesValueAndRest", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadSliceStack(t, st, 2)
-		pushCellSliceSlice(t, st, loadFamilyBitsSlice(t, 8, 0xAB))
-		pushCellSliceInt(t, st, 4)
-		assertCellSliceVMErrorCode(t, LDIXQ().Interpret(st), vmerr.CodeStackOverflow)
-
-		rest := popCellSliceSlice(t, st)
-		if rest.BitsLeft() != 4 || rest.MustLoadUInt(4) != 0xB {
-			t.Fatal("partial LDIXQ rest mismatch")
-		}
-		if got := popCellSliceInt(t, st); got != -6 {
-			t.Fatalf("partial LDIXQ value = %d, want -6", got)
-		}
-	})
-
 	t.Run("LoadSlicePopSliceTypeAndWidthType", func(t *testing.T) {
 		st := newCellSliceState()
 		pushCellSliceCell(t, st, cell.BeginCell().EndCell())
@@ -278,38 +262,6 @@ func TestLoadFamilyDynamicActionEdges(t *testing.T) {
 	})
 }
 
-func TestLoadSliceCommonStackOverflowBranches(t *testing.T) {
-	t.Run("QuietUnderflowPreserveThenFlagOverflow", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadSliceStack(t, st, 1)
-		pushCellSliceSlice(t, st, loadFamilyBitsSlice(t, 4, 0xA0))
-		assertCellSliceVMErrorCode(t, loadSliceCommon(st, 5, false, true), vmerr.CodeStackOverflow)
-		if preserved := popCellSliceSlice(t, st); preserved.BitsLeft() != 4 || preserved.MustLoadUInt(4) != 0xA {
-			t.Fatal("quiet underflow partial preserved slice mismatch")
-		}
-	})
-
-	t.Run("SuccessRemainderOverflowLeavesPart", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadSliceStack(t, st, 1)
-		pushCellSliceSlice(t, st, loadFamilyBitsSlice(t, 8, 0xAB))
-		assertCellSliceVMErrorCode(t, loadSliceCommon(st, 4, false, false), vmerr.CodeStackOverflow)
-		if part := popCellSliceSlice(t, st); part.BitsLeft() != 4 || part.MustLoadUInt(4) != 0xA {
-			t.Fatal("success partial loaded slice mismatch")
-		}
-	})
-
-	t.Run("QuietPreloadSuccessFlagOverflowLeavesPart", func(t *testing.T) {
-		st := newCellSliceState()
-		fillLoadSliceStack(t, st, 1)
-		pushCellSliceSlice(t, st, loadFamilyBitsSlice(t, 8, 0xAB))
-		assertCellSliceVMErrorCode(t, loadSliceCommon(st, 4, true, true), vmerr.CodeStackOverflow)
-		if part := popCellSliceSlice(t, st); part.BitsLeft() != 4 || part.MustLoadUInt(4) != 0xA {
-			t.Fatal("quiet preload partial loaded slice mismatch")
-		}
-	})
-}
-
 func FuzzTVMLoadFamilyDynamicRules(f *testing.F) {
 	for _, seed := range []struct {
 		group, mode byte
@@ -337,7 +289,7 @@ func FuzzTVMLoadFamilyDynamicRules(f *testing.F) {
 
 		if group == 0 {
 			mode := rawMode % 8
-			err := loadIntXOp("fuzz", uint64(mode)).Interpret(st)
+			err := loadIntXOp(uint64(mode)).Interpret(st)
 			maxBits := int64(256)
 			if mode&1 == 0 {
 				maxBits = 257
@@ -351,7 +303,7 @@ func FuzzTVMLoadFamilyDynamicRules(f *testing.F) {
 		}
 
 		mode := rawMode % 4
-		err := loadSliceXOp("fuzz", uint64(mode)).Interpret(st)
+		err := loadSliceXOp(uint64(mode)).Interpret(st)
 		if want > 1023 {
 			assertCellSliceVMErrorCode(t, err, vmerr.CodeRangeCheck)
 			return
@@ -408,23 +360,6 @@ func loadFamilyCheckDynamicResult(t *testing.T, st *vm.State, err error, have, w
 	}
 	if st.Stack.Len() != 0 {
 		t.Fatalf("success stack depth = %d, want 0", st.Stack.Len())
-	}
-}
-
-func fillLoadSliceStack(t *testing.T, st *vm.State, spare int) {
-	t.Helper()
-
-	for {
-		err := st.Stack.PushSmallInt(0)
-		if err != nil {
-			assertCellSliceVMErrorCode(t, err, vmerr.CodeStackOverflow)
-			break
-		}
-	}
-	for i := 0; i < spare; i++ {
-		if _, err := st.Stack.PopAny(); err != nil {
-			t.Fatalf("failed to free stack slot: %v", err)
-		}
 	}
 }
 

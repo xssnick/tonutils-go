@@ -127,7 +127,7 @@ func TestDUMPAndDEBUGRoundTripAndTrace(t *testing.T) {
 		if got := dst.SerializeText(); got != "DUMP s0" {
 			t.Fatalf("unexpected DUMP text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected DUMP bits: %d", got)
 		}
 
@@ -172,7 +172,7 @@ func TestDUMPAndDEBUGRoundTripAndTrace(t *testing.T) {
 		if got := dst.SerializeText(); got != "DEBUG 42" {
 			t.Fatalf("unexpected DEBUG text: %q", got)
 		}
-		if got := dst.InstructionBits(); got != 16 {
+		if got := instructionBits(t, dst); got != 16 {
 			t.Fatalf("unexpected DEBUG bits: %d", got)
 		}
 
@@ -268,6 +268,8 @@ func TestDebugValueStringVariants(t *testing.T) {
 	ref := cell.BeginCell().MustStoreUInt(0xAB, 8).EndCell()
 	sl := cell.BeginCell().MustStoreUInt(0xC, 4).EndCell().MustBeginParse()
 	builder := cell.BeginCell().MustStoreUInt(0xD, 4)
+	var nilCell *cell.Cell
+	var nilBuilder *cell.Builder
 
 	tests := []struct {
 		name string
@@ -280,6 +282,8 @@ func TestDebugValueStringVariants(t *testing.T) {
 		{name: "slice", val: sl, want: "[slice]"},
 		{name: "builder", val: builder, want: "[builder]"},
 		{name: "cell", val: ref, want: "[cell]"},
+		{name: "null builder", val: nilBuilder, want: "null [builder]"},
+		{name: "null cell", val: nilCell, want: "null [cell]"},
 		{name: "fallback", val: struct{ A int }{A: 1}, want: "[struct { A int }]"},
 	}
 

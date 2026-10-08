@@ -3,53 +3,40 @@ package stack
 import (
 	"fmt"
 
-	"github.com/xssnick/tonutils-go/tvm/cell"
 	"github.com/xssnick/tonutils-go/tvm/op/helpers"
 	"github.com/xssnick/tonutils-go/tvm/vm"
 	"github.com/xssnick/tonutils-go/tvm/vmerr"
 )
 
 func init() {
-	vm.List = append(vm.List, func() vm.OP { return BLKSWAP(1, 1) })
+	vm.ArgList = append(vm.ArgList, blkSwapOp)
 }
 
-func BLKSWAP(i, j uint8) (op *helpers.AdvancedOP) {
-	op = &helpers.AdvancedOP{
-		FixedSizeBits: 8,
-		Action: func(state *vm.State) error {
-			x, y := int(i), int(j)
-			if x+y > state.Stack.Len() {
-				return vmerr.Error(vmerr.CodeStackUnderflow)
-			}
-			if err := state.Stack.Reverse(x+y, y); err != nil {
-				return err
-			}
-			if err := state.Stack.Reverse(y, 0); err != nil {
-				return err
-			}
-			return state.Stack.Reverse(x+y, 0)
-		},
-		NameSerializer: func() string {
-			return fmt.Sprintf("%d,%d BLKSWAP", i, j)
-		},
-		BitPrefix: helpers.BytesPrefix(0x55),
-		SerializeSuffix: func() *cell.Builder {
-			return cell.BeginCell().MustStoreUInt(uint64(i-1), 4).MustStoreUInt(uint64(j-1), 4)
-		},
-		DeserializeSuffix: func(code *cell.Slice) error {
-			ival, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			jval, err := code.LoadUInt(4)
-			if err != nil {
-				return err
-			}
-			i = uint8(ival + 1)
-			j = uint8(jval + 1)
+// Both counts are encoded one less than they mean, so the operand is the raw
+// instruction byte and the interpreter adds the bias back.
+var blkSwapOp = helpers.NewArgOP(&helpers.ArgOP{
+	Prefixed: helpers.SinglePrefixed(helpers.BytesPrefix(0x55)),
+	ArgBits:  8,
+	Action: func(state *vm.State, args uint64) error {
+		i, j := unpackArgs2(args)
+		x, y := i+1, j+1
+		if x+y > state.Stack.Len() {
+			return vmerr.Error(vmerr.CodeStackUnderflow)
+		}
+		if err := state.Stack.Reverse(x+y, y); err != nil {
+			return err
+		}
+		if err := state.Stack.Reverse(y, 0); err != nil {
+			return err
+		}
+		return state.Stack.Reverse(x+y, 0)
+	},
+	Name: func(args uint64) string {
+		i, j := unpackArgs2(args)
+		return fmt.Sprintf("%d,%d BLKSWAP", i+1, j+1)
+	},
+})
 
-			return nil
-		},
-	}
-	return op
+func BLKSWAP(i, j uint8) vm.OP {
+	return vm.Bind(blkSwapOp, packArgs2(i-1, j-1))
 }
