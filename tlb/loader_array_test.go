@@ -2,6 +2,7 @@ package tlb
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -178,6 +179,107 @@ func TestArrayTagRefElementsReserveNextRef(t *testing.T) {
 	}
 	if !reflect.DeepEqual(dst, src) {
 		t.Fatalf("string array mismatch: got %#v want %#v", dst, src)
+	}
+}
+
+func TestArrayTagRefChunkLayouts(t *testing.T) {
+	type arrayMessage struct {
+		Mode    uint8      `tlb:"## 8"`
+		Message *cell.Cell `tlb:"^"`
+	}
+	type messageArray struct {
+		Messages []arrayMessage `tlb:"array ."`
+	}
+	type tolkMessageArray struct {
+		Messages []arrayMessage `tlb:"tolk_array ."`
+	}
+
+	for _, count := range []int{5, 7} {
+		messages := make([]arrayMessage, count)
+		for i := range messages {
+			messages[i] = arrayMessage{
+				Mode:    uint8(i + 1),
+				Message: cell.BeginCell().MustStoreUInt(uint64(100+i), 32).EndCell(),
+			}
+		}
+		var legacyDst messageArray
+		var tolkDst tolkMessageArray
+		formats := []struct {
+			name    string
+			tolk    bool
+			src     any
+			dst     any
+			decoded *[]arrayMessage
+		}{
+			{"legacy", false, messageArray{Messages: messages}, &legacyDst, &legacyDst.Messages},
+			{"tolk", true, tolkMessageArray{Messages: messages}, &tolkDst, &tolkDst.Messages},
+		}
+		for _, format := range formats {
+			t.Run(format.name+"/"+fmt.Sprint(count), func(t *testing.T) {
+				// Both layouts put four message refs in the final chunk. The
+				// preceding chunk has one or three message refs and the next ref.
+				last := cell.BeginCell().MustStoreBoolBit(false)
+				for _, msg := range messages[count-4:] {
+					last.MustStoreUInt(uint64(msg.Mode), 8).MustStoreRef(msg.Message)
+				}
+				next := last.EndCell()
+				first := cell.BeginCell().MustStoreBoolBit(true)
+				if format.tolk {
+					first.MustStoreRef(next)
+				}
+				for _, msg := range messages[:count-4] {
+					first.MustStoreUInt(uint64(msg.Mode), 8).MustStoreRef(msg.Message)
+				}
+				if !format.tolk {
+					first.MustStoreRef(next)
+				}
+				expected := cell.BeginCell().
+					MustStoreUInt(uint64(count), 8).
+					MustStoreBoolBit(true).
+					MustStoreRef(first.EndCell()).
+					EndCell()
+
+				encoded, err := ToCell(format.src)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if encoded.HashKey() != expected.HashKey() {
+					t.Fatal("array encoding does not match expected chunk layout")
+				}
+
+				if err = LoadFromCell(format.dst, expected.MustBeginParse()); err != nil {
+					t.Fatal(err)
+				}
+				if len(*format.decoded) != len(messages) {
+					t.Fatalf("decoded %d messages, want %d", len(*format.decoded), len(messages))
+				}
+				for i, msg := range *format.decoded {
+					want := messages[i]
+					if msg.Mode != want.Mode || msg.Message.HashKey() != want.Message.HashKey() {
+						t.Fatalf("message %d does not match its original mode and cell", i)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestArrayTagNestedTolkRoundTrip(t *testing.T) {
+	type nestedArray struct {
+		Values [][]uint8 `tlb:"tolk_array tolk_array ## 8"`
+	}
+
+	src := nestedArray{Values: [][]uint8{{1, 2}, {}, {3, 4, 5}, {6}, {7, 8}}}
+	c, err := ToCell(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dst nestedArray
+	if err = LoadFromCell(&dst, c.MustBeginParse()); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dst, src) {
+		t.Fatalf("nested Tolk array mismatch: got %#v want %#v", dst, src)
 	}
 }
 

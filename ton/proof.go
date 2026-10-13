@@ -203,7 +203,12 @@ func checkAccountStateProof(addr *address.Address, block *BlockIDExt, stateProof
 	addrKey := cell.BeginCell().MustStoreSlice(addr.Data(), 256).EndCell()
 	value, extra, err := shardState.Accounts.ShardAccounts.LoadValueExtra(addrKey)
 	if err != nil {
-		return nil, nil, ErrNoAddrInProof
+		if errors.Is(err, cell.ErrNoSuchKeyInDict) {
+			return nil, nil, ErrNoAddrInProof
+		}
+
+		// A pruned or malformed lookup does not prove that the account is absent.
+		return nil, nil, fmt.Errorf("failed to load account from proof: %w", err)
 	}
 
 	var balanceInfo tlb.DepthBalanceInfo

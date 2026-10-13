@@ -80,6 +80,12 @@ func GetStateInit(pubKey ed25519.PublicKey, version VersionConfig, subWallet uin
 
 	var data *cell.Cell
 	switch ver {
+	case Telegram:
+		walletData, err := tlb.ToCell(TelegramWalletData{SubwalletID: subWallet, PublicKey: pubKey})
+		if err != nil {
+			return nil, fmt.Errorf("failed to build Telegram wallet data: %w", err)
+		}
+		data = walletData
 	case V3R1, V3R2:
 		data = cell.BeginCell().
 			MustStoreUInt(0, 32).                 // seqno
@@ -195,6 +201,16 @@ func ParsePubKeyFromData(version VersionConfig, data *cell.Cell) (ed25519.Public
 		return nil, fmt.Errorf("failed to load wallet data: %w", err)
 	}
 	switch ver {
+	case Telegram:
+		var walletData TelegramWalletData
+		if err = tlb.LoadFromCell(&walletData, s); err != nil {
+			return nil, fmt.Errorf("failed to parse Telegram wallet data: %w", err)
+		}
+		if walletData.Revision != 0 {
+			return nil, fmt.Errorf("unsupported Telegram Wallet revision: %d", walletData.Revision)
+		}
+
+		return walletData.PublicKey, nil
 	case V1R1, V1R2, V1R3, V2R1, V2R2:
 		_, err := s.LoadSlice(32)
 		if err != nil {
