@@ -37,6 +37,8 @@ type TonConnectVerifier struct {
 
 // NewTonConnectVerifier creates a TON Connect proof verifier. Telegram Wallet proofs
 // require a blockchain client even with StateInit, since their public key can change.
+// The client must provide trusted, current state. For untrusted liteservers, use
+// ProofCheckPolicySecure with a trusted block set through SetTrustedBlock.
 func NewTonConnectVerifier(domain string, ttlRange time.Duration, client ton.APIClientWrapped) *TonConnectVerifier {
 	return &TonConnectVerifier{
 		domain:   domain,
@@ -58,6 +60,10 @@ func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr 
 		return errors.New("timestamp out of allowed range")
 	}
 
+	if len(proof.Signature) != ed25519.SignatureSize {
+		return errors.New("signature length != 64")
+	}
+
 	msg, err := buildMessage(addr, proof)
 	if err != nil {
 		return err
@@ -70,10 +76,6 @@ func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr 
 	full.WriteString("ton-connect")
 	full.Write(msgHash[:])
 	fullHash := sha256.Sum256(full.Bytes())
-
-	if len(proof.Signature) != ed25519.SignatureSize {
-		return errors.New("signature length != 64")
-	}
 
 	pubKey, err := v.getPubKey(ctx, addr, stateInit)
 	if err != nil {

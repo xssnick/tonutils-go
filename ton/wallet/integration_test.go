@@ -129,7 +129,7 @@ func Test_WalletTransfer(t *testing.T) {
 		NetworkGlobalID: TestnetGlobalID,
 	}, ConfigV5R1Beta{
 		NetworkGlobalID: TestnetGlobalID - 1,
-	}, V3R2, V4R2, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
+	}, V3R2, V4R2, Telegram, HighloadV2R2, V3R1, V4R1, HighloadV2Verified, ConfigHighloadV3{
 		MessageTTL: 120,
 		MessageBuilder: func(ctx context.Context, subWalletId uint32) (id uint32, createdAt int64, err error) {
 			tm := time.Now().Unix() - 30
@@ -152,8 +152,12 @@ func Test_WalletTransfer(t *testing.T) {
 					return
 				}
 
-				if isSubwallet {
-					w, err = w.GetSubwallet(1)
+				if isSubwallet || ver == Telegram {
+					subwallet := uint32(1)
+					if !isSubwallet {
+						subwallet = TelegramTestnetSubwallet
+					}
+					w, err = w.GetSubwallet(subwallet)
 					if err != nil {
 						t.Fatal("GetSubwallet err:", err.Error())
 						return
