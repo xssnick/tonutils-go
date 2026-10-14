@@ -16,7 +16,6 @@ import (
 	"github.com/xssnick/tonutils-go/tlb"
 	"github.com/xssnick/tonutils-go/ton"
 	"github.com/xssnick/tonutils-go/tvm/cell"
-	"strings"
 	"time"
 )
 
@@ -36,6 +35,10 @@ type TonConnectVerifier struct {
 	client   ton.APIClientWrapped
 }
 
+// NewTonConnectVerifier creates a TON Connect proof verifier. Telegram Wallet proofs
+// require a blockchain client even with StateInit, since their public key can change.
+// The client must provide trusted, current state. For untrusted liteservers, use
+// ProofCheckPolicySecure with a trusted block set through SetTrustedBlock.
 func NewTonConnectVerifier(domain string, ttlRange time.Duration, client ton.APIClientWrapped) *TonConnectVerifier {
 	return &TonConnectVerifier{
 		domain:   domain,
@@ -44,12 +47,10 @@ func NewTonConnectVerifier(domain string, ttlRange time.Duration, client ton.API
 	}
 }
 
+// VerifyProofHandlePayload calls payloadVerifier only after authenticating the proof.
+// The callback should validate the login session and atomically consume its challenge.
 func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr *address.Address, proof TonConnectProof, stateInit []byte, payloadVerifier func(payload, secret string) error, secret string) error {
-	if err := payloadVerifier(proof.Payload, secret); err != nil {
-		return fmt.Errorf("payload check failed: %w", err)
-	}
-
-	if !strings.EqualFold(proof.Domain.Value, v.domain) {
+	if proof.Domain.Value != v.domain {
 		return errors.New("invalid domain in proof")
 	}
 
@@ -57,6 +58,10 @@ func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr 
 
 	if skew := now.Sub(time.Unix(proof.Timestamp, 0)); skew > v.ttlRange || skew < -v.ttlRange {
 		return errors.New("timestamp out of allowed range")
+	}
+
+	if len(proof.Signature) != ed25519.SignatureSize {
+		return errors.New("signature length != 64")
 	}
 
 	msg, err := buildMessage(addr, proof)
@@ -72,10 +77,6 @@ func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr 
 	full.Write(msgHash[:])
 	fullHash := sha256.Sum256(full.Bytes())
 
-	if len(proof.Signature) != ed25519.SignatureSize {
-		return errors.New("signature length != 64")
-	}
-
 	pubKey, err := v.getPubKey(ctx, addr, stateInit)
 	if err != nil {
 		return fmt.Errorf("failed to get public key: %w", err)
@@ -85,14 +86,18 @@ func (v *TonConnectVerifier) VerifyProofHandlePayload(ctx context.Context, addr 
 		return errors.New("signature verification failed")
 	}
 
+	if err = payloadVerifier(proof.Payload, secret); err != nil {
+		return fmt.Errorf("payload check failed: %w", err)
+	}
+
 	return nil
 }
 
-// VerifyProof uses a simple payloadVerifier to maintain compatibility with previous versions.
-// For enhanced functionality, it is recommended to use VerifyProofHandlePayload with the CheckPayload and GeneratePayload methods
+// VerifyProof checks the proof against the expected login challenge.
+// The caller must bind the challenge to the session and consume it once after success.
 func (v *TonConnectVerifier) VerifyProof(ctx context.Context, addr *address.Address, proof TonConnectProof, expectedPayload string, stateInit []byte) error {
 	return v.VerifyProofHandlePayload(ctx, addr, proof, stateInit, func(payload, secret string) error {
-		if expectedPayload != proof.Payload {
+		if payload != secret {
 			return errors.New("invalid payload in proof")
 		}
 		return nil
@@ -103,6 +108,10 @@ const tonProofPrefix = "ton-proof-item-v2/"
 
 // utf8("ton-proof-item-v2/") ++ workchain(BE) ++ hash ++ domainLen(LE) ++ domain ++ timestamp(LE) ++ payload
 func buildMessage(addr *address.Address, proof TonConnectProof) ([]byte, error) {
+	if addr.Type() != address.StdAddress || len(addr.Data()) != 32 {
+		return nil, errors.New("proof requires a standard 256-bit address")
+	}
+
 	var msg bytes.Buffer
 	msg.WriteString(tonProofPrefix)
 
@@ -113,6 +122,9 @@ func buildMessage(addr *address.Address, proof TonConnectProof) ([]byte, error) 
 
 	if proof.Domain.LengthBytes > 2048 || len(proof.Domain.Value) > 2048 {
 		return nil, errors.New("domain length too big")
+	}
+	if proof.Domain.LengthBytes != uint32(len(proof.Domain.Value)) {
+		return nil, errors.New("domain length does not match value")
 	}
 
 	if err := binary.Write(&msg, binary.LittleEndian, proof.Domain.LengthBytes); err != nil {
@@ -148,7 +160,15 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 
 		code = si.Code
 		data = si.Data
-	} else {
+	}
+
+	// Telegram Wallet's StateInit contains the initial key, which may have been rotated.
+	telegram := code != nil && code.HashKey() == walletCode[Telegram].HashKey()
+	if len(stateInit) == 0 || telegram {
+		if v.client == nil {
+			return nil, errors.New("blockchain client is required to verify this wallet")
+		}
+
 		master, err := v.client.CurrentMasterchainInfo(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get current master block: %w", err)
@@ -156,15 +176,22 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 
 		acc, err := v.client.GetAccount(ctx, master, addr)
 		if err != nil {
-			var cErr ton.ContractExecError
-			if !errors.As(err, &cErr) || cErr.Code != ton.ErrCodeContractNotInitialized {
-				return nil, fmt.Errorf("state init was not passed and wallet is not deployed")
-			}
 			return nil, fmt.Errorf("failed to get account: %w", err)
 		}
 
-		code = acc.Code
-		data = acc.Data
+		if acc.IsActive && acc.State.Status == tlb.AccountStatusActive {
+			code = acc.Code
+			data = acc.Data
+		} else {
+			// A nonexistent or uninit account has no current key; use its validated StateInit.
+			if len(stateInit) == 0 {
+				return nil, errors.New("state init was not passed and wallet is not deployed")
+			}
+
+			if acc.IsActive && acc.State.Status != tlb.AccountStatusUninit {
+				return nil, fmt.Errorf("cannot verify wallet with account status %s", acc.State.Status)
+			}
+		}
 	}
 
 	if code == nil || data == nil {
@@ -172,6 +199,10 @@ func (v *TonConnectVerifier) getPubKey(ctx context.Context, addr *address.Addres
 	}
 
 	codeHash := code.HashKey()
+	if telegram && codeHash != walletCode[Telegram].HashKey() {
+		return nil, errors.New("deployed Telegram wallet has unexpected code")
+	}
+
 	ver, ok := walletVersionByCodeHash[string(codeHash[:])]
 	if !ok {
 		return nil, errors.New("state init has unknown code")
@@ -198,14 +229,18 @@ func GeneratePayload(secret string, ttl time.Duration) (string, error) {
 	return hex.EncodeToString(payload), nil
 }
 
+// CheckPayload validates the payload's HMAC and expiry without tracking its use.
+// Applications must also bind it to a login session and consume it once after proof verification.
 func CheckPayload(payload, secret string) error {
+	if len(payload) != hex.EncodedLen(64) {
+		return errors.New("invalid payload length")
+	}
+
 	b, err := hex.DecodeString(payload)
 	if err != nil {
 		return err
 	}
-	if len(b) != 64 {
-		return fmt.Errorf("invalid payload length")
-	}
+
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(b[:32])
 	sign := h.Sum(nil)

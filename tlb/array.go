@@ -16,7 +16,7 @@ type arrayElementBoxKey struct {
 
 var arrayElementBoxTypeCache sync.Map
 
-func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Slice, skipProofBranches bool) (reflect.Value, error) {
+func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Slice, skipProofBranches, nextRefFirst bool) (reflect.Value, error) {
 	if parseType.Kind() != reflect.Slice && parseType.Kind() != reflect.Array {
 		return reflect.Value{}, fmt.Errorf("array tag supports only slice or array, got %s", parseType.String())
 	}
@@ -68,38 +68,44 @@ func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Sl
 			return reflect.Value{}, fmt.Errorf("failed to load array chunk next bit: %w", err)
 		}
 
-		elemLoader := chunk
 		var next *cell.Cell
 		if hasNext {
-			if elemLoader.RefsNum() < 1 {
-				return reflect.Value{}, fmt.Errorf("array chunk declares next ref, but has no refs")
-			}
-			next, err = elemLoader.PeekRefCellAt(elemLoader.RefsNum() - 1)
-			if err != nil {
-				return reflect.Value{}, fmt.Errorf("failed to peek array next chunk ref: %w", err)
-			}
-			if !elemLoader.SkipLast(0, 1) {
-				return reflect.Value{}, fmt.Errorf("failed to isolate array chunk payload")
+			if nextRefFirst {
+				next, err = chunk.LoadRefCell()
+				if err != nil {
+					return reflect.Value{}, fmt.Errorf("failed to load array next chunk ref: %w", err)
+				}
+			} else {
+				if chunk.RefsNum() < 1 {
+					return reflect.Value{}, fmt.Errorf("array chunk declares next ref, but has no refs")
+				}
+				next, err = chunk.PeekRefCellAt(chunk.RefsNum() - 1)
+				if err != nil {
+					return reflect.Value{}, fmt.Errorf("failed to peek array next chunk ref: %w", err)
+				}
+				if !chunk.SkipLast(0, 1) {
+					return reflect.Value{}, fmt.Errorf("failed to isolate array chunk payload")
+				}
 			}
 		}
 
-		for loaded < int(ln) && (elemLoader.BitsLeft() > 0 || elemLoader.RefsNum() > 0) {
-			beforeBits, beforeRefs := elemLoader.BitsLeft(), elemLoader.RefsNum()
-			elem, err := loadArrayElement(elemType, elemTag, elemLoader, skipProofBranches)
+		for loaded < int(ln) && (chunk.BitsLeft() > 0 || chunk.RefsNum() > 0) {
+			beforeBits, beforeRefs := chunk.BitsLeft(), chunk.RefsNum()
+			elem, err := loadArrayElement(elemType, elemTag, chunk, skipProofBranches)
 			if err != nil {
 				return reflect.Value{}, fmt.Errorf("failed to load array element %d: %w", loaded, err)
 			}
 			values = reflect.Append(values, elem)
 			loaded++
 
-			if elemLoader.BitsLeft() == beforeBits && elemLoader.RefsNum() == beforeRefs {
+			if chunk.BitsLeft() == beforeBits && chunk.RefsNum() == beforeRefs {
 				return reflect.Value{}, fmt.Errorf("array element %d did not consume data", loaded-1)
 			}
 		}
 
-		if loaded < int(ln) && elemLoader.BitsLeft() == 0 && elemLoader.RefsNum() == 0 && !hasNext {
+		if loaded < int(ln) && chunk.BitsLeft() == 0 && chunk.RefsNum() == 0 && !hasNext {
 			for loaded < int(ln) {
-				elem, err := loadArrayElement(elemType, elemTag, elemLoader, skipProofBranches)
+				elem, err := loadArrayElement(elemType, elemTag, chunk, skipProofBranches)
 				if err != nil {
 					return reflect.Value{}, fmt.Errorf("array ended after %d elements, expected %d", loaded, ln)
 				}
@@ -108,8 +114,8 @@ func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Sl
 			}
 		}
 
-		if elemLoader.BitsLeft() != 0 || elemLoader.RefsNum() != 0 {
-			return reflect.Value{}, fmt.Errorf("array chunk has trailing data: %d bits, %d refs", elemLoader.BitsLeft(), elemLoader.RefsNum())
+		if chunk.BitsLeft() != 0 || chunk.RefsNum() != 0 {
+			return reflect.Value{}, fmt.Errorf("array chunk has trailing data: %d bits, %d refs", chunk.BitsLeft(), chunk.RefsNum())
 		}
 
 		if loaded == int(ln) {
@@ -127,7 +133,7 @@ func loadArrayTag(parseType reflect.Type, elemSettings []string, loader *cell.Sl
 	return makeArrayValue(parseType, values, int(ln))
 }
 
-func storeArrayTag(root *cell.Builder, fieldVal reflect.Value, parseType reflect.Type, elemSettings []string) error {
+func storeArrayTag(root *cell.Builder, fieldVal reflect.Value, parseType reflect.Type, elemSettings []string, nextRefFirst bool) error {
 	if parseType.Kind() != reflect.Slice && parseType.Kind() != reflect.Array {
 		return fmt.Errorf("array tag supports only slice or array, got %s", parseType.String())
 	}
@@ -161,7 +167,7 @@ func storeArrayTag(root *cell.Builder, fieldVal reflect.Value, parseType reflect
 		elems[i] = elem
 	}
 
-	first, err := buildArrayChunks(elems)
+	first, err := buildArrayChunks(elems, nextRefFirst)
 	if err != nil {
 		return err
 	}
@@ -239,7 +245,7 @@ func arrayElementBoxType(elemType reflect.Type, elemTag string) reflect.Type {
 	return cached.(reflect.Type)
 }
 
-func buildArrayChunks(elems []*cell.Cell) (*cell.Cell, error) {
+func buildArrayChunks(elems []*cell.Cell, nextRefFirst bool) (*cell.Cell, error) {
 	idx := len(elems)
 	var next *cell.Cell
 
@@ -271,12 +277,17 @@ func buildArrayChunks(elems []*cell.Cell) (*cell.Cell, error) {
 		if err := chunk.StoreBoolBit(next != nil); err != nil {
 			return nil, fmt.Errorf("failed to store array chunk next bit: %w", err)
 		}
+		if next != nil && nextRefFirst {
+			if err := chunk.StoreRef(next); err != nil {
+				return nil, fmt.Errorf("failed to store array next chunk ref: %w", err)
+			}
+		}
 		for i := start; i < idx; i++ {
 			if err := chunk.StoreBuilder(elems[i].ToBuilder()); err != nil {
 				return nil, fmt.Errorf("failed to store array element %d into chunk: %w", i, err)
 			}
 		}
-		if next != nil {
+		if next != nil && !nextRefFirst {
 			if err := chunk.StoreRef(next); err != nil {
 				return nil, fmt.Errorf("failed to store array next chunk ref: %w", err)
 			}

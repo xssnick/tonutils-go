@@ -121,7 +121,8 @@ func cachedMagic(tag string) magicInfo {
 // bool - loads 1 bit boolean
 // addr [std|ext] [required] - loads ton address
 // string - loads ref with snake-encoded bytes to string or []byte
-// array TAG - loads Tolk array<T>, where TAG is a regular tlb tag for T, example: 'array ## 16'
+// array TAG - loads an array with next chunk refs last; TAG is the element tag, example: 'array ## 16'
+// tolk_array TAG - loads a Tolk array<T> with next chunk refs first, example: 'tolk_array ## 16'
 // var uint/int N - loads variable length integer
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
 // either [leave {bits},{refs}] X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y,
@@ -158,7 +159,8 @@ func LoadFromCell(v any, loader *cell.Slice, skipMagic ...bool) error {
 // bool - loads 1 bit boolean
 // addr [std|ext] [required] - loads ton address
 // string - loads ref with snake-encoded bytes to string or []byte
-// array TAG - loads Tolk array<T>, where TAG is a regular tlb tag for T, example: 'array ## 16'
+// array TAG - loads an array with next chunk refs last; TAG is the element tag, example: 'array ## 16'
+// tolk_array TAG - loads a Tolk array<T> with next chunk refs first, example: 'tolk_array ## 16'
 // var uint/int N - loads variable length integer
 // maybe - reads 1 bit, and loads rest if its 1, can be used in combination with others only
 // either [leave {bits},{refs}] X Y - reads 1 bit, if its 0 - loads X, if 1 - loads Y,
@@ -504,8 +506,8 @@ func loadFromCell(v any, slice *cell.Slice, skipProofBranches, skipMagic bool) e
 
 			setVal(x)
 			continue
-		} else if settings[0] == "array" {
-			x, err := loadArrayTag(parseType, settings[1:], loader, skipProofBranches)
+		} else if settings[0] == "array" || settings[0] == "tolk_array" {
+			x, err := loadArrayTag(parseType, settings[1:], loader, skipProofBranches, settings[0] == "tolk_array")
 			if err != nil {
 				return fmt.Errorf("failed to load array for %s, err: %w", structField.Name, err)
 			}
@@ -863,8 +865,8 @@ func storeField(settings []string, root *cell.Builder, structField reflect.Struc
 		if err = builder.StoreRef(ref); err != nil {
 			return fmt.Errorf("failed to store string ref for %s, err: %w", structField.Name, err)
 		}
-	} else if settings[0] == "array" {
-		if err := storeArrayTag(builder, fieldVal, parseType, settings[1:]); err != nil {
+	} else if settings[0] == "array" || settings[0] == "tolk_array" {
+		if err := storeArrayTag(builder, fieldVal, parseType, settings[1:], settings[0] == "tolk_array"); err != nil {
 			return fmt.Errorf("failed to store array for %s, err: %w", structField.Name, err)
 		}
 	} else if parseType == reflect.TypeOf(Magic{}) {
