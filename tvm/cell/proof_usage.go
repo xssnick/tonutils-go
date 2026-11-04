@@ -396,7 +396,7 @@ func (s *merkleProofPruneBuildState) build(c *Cell, merkleDepth int) (*Cell, *Ce
 	childDepth := merkleChildDepth(loaded, merkleDepth)
 	substituted := false
 	for i := 0; i < refCnt; i++ {
-		ref, err := merkleProofRef(c, refView, i)
+		ref, err := merkleProofRef(loaded, refView, i)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
@@ -502,7 +502,7 @@ func (s *merkleProofPruneBuildState) buildParallel(c *Cell, merkleDepth int) (*C
 	refView := newCellRefView(loaded)
 	childDepth := merkleChildDepth(loaded, merkleDepth)
 	for i := 0; i < refCnt; i++ {
-		ref, err := merkleProofRef(c, refView, i)
+		ref, err := merkleProofRef(loaded, refView, i)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to peek %d ref: %w", i, err)
 		}
